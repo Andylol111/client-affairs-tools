@@ -1,5 +1,6 @@
-const API_BASE = typeof window !== 'undefined' && window.location.protocol === 'https:'
-  ? 'https://localhost:8000'
+// In dev, use same-origin so Vite proxy forwards /api to backend (avoids self-signed cert issues)
+const API_BASE = import.meta.env.DEV
+  ? ''
   : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
 
 function getAuthHeaders(): Record<string, string> {

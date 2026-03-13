@@ -8,4 +8,13 @@ export default defineConfig({
     react(),
     ...(process.env.VITE_HTTPS === 'true' ? [basicSsl()] : []),
   ],
+  server: {
+    proxy: {
+      '/api': {
+        target: process.env.VITE_PROXY_TARGET || 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false, // allow self-signed certs when backend uses HTTPS
+      },
+    },
+  },
 })
