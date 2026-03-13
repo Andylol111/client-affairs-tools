@@ -6,10 +6,16 @@
 
 ## Features
 
-- **Google OAuth login** — Sign in with @yale.edu accounts
-- **Login state UI** — When logged in, the nav shows "Welcome, {name}" instead of the Log in button; the login page shows "Welcome back, {name}!" with a link to the dashboard
-- **Live email visualizer** — In Email Studio, a live Gmail-style preview updates as you type, with font picker (Lato, Open Sans, Roboto, Georgia, etc.) and font size controls (12–24px)
-- **Per-user generated emails** — Each user sees only their own generated emails; contacts are shared across all users
+- **Google OAuth login** — Sign in with @yale.edu accounts only; Gmail sending uses OAuth tokens (no App Passwords)
+- **Outreach pipeline** — Kanban board (cold → contacted → replied → meeting → closed), notes, activity log
+- **Template library** — Reusable email templates with merge fields
+- **Follow-up sequences** — Automated multi-step follow-ups
+- **Profile analysis** — Value prop, role, online sentiment, receptiveness
+- **Sentiment analyzer** — Analyze email tone in Email Studio
+- **Email verification** — Format validation for contacts
+- **Open tracking** — Tracking pixel in campaign emails
+- **Admin & security** — Roles (admin/standard), audit log, user management, API keys, notification prefs, 2FA for admins
+- **Live email visualizer** — Gmail-style preview with font picker and size controls
 - **Contact scraper** — Discover contacts from domains and LinkedIn
 - **AI email generation** — Ollama-powered personalized emails
 - **Campaigns & analytics** — Create campaigns, send emails, track metrics
@@ -50,13 +56,13 @@ npm install
 Create `backend/.env` with:
 
 ```env
-# Google OAuth (required for login)
+# Google OAuth (required for login + Gmail sending)
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback
 FRONTEND_URL=http://localhost:5173
 
-# JWT secret - REQUIRED for login to work across page reloads (use a long random string in production)
+# JWT secret - REQUIRED for login (use a long random string in production)
 JWT_SECRET=your-secret-at-least-32-characters-long
 
 # Optional: LinkedIn scraping via Apify
@@ -68,7 +74,8 @@ APIFY_API_TOKEN=your-apify-token
 2. Create OAuth 2.0 Client ID (Web application)
 3. Add redirect URI: `http://localhost:8000/api/auth/google/callback`
 4. For HTTPS: also add `https://localhost:8000/api/auth/google/callback`
-5. Copy Client ID and Client Secret into `.env`
+5. **Enable Gmail API** — In APIs & Services → Library, enable "Gmail API" for your project (required for sending emails)
+6. Copy Client ID and Client Secret into `.env`
 
 ---
 
@@ -135,6 +142,23 @@ Free ports 8000 and 5173–5180:
 
 Then run `./start-all.sh` again.
 
+### Login fails / "Invalid login attempt"
+
+1. **invalid_callback** — Start the login flow again from the login page (don’t reuse an old Google redirect URL). If the backend restarted, the OAuth state is cleared.
+2. **callback_failed** — Check the backend terminal for the full error. Common causes: missing env vars, Gmail API not enabled, database issues.
+3. Ensure the backend is running on port 8000.
+4. Verify `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` in `backend/.env`.
+5. Only `@yale.edu` emails can sign in.
+
+### "Waiting for localhost"
+
+The backend may not be responding. Run `./kill-ports.sh` then `./start-all.sh`.
+
+### Gmail send fails (403 / not authorized)
+
+- **Gmail API must be enabled** in Google Cloud Console for your OAuth project.
+- Sign out and sign back in to refresh OAuth tokens and re-authorize Gmail.
+
 ### Ollama not running
 
 AI email generation requires Ollama. Start it and pull a model:
@@ -143,24 +167,12 @@ AI email generation requires Ollama. Start it and pull a model:
 ollama run llama3.2
 ```
 
-### Login fails / "Waiting for localhost"
-
-1. Ensure the backend is running on port 8000
-2. Check that `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` are set in `backend/.env`
-3. Only `@yale.edu` emails can sign in
-
 ### Yale Duo verification
 
 @yale.edu accounts use Yale's Duo two-factor authentication. When signing in, you'll be prompted to verify via Duo Mobile, phone call, or passcode. This is handled by Yale's systems—complete the Duo step when it appears.
 
 - **Manage devices:** [mfa.its.yale.edu](https://mfa.its.yale.edu)
 - **Help:** ITS Help Desk 203-432-9000 or information.security@yale.edu
-
-### Gmail test send fails
-
-Configure Gmail in **Settings**:
-- Gmail address
-- [App Password](https://support.google.com/accounts/answer/185833) (not your regular password)
 
 ---
 
@@ -171,15 +183,16 @@ client affairs tools/
 ├── backend/
 │   ├── main.py              # FastAPI app
 │   ├── app/
-│   │   ├── routers/         # auth, contacts, emails, campaigns, analytics, settings
-│   │   ├── services/       # ollama_email_service, contact_scraper, email_sender
+│   │   ├── routers/         # auth, contacts, emails, campaigns, analytics, settings, outreach, track, admin
+│   │   ├── services/        # ollama_email_service, gmail_api, contact_scraper, sentiment_analyzer, etc.
 │   │   ├── database.py
-│   │   └── auth_deps.py
+│   │   ├── auth_deps.py
+│   │   └── jwt_utils.py
 │   ├── requirements.txt
 │   └── .env                 # Create this (see Environment Variables)
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/           # Dashboard, Scraper, EmailStudio, Campaigns, Analytics, Settings, Login
+│   │   ├── pages/           # Dashboard, Scraper, EmailStudio, Campaigns, Analytics, Outreach, Admin, Settings, Login
 │   │   ├── api.ts
 │   │   └── App.tsx
 │   └── package.json
@@ -193,6 +206,6 @@ client affairs tools/
 
 ## Tech Stack
 
-- **Backend:** FastAPI, SQLite, Ollama, PyJWT (Google OAuth)
+- **Backend:** FastAPI, SQLite, Ollama, PyJWT (Google OAuth), Gmail API
 - **Frontend:** React, TypeScript, Tailwind CSS, Vite
 - **AI:** Ollama (local LLM, no cloud API keys)
