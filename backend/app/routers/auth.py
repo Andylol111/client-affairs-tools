@@ -1,16 +1,20 @@
 """
 Auth API - Google OAuth 2.0 + JWT
 """
+import logging
 import os
 import secrets
+
+logger = logging.getLogger(__name__)
 from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 import httpx
-import jwt
 from datetime import datetime, timedelta
-from app.database import get_db
+from app.database import get_db, row_to_dict
+from app.auth_deps import get_current_user
+from app.jwt_utils import create_token, decode_token
 
 router = APIRouter()
 
@@ -18,41 +22,9 @@ GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
 GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
 GOOGLE_REDIRECT_URI = (os.getenv("GOOGLE_REDIRECT_URI") or "http://localhost:8000/api/auth/google/callback").strip()
 FRONTEND_URL = (os.getenv("FRONTEND_URL") or "http://localhost:5173").strip()
-JWT_SECRET = (os.getenv("JWT_SECRET") or secrets.token_hex(32)).strip() or secrets.token_hex(32)
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24 * 7  # 7 days
 
 # In-memory state for CSRF (use Redis in production)
 _oauth_states: dict[str, str] = {}
-
-
-class TokenPayload(BaseModel):
-    sub: str  # user id
-    email: str
-    name: str | None
-    picture: str | None
-    exp: datetime
-    iat: datetime
-
-
-def create_token(user_id: int, email: str, name: str | None = None, picture: str | None = None) -> str:
-    now = datetime.utcnow()
-    payload = {
-        "sub": str(user_id),
-        "email": email,
-        "name": name,
-        "picture": picture,
-        "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
-        "iat": now,
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
-def decode_token(token: str) -> dict | None:
-    try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except Exception:
-        return None
 
 
 @router.get("/google")
@@ -66,7 +38,7 @@ async def google_login():
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": GOOGLE_REDIRECT_URI,
         "response_type": "code",
-        "scope": "openid email profile",
+        "scope": "openid email profile https://www.googleapis.com/auth/gmail.send",
         "state": state,
         "access_type": "offline",
         "prompt": "consent",
@@ -81,9 +53,19 @@ async def google_callback(code: str | None = None, state: str | None = None, err
     if error:
         return RedirectResponse(url=f"{FRONTEND_URL}/login?error={error}")
     if not code or not state or state not in _oauth_states:
+        logger.warning("Invalid callback: missing code/state or state not in _oauth_states (reload?)")
         return RedirectResponse(url=f"{FRONTEND_URL}/login?error=invalid_callback")
     del _oauth_states[state]
 
+    try:
+        return await _do_google_callback(code)
+    except Exception as e:
+        logger.exception("Google callback failed")
+        err_msg = str(e).replace(" ", "%20")[:80]
+        return RedirectResponse(url=f"{FRONTEND_URL}/login?error=callback_failed&detail={err_msg}")
+
+
+async def _do_google_callback(code: str):
     async with httpx.AsyncClient(timeout=15.0) as client:
         token_res = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -101,6 +83,8 @@ async def google_callback(code: str | None = None, state: str | None = None, err
 
         tokens = token_res.json()
         access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        expires_in = tokens.get("expires_in", 3600)
         if not access_token:
             return RedirectResponse(url=f"{FRONTEND_URL}/login?error=no_access_token")
 
@@ -123,25 +107,39 @@ async def google_callback(code: str | None = None, state: str | None = None, err
         if not email.lower().endswith("@yale.edu"):
             return RedirectResponse(url=f"{FRONTEND_URL}/login?error=domain_not_allowed")
 
+    from datetime import datetime as dt
+    token_expires_at = (dt.utcnow().timestamp() + expires_in) if expires_in else None
+
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, email, name, picture FROM users WHERE google_id = ? OR email = ?",
+            "SELECT id, email, name, picture, role, is_active FROM users WHERE google_id = ? OR email = ?",
             (google_id, email),
         )
         row = await cursor.fetchone()
         if row:
+            row = row_to_dict(row)
+            if row.get("is_active") == 0:
+                return RedirectResponse(url=f"{FRONTEND_URL}/login?error=account_deactivated")
             user_id = row["id"]
-            await db.execute(
-                "UPDATE users SET name = ?, picture = ?, google_id = ? WHERE id = ?",
-                (name, picture, google_id, user_id),
-            )
+            role = row.get("role") or "standard"
+            if refresh_token:
+                await db.execute(
+                    """UPDATE users SET name = ?, picture = ?, google_id = ?, access_token = ?, refresh_token = ?, token_expires_at = ? WHERE id = ?""",
+                    (name, picture, google_id, access_token, refresh_token, token_expires_at, user_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE users SET name = ?, picture = ?, google_id = ?, access_token = ?, token_expires_at = ? WHERE id = ?",
+                    (name, picture, google_id, access_token, token_expires_at, user_id),
+                )
         else:
             cursor = await db.execute(
-                "INSERT INTO users (email, name, picture, google_id) VALUES (?, ?, ?, ?)",
-                (email, name, picture, google_id),
+                """INSERT INTO users (email, name, picture, google_id, access_token, refresh_token, token_expires_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, 'standard')""",
+                (email, name, picture, google_id, access_token, refresh_token, token_expires_at),
             )
             user_id = cursor.lastrowid
+            role = "standard"
         await db.execute(
             "INSERT INTO login_log (user_id, email, name) VALUES (?, ?, ?)",
             (user_id, email, name),
@@ -150,7 +148,7 @@ async def google_callback(code: str | None = None, state: str | None = None, err
     finally:
         await db.close()
 
-    token = create_token(user_id, email, name, picture)
+    token = create_token(user_id, email, name, picture, role)
     return RedirectResponse(url=f"{FRONTEND_URL}/login?token={token}")
 
 
@@ -172,30 +170,60 @@ async def get_me(authorization: str | None = None):
             "email": payload.get("email"),
             "name": payload.get("name"),
             "picture": payload.get("picture"),
+            "role": payload.get("role") or "standard",
         },
         "token": token,
     }
-
-
-@router.get("/login-log")
-async def get_login_log(limit: int = 50):
-    """List recent logins (who logged in and when)."""
-    from app.database import get_db
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            """SELECT ll.id, ll.email, ll.name, ll.created_at, u.id as user_id
-               FROM login_log ll JOIN users u ON ll.user_id = u.id
-               ORDER BY ll.created_at DESC LIMIT ?""",
-            (limit,),
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 @router.post("/logout")
 async def logout():
     """Client-side logout (clear token). No server action needed."""
     return {"ok": True}
+
+
+@router.get("/notification-preferences")
+async def get_my_notification_prefs(user: dict = Depends(get_current_user)):
+    """Get current user's notification preferences."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT admin_digest, campaign_summary FROM notification_preferences WHERE user_id = ?",
+            (user["id"],),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return {"admin_digest": bool(row["admin_digest"]), "campaign_summary": bool(row["campaign_summary"])}
+        return {"admin_digest": True, "campaign_summary": False}
+    finally:
+        await db.close()
+
+
+class NotificationPrefsBody(BaseModel):
+    admin_digest: bool | None = None
+    campaign_summary: bool | None = None
+
+
+@router.put("/notification-preferences")
+async def update_my_notification_prefs(
+    payload: NotificationPrefsBody,
+    user: dict = Depends(get_current_user),
+):
+    """Update current user's notification preferences."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT admin_digest, campaign_summary FROM notification_preferences WHERE user_id = ?",
+            (user["id"],),
+        )
+        row = await cursor.fetchone()
+        ad = payload.admin_digest if payload.admin_digest is not None else (bool(row["admin_digest"]) if row else True)
+        cs = payload.campaign_summary if payload.campaign_summary is not None else (bool(row["campaign_summary"]) if row else False)
+        await db.execute(
+            "INSERT OR REPLACE INTO notification_preferences (user_id, admin_digest, campaign_summary) VALUES (?, ?, ?)",
+            (user["id"], 1 if ad else 0, 1 if cs else 0),
+        )
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()

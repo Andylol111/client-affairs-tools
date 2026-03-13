@@ -6,13 +6,16 @@ import EmailStudio from './pages/EmailStudio';
 import Campaigns from './pages/Campaigns';
 import CampaignDetail from './pages/CampaignDetail';
 import Analytics from './pages/Analytics';
+import Outreach from './pages/Outreach';
+import Admin from './pages/Admin';
 import Settings from './pages/Settings';
 import LoginPage from './pages/LoginPage';
 import MainApp from './pages/MainApp';
 import ErrorBoundary from './components/ErrorBoundary';
 
-const API_BASE = typeof window !== 'undefined' && window.location.protocol === 'https:'
-  ? 'https://localhost:8000'
+// In dev, use same-origin so Vite proxy forwards /api to backend
+const API_BASE = import.meta.env.DEV
+  ? ''
   : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
 
 function AppContent() {
@@ -47,18 +50,21 @@ function AppContent() {
         localStorage.removeItem('yucg_token_time');
         setUser(null);
       } else if (payload.email) {
-        setUser({ email: payload.email, name: payload.name, picture: payload.picture });
+        setUser({ email: payload.email, name: payload.name, picture: payload.picture, role: payload.role });
       }
     } catch {
       /* ignore */
     }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     fetch(`${API_BASE}/api/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     })
       .then((r) => r.json())
       .then((data) => {
         if (data.authenticated && data.user) {
-          setUser(data.user);
+          setUser({ ...data.user, role: data.user.role || 'standard' });
         } else {
           // API said not authenticated - fallback: trust JWT if valid (handles backend restart / JWT_SECRET change)
           const payload = (() => {
@@ -70,7 +76,7 @@ function AppContent() {
             }
           })();
           if (payload) {
-            setUser({ email: payload.email, name: payload.name, picture: payload.picture });
+            setUser({ email: payload.email, name: payload.name, picture: payload.picture, role: payload.role || 'standard' });
           } else {
             localStorage.removeItem('yucg_token');
             localStorage.removeItem('yucg_token_time');
@@ -85,7 +91,7 @@ function AppContent() {
           try {
             const payload = JSON.parse(atob(token.split('.')[1]));
             if (payload.email && payload.exp && payload.exp * 1000 > Date.now()) {
-              setUser({ email: payload.email, name: payload.name, picture: payload.picture });
+              setUser({ email: payload.email, name: payload.name, picture: payload.picture, role: payload.role || 'standard' });
             } else {
               setUser(null);
             }
@@ -96,7 +102,10 @@ function AppContent() {
           setUser(null);
         }
       })
-      .finally(() => setAuthLoading(false));
+      .finally(() => {
+        clearTimeout(timeout);
+        setAuthLoading(false);
+      });
   };
 
   useEffect(() => {
@@ -113,9 +122,18 @@ function AppContent() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100">
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <div className="animate-spin w-10 h-10 border-2 border-deep-navy border-t-transparent rounded-full mx-auto mb-4" />
           <p className="text-slate-600">Loading...</p>
+          <p className="text-xs text-slate-500 mt-4">
+            If this hangs, the backend may not be running. From the project folder run:
+          </p>
+          <code className="block mt-2 p-3 bg-slate-200 rounded text-xs text-left overflow-x-auto">
+            ./start-all.sh
+          </code>
+          <p className="text-xs text-slate-500 mt-2">
+            Or: <code className="bg-slate-200 px-1 rounded">cd backend && source venv/bin/activate && uvicorn main:app --port 8000</code>
+          </p>
         </div>
       </div>
     );
@@ -151,6 +169,8 @@ function AppContent() {
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="campaigns/:id" element={<CampaignDetail />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="outreach" element={<Outreach />} />
+        <Route path="admin" element={<Admin />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>

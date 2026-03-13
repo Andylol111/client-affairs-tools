@@ -5,8 +5,9 @@
 import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-const API_BASE = typeof window !== 'undefined' && window.location.protocol === 'https:'
-  ? 'https://localhost:8000'
+// In dev, use same-origin so Vite proxy forwards /api to backend
+const API_BASE = import.meta.env.DEV
+  ? ''
   : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
 
 export default function LoginPage() {
@@ -55,12 +56,16 @@ export default function LoginPage() {
 
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-            {error === 'invalid_callback' && 'Invalid login attempt. Please try again.'}
+            {error === 'invalid_callback' && 'Invalid login attempt. Please try again from the login page.'}
             {error === 'token_exchange_failed' && 'Authentication failed. Please try again.'}
             {error === 'no_access_token' && 'Could not get access. Please try again.'}
             {error === 'userinfo_failed' && 'Could not load your profile. Please try again.'}
             {error === 'no_email' && 'No email from Google. Please use an account with email.'}
             {error === 'domain_not_allowed' && 'Only @yale.edu email addresses are allowed to sign in.'}
+            {error === 'account_deactivated' && 'Your account has been deactivated. Contact an admin.'}
+            {error === 'callback_failed' && (
+              <>Server error during sign-in. Check the backend logs. {searchParams.get('detail') && <span className="block mt-1 text-xs">({decodeURIComponent(searchParams.get('detail') || '')})</span>}</>
+            )}
             {error === 'oauth_not_configured' && (
               <>
                 Google OAuth is not configured. Add to <code className="bg-slate-100 px-1 rounded">backend/.env</code>:
@@ -72,7 +77,7 @@ GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback`}
                 Get credentials at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="underline">Google Cloud Console</a>.
               </>
             )}
-            {!['invalid_callback', 'token_exchange_failed', 'no_access_token', 'userinfo_failed', 'no_email', 'domain_not_allowed', 'oauth_not_configured'].includes(error) && error}
+            {!['invalid_callback', 'token_exchange_failed', 'no_access_token', 'userinfo_failed', 'no_email', 'domain_not_allowed', 'oauth_not_configured', 'account_deactivated', 'callback_failed'].includes(error) && error}
           </div>
         )}
 

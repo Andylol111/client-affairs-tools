@@ -50,6 +50,9 @@ async def send_email(
     if not gmail_email or not gmail_password:
         raise ValueError("Gmail not configured. Go to Settings to add your Gmail credentials.")
 
+    gmail_email = gmail_email.strip()
+    gmail_password = gmail_password.strip()
+
     full_body = append_signature(body, signature)
 
     msg = MIMEMultipart("alternative")

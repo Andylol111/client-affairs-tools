@@ -135,12 +135,33 @@ export default function CampaignDetail() {
               (campaign.contacts || []).map((cc: any) => (
                 <div
                   key={cc.id}
-                  className="px-6 py-3 border-b border-pale-sky/50"
+                  className="px-6 py-3 border-b border-pale-sky/50 flex items-center justify-between gap-4"
                 >
-                  <div className="font-medium text-slate-800">{cc.name} ({cc.email})</div>
-                  <div className="text-sm text-slate-500">{cc.status}</div>
-                  {cc.email_subject && (
-                    <div className="text-xs text-slate-500 mt-1">Subject: {cc.email_subject}</div>
+                  <div>
+                    <div className="font-medium text-slate-800">{cc.name} ({cc.email})</div>
+                    <div className="text-sm text-slate-500">
+                      {cc.status}
+                      {cc.opened_at && <span className="ml-2 text-green-600">• Opened</span>}
+                      {cc.replied_at && <span className="ml-2 text-steel-blue">• Replied</span>}
+                    </div>
+                    {cc.email_subject && (
+                      <div className="text-xs text-slate-500 mt-1">Subject: {cc.email_subject}</div>
+                    )}
+                  </div>
+                  {cc.status === 'sent' && !cc.replied_at && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.outreach.markReplied(cc.id);
+                          setCampaign(await api.campaigns.get(parseInt(id!, 10)));
+                        } catch (e) {
+                          alert((e as Error)?.message);
+                        }
+                      }}
+                      className="px-3 py-1 rounded text-sm bg-pale-sky/50 hover:bg-pale-sky text-deep-navy"
+                    >
+                      Mark replied
+                    </button>
                   )}
                 </div>
               ))

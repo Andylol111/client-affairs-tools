@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { api } from '../api';
 
 export default function Settings() {
+  const { user } = useOutletContext<{ user: { role?: string } }>();
+  const isAdmin = user?.role === 'admin';
   const [signature, setSignature] = useState('');
   const [customFormats, setCustomFormats] = useState<any[]>([]);
   const [loginLog, setLoginLog] = useState<any[]>([]);
+  const [notifPrefs, setNotifPrefs] = useState({ admin_digest: true, campaign_summary: false });
   const [newFormatName, setNewFormatName] = useState('');
   const [newFormatPattern, setNewFormatPattern] = useState('');
   const [saved, setSaved] = useState(false);
@@ -13,14 +17,28 @@ export default function Settings() {
 
   useEffect(() => {
     api.settings.get().then((s: any) => setSignature(s.signature || '')).catch(() => {});
-    api.settings.customFormats.list().then(setCustomFormats).catch(() => []);
-    api.auth.loginLog().then(setLoginLog).catch(() => []);
-  }, []);
+    api.auth.notificationPrefs.get().then(setNotifPrefs).catch(() => {});
+    if (isAdmin) {
+      api.settings.customFormats.list().then(setCustomFormats).catch(() => []);
+      api.admin.loginLog().then(setLoginLog).catch(() => []);
+    }
+  }, [isAdmin]);
 
   const saveSettings = async () => {
     setError('');
     try {
-      await api.settings.update({ signature });
+      if (isAdmin) await api.settings.update({ signature });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save');
+    }
+  };
+
+  const saveNotifPrefs = async () => {
+    setError('');
+    try {
+      await api.auth.notificationPrefs.update(notifPrefs);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e: any) {
@@ -61,6 +79,34 @@ export default function Settings() {
 
       <div className="space-y-8">
         <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+          <h2 className="font-semibold text-deep-navy mb-4">Notification Preferences</h2>
+          <p className="text-sm text-slate-600 mb-4">Choose which emails you receive.</p>
+          <label className="flex items-center gap-2 mb-2">
+            <input
+              type="checkbox"
+              checked={notifPrefs.admin_digest}
+              onChange={(e) => setNotifPrefs((p) => ({ ...p, admin_digest: e.target.checked }))}
+            />
+            <span className="text-sm">Admin digest (new logins, security alerts)</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={notifPrefs.campaign_summary}
+              onChange={(e) => setNotifPrefs((p) => ({ ...p, campaign_summary: e.target.checked }))}
+            />
+            <span className="text-sm">Campaign summary</span>
+          </label>
+          <button
+            onClick={saveNotifPrefs}
+            className="mt-4 px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+          >
+            Save preferences
+          </button>
+        </div>
+
+        {isAdmin && (
+        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Login Log</h2>
           <p className="text-sm text-slate-600 mb-4">Recent sign-ins (who logged in and when)</p>
           {loginLog.length === 0 ? (
@@ -77,7 +123,9 @@ export default function Settings() {
             </ul>
           )}
         </div>
+        )}
 
+        {isAdmin && (
         <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Email Signature</h2>
           <p className="text-sm text-slate-600 mb-4">
@@ -91,7 +139,9 @@ export default function Settings() {
             className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
           />
         </div>
+        )}
 
+        {isAdmin && (
         <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Custom Email Formats</h2>
           <p className="text-sm text-slate-600 mb-4">
@@ -135,14 +185,17 @@ export default function Settings() {
             ))}
           </ul>
         </div>
+        )}
 
         {error && <p className="text-red-600 text-sm">{error}</p>}
+        {isAdmin && (
         <button
           onClick={saveSettings}
           className="px-6 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white font-medium"
         >
           {saved ? 'Saved!' : 'Save Settings'}
         </button>
+        )}
       </div>
     </div>
   );

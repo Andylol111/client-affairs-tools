@@ -1,8 +1,10 @@
 """
 Campaigns API - Campaign Manager & Mass Sender
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app.database import get_db
+from app.auth_deps import get_current_user
+from app.services.audit_service import log_audit
 from app.models import CampaignCreate, CampaignContactAdd
 
 router = APIRouter()
@@ -99,9 +101,9 @@ async def add_contacts_to_campaign(campaign_id: int, payload: CampaignContactAdd
 
 
 @router.post("/{campaign_id}/send")
-async def send_campaign(campaign_id: int):
-    """Send campaign emails via Gmail. Requires Gmail configured in Settings."""
-    from app.services.email_sender import send_email, append_signature
+async def send_campaign(campaign_id: int, user: dict = Depends(get_current_user)):
+    """Send campaign emails via Gmail API (OAuth). Uses logged-in user's account."""
+    from app.services.gmail_api import send_via_gmail_api_with_tracking
     from app.services.settings_service import get_setting
 
     db = await get_db()
@@ -124,11 +126,13 @@ async def send_campaign(campaign_id: int):
         errors = []
         for row in pending:
             try:
-                body = append_signature(row["email_body"] or "", signature)
-                await send_email(
+                await send_via_gmail_api_with_tracking(
+                    user_id=user["id"],
                     to_email=row["email"],
                     subject=row["email_subject"] or "Quick question",
-                    body=body,
+                    body=row["email_body"] or "",
+                    campaign_contact_id=row["id"],
+                    signature=signature,
                 )
                 await db.execute(
                     "UPDATE campaign_contacts SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -143,6 +147,7 @@ async def send_campaign(campaign_id: int):
             (campaign_id,),
         )
         await db.commit()
+        await log_audit(user["id"], "campaign_send", "campaign", str(campaign_id), f"Sent {sent} emails")
         return {"ok": True, "sent": sent, "errors": errors}
     finally:
         await db.close()

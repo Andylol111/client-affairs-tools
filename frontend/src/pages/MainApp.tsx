@@ -6,7 +6,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import BackButton from '../components/BackButton';
 
 type MainAppProps = {
-  user: { email: string; name?: string; picture?: string };
+  user: { email: string; name?: string; picture?: string; role?: string };
   onLogout: () => void;
 };
 
@@ -34,6 +34,8 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
                   { to: '/studio', label: 'Studio', icon: '✉️' },
                   { to: '/campaigns', label: 'Campaigns', icon: '📤' },
                   { to: '/analytics', label: 'Analytics', icon: '📈' },
+                  { to: '/outreach', label: 'Outreach', icon: '🎯' },
+                  ...(user.role === 'admin' ? [{ to: '/admin', label: 'Admin', icon: '🔐' }] : []),
                   { to: '/settings', label: 'Settings', icon: '⚙️' },
                 ].map(({ to, label, icon }) => (
                   <NavLink
@@ -74,7 +76,7 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
       <main className="flex-1 p-4 sm:p-6 lg:p-8">
         <div key={location.pathname} className="page-enter">
           <BackButton />
-          <Outlet />
+          <Outlet context={{ user }} />
         </div>
       </main>
     </div>

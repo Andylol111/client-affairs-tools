@@ -32,11 +32,16 @@ async def set_setting(key: str, value: str | None) -> None:
 
 
 async def get_all_settings() -> dict[str, str]:
-    """Get all settings as key-value dict."""
+    """Get all settings as key-value dict. Passwords are masked."""
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT key, value FROM settings WHERE key IN ('signature')")
+        cursor = await db.execute(
+            "SELECT key, value FROM settings WHERE key = 'signature'"
+        )
         rows = await cursor.fetchall()
-        return {r["key"]: r["value"] or "" for r in rows}
+        result = {}
+        for r in rows:
+            result[r["key"]] = r["value"] or ""
+        return result
     finally:
         await db.close()

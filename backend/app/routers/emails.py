@@ -8,7 +8,7 @@ from app.database import get_db
 from app.auth_deps import get_current_user, get_current_user_optional
 from app.models import EmailGenerateRequest, EmailGenerateResponse, EmailGenerateTemplateRequest
 from app.services.ollama_email_service import generate_email
-from app.services.email_sender import send_email, append_signature
+from app.services.gmail_api import send_via_gmail_api
 from app.services.settings_service import get_setting
 
 router = APIRouter()
@@ -89,15 +89,22 @@ async def generate_email_template(req: EmailGenerateTemplateRequest):
 
 @router.post("/test-send")
 async def test_send_email(req: TestSendRequest, user: dict = Depends(get_current_user)):
-    """Send a test email to verify Gmail is configured and delivers to the right contact."""
-    signature = await get_setting("signature")
-    body_with_sig = append_signature(req.body, signature)
-    await send_email(
-        to_email=req.to_email,
-        subject=req.subject,
-        body=body_with_sig,
-    )
-    return {"ok": True, "message": f"Test email sent to {req.to_email}"}
+    """Send a test email to the logged-in user's inbox via Gmail API (OAuth). No Settings config needed."""
+    try:
+        signature = await get_setting("signature")
+        await send_via_gmail_api(
+            user_id=user["id"],
+            to_email=req.to_email,
+            subject=req.subject,
+            body=req.body,
+            signature=signature,
+        )
+        return {"ok": True, "message": f"Test email sent to {req.to_email}"}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        err = str(e)
+        raise HTTPException(500, f"Failed to send: {err}")
 
 
 @router.get("/generated")

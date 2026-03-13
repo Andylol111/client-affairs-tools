@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
-from app.routers import contacts, emails, campaigns, analytics, settings, auth
+from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin
 
 
 @asynccontextmanager
@@ -43,6 +43,9 @@ app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"]
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"])
+app.include_router(track.router, prefix="/api/track", tags=["track"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
 
 @app.get("/api/health")

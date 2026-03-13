@@ -3,9 +3,11 @@ Contacts API - Contact Scraper & Discovery Engine
 """
 import csv
 import io
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from app.database import get_db
 from app.models import ContactCreate, ScrapeRequest
+from app.auth_deps import get_current_user_optional
+from app.services.audit_service import log_audit
 from app.services.contact_scraper import (
     scrape_contacts_from_domain,
     extract_domain_from_company,
@@ -255,20 +257,32 @@ async def scrape_contacts(req: ScrapeRequest):
 
 
 @router.get("")
-async def list_contacts(company: str | None = None, limit: int = 100):
-    """List contacts, optionally filtered by company."""
+async def list_contacts(
+    company: str | None = None,
+    limit: int = 100,
+    mine_only: bool = False,
+    user: dict | None = Depends(get_current_user_optional),
+):
+    """List contacts. Standard users see only their contacts + unassigned. Admins see all. Use mine_only=true for owned only."""
     db = await get_db()
     try:
+        conditions, params = [], []
         if company:
-            cursor = await db.execute(
-                """SELECT * FROM contacts WHERE company LIKE ? ORDER BY created_at DESC LIMIT ?""",
-                (f"%{company}%", limit),
-            )
-        else:
-            cursor = await db.execute(
-                """SELECT * FROM contacts ORDER BY created_at DESC LIMIT ?""",
-                (limit,),
-            )
+            conditions.append("company LIKE ?")
+            params.append(f"%{company}%")
+        if user and user.get("role") != "admin":
+            if mine_only:
+                conditions.append("owner_id = ?")
+                params.append(user["id"])
+            else:
+                conditions.append("(owner_id = ? OR owner_id IS NULL)")
+                params.append(user["id"])
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+        cursor = await db.execute(
+            f"SELECT * FROM contacts {where} ORDER BY created_at DESC LIMIT ?",
+            params,
+        )
         rows = await cursor.fetchall()
         result = [dict(r) for r in rows]
         for r in result:
@@ -282,7 +296,7 @@ async def list_contacts(company: str | None = None, limit: int = 100):
 
 
 @router.post("")
-async def create_contact(contact: ContactCreate):
+async def create_contact(contact: ContactCreate, user: dict | None = Depends(get_current_user_optional)):
     """Manually add a contact."""
     db = await get_db()
     try:
@@ -307,6 +321,8 @@ async def create_contact(contact: ContactCreate):
         d = dict(row)
         if d.get("email"):
             d["email"] = sanitize_email(d["email"])
+        if user:
+            await log_audit(user["id"], "contact_create", "contact", str(row_id), contact.email)
         return d
     except Exception as e:
         await db.rollback()
@@ -358,12 +374,16 @@ async def fix_malformed_emails():
 
 
 @router.delete("/{contact_id}")
-async def delete_contact(contact_id: int):
+async def delete_contact(contact_id: int, user: dict | None = Depends(get_current_user_optional)):
     """Delete a contact."""
     db = await get_db()
     try:
+        cursor = await db.execute("SELECT email FROM contacts WHERE id = ?", (contact_id,))
+        row = await cursor.fetchone()
         await db.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
         await db.commit()
+        if user and row:
+            await log_audit(user["id"], "contact_delete", "contact", str(contact_id), row.get("email", ""))
         return {"ok": True}
     finally:
         await db.close()

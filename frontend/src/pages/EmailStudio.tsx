@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { api } from '../api';
 import { loadDrafts, saveDraft, deleteDraft, type EmailDraft } from '../lib/emailDrafts';
 
 export default function EmailStudio() {
+  const { user } = useOutletContext<{ user: { email: string; name?: string } }>();
   const [contacts, setContacts] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [email, setEmail] = useState<{ subject: string; body: string } | null>(null);
@@ -25,6 +27,9 @@ export default function EmailStudio() {
   const [draftDescription, setDraftDescription] = useState('');
   const [draftTargetAudience, setDraftTargetAudience] = useState('');
   const [draftCompany, setDraftCompany] = useState('');
+  const [sentimentAnalysis, setSentimentAnalysis] = useState<any>(null);
+  const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [sentimentIndustry, setSentimentIndustry] = useState('');
 
   useEffect(() => {
     api.contacts.list().then(setContacts).catch(() => setContacts([]));
@@ -122,9 +127,29 @@ export default function EmailStudio() {
     setSelected(d.recipientEmail ? { id: null, name: d.recipientName, email: d.recipientEmail, company: d.company } : null);
   };
 
+  const analyzeSentiment = async () => {
+    if (!email?.subject && !email?.body) return;
+    setSentimentLoading(true);
+    setSentimentAnalysis(null);
+    try {
+      const res = await api.outreach.sentiment.analyze({
+        subject: email?.subject || '',
+        body: email?.body || '',
+        industry: sentimentIndustry || undefined,
+        target_role: selected?.title || undefined,
+      });
+      setSentimentAnalysis(res);
+    } catch (e) {
+      setSentimentAnalysis({ error: (e as Error)?.message || 'Analysis failed' });
+    } finally {
+      setSentimentLoading(false);
+    }
+  };
+
   const testSend = async () => {
-    const toEmail = selected?.email || quickCompose.email;
-    if (!email || !toEmail) return;
+    if (!email?.body) return;
+    const toEmail = user?.email;
+    if (!toEmail) return;
     setTestSending(true);
     try {
       await api.emails.testSend({
@@ -132,9 +157,9 @@ export default function EmailStudio() {
         subject: email.subject,
         body: email.body,
       });
-      alert(`Test email sent to ${toEmail}. Check the inbox to verify delivery.`);
+      alert(`Test email sent to ${toEmail}. Check your inbox to verify delivery.`);
     } catch (e: any) {
-      alert(e?.message || 'Failed to send. Configure Gmail in Settings.');
+      alert(e?.message || 'Failed to send. Try signing out and back in to re-authorize Gmail.');
     } finally {
       setTestSending(false);
     }
@@ -445,16 +470,58 @@ export default function EmailStudio() {
                       Save Draft
                     </button>
                     <button
+                      onClick={analyzeSentiment}
+                      disabled={sentimentLoading || (!email?.subject && !email?.body)}
+                      className="px-4 py-2 rounded-lg bg-[#1e3a6e] hover:bg-[#1a2f5a] text-white text-sm font-medium disabled:opacity-50 transition-all"
+                    >
+                      {sentimentLoading ? 'Analyzing...' : 'Analyze Sentiment'}
+                    </button>
+                    <input
+                      type="text"
+                      value={sentimentIndustry}
+                      onChange={(e) => setSentimentIndustry(e.target.value)}
+                      placeholder="Industry (optional)"
+                      className="w-32 px-2 py-1.5 rounded-lg border border-pale-sky text-sm"
+                    />
+                    <button
                       onClick={testSend}
-                      disabled={testSending || !email?.body || !(selected?.email || quickCompose.email)}
+                      disabled={testSending || !email?.body}
                       className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white text-sm font-medium disabled:opacity-50 transition-all"
                     >
                       {testSending ? 'Sending...' : 'Email Tester'}
                     </button>
                     <span className="text-xs text-slate-500">
-                      Sends to {selected?.email || quickCompose.email || '—'} to verify delivery
+                      Sends to {user?.email || 'your email'} to verify delivery
                     </span>
                   </div>
+                  {sentimentAnalysis && (
+                    <div className="mt-4 p-4 rounded-lg border border-pale-sky bg-pale-sky/20">
+                      <h4 className="font-medium text-deep-navy mb-2">Sentiment Analysis</h4>
+                      {sentimentAnalysis.error ? (
+                        <p className="text-red-600 text-sm">{sentimentAnalysis.error}</p>
+                      ) : (
+                        <div className="space-y-2 text-sm">
+                          <div>
+                            <span className="text-slate-600">Score:</span>{' '}
+                            <span className="font-medium">{(sentimentAnalysis.sentiment_score ?? 0).toFixed(2)}</span>
+                            <span className="text-slate-500 ml-2">({sentimentAnalysis.sentiment_label})</span>
+                          </div>
+                          {sentimentAnalysis.industry_fit && (
+                            <div>
+                              <span className="text-slate-600">Industry fit:</span>{' '}
+                              <span className="text-slate-800">{sentimentAnalysis.industry_fit}</span>
+                            </div>
+                          )}
+                          {sentimentAnalysis.suggested_improvements && (
+                            <div>
+                              <span className="text-slate-600">Suggestions:</span>
+                              <p className="text-slate-800 whitespace-pre-wrap mt-1">{sentimentAnalysis.suggested_improvements}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="p-4 bg-pale-sky/30">
