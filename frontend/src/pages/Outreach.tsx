@@ -216,7 +216,7 @@ export default function Outreach() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="w-full max-w-[1920px] mx-auto">
       <h1 className="text-2xl font-bold text-deep-navy mb-6">Outreach Hub</h1>
 
       <div className="flex gap-2 mb-6 border-b border-pale-sky flex-wrap">
@@ -235,7 +235,7 @@ export default function Outreach() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: List (or full-width pipeline/priorities board) */}
-        <div className={activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : 'lg:col-span-1 space-y-4'}>
+        <div className={activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : activeTab === 'campaigns' ? 'lg:col-span-2 space-y-4' : 'lg:col-span-1 space-y-4'}>
           {activeTab === 'pipeline' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
@@ -299,7 +299,7 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'campaigns' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4">
+            <div className="bg-white border border-pale-sky rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4 w-full">
               <h3 className="font-semibold text-deep-navy">Outreach Campaigns</h3>
               <p className="text-sm text-slate-600">
                 Community = institution priorities. Individual = your outreach. Track what each person is working on.
@@ -468,7 +468,7 @@ export default function Outreach() {
         </div>
 
         {/* Right: Detail / Form */}
-        <div className={`${activeTab === 'pipeline' || activeTab === 'campaigns' || activeTab === 'priorities' ? 'lg:col-span-3' : 'lg:col-span-2'} space-y-6`}>
+        <div className={`${activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : activeTab === 'campaigns' ? 'lg:col-span-1' : 'lg:col-span-2'} space-y-6`}>
           {activeTab === 'campaigns' && selectedCampaign && (
             <div className="bg-white border border-pale-sky rounded-xl p-6">
               <div className="flex justify-between items-start mb-4">
