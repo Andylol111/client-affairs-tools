@@ -14,6 +14,8 @@ router = APIRouter()
 
 class SettingsUpdate(BaseModel):
     signature: Optional[str] = None
+    signature_image_url: Optional[str] = None
+    attachments_enabled: Optional[bool] = None
 
 
 class CustomFormatCreate(BaseModel):
@@ -34,6 +36,12 @@ async def update_settings(payload: SettingsUpdate, admin: dict = Depends(get_cur
     if payload.signature is not None:
         await set_setting("signature", payload.signature)
         await log_audit(admin["id"], "settings_update", "settings", "signature", "Updated signature")
+    if payload.signature_image_url is not None:
+        await set_setting("signature_image_url", payload.signature_image_url or "")
+        await log_audit(admin["id"], "settings_update", "settings", "signature_image_url", "Updated signature image URL")
+    if payload.attachments_enabled is not None:
+        await set_setting("attachments_enabled", "1" if payload.attachments_enabled else "0")
+        await log_audit(admin["id"], "settings_update", "settings", "attachments_enabled", f"Set to {payload.attachments_enabled}")
     return {"ok": True}
 
 

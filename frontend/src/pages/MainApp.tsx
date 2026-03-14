@@ -1,18 +1,77 @@
 /**
  * Main app - shown when user IS authenticated.
  * Full app with nav, dashboard, email studio, etc.
+ * Tracks cursor position (throttled, batched) for heatmap analytics.
  */
+import { useEffect, useRef } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import BackButton from '../components/BackButton';
+import CommunitySidebar from '../components/CommunitySidebar';
+import { api } from '../api';
 
 type MainAppProps = {
   user: { email: string; name?: string; picture?: string; role?: string };
   onLogout: () => void;
 };
 
+const CURSOR_THROTTLE_MS = 500;
+const CURSOR_BATCH_FLUSH_MS = 4000;
+const CURSOR_BATCH_MAX = 40;
+
 export default function MainApp({ user, onLogout }: MainAppProps) {
   const location = useLocation();
   const navigate = useNavigate();
+  const cursorBufferRef = useRef<{ event_type: string; resource_type?: string; details?: Record<string, unknown> }[]>([]);
+  const lastCursorRef = useRef<number>(0);
+
+  useEffect(() => {
+    const path = location.pathname || '/';
+    const resource = path === '/' ? 'dashboard' : path.slice(1).split('/')[0];
+    api.telemetry.event({ event_type: 'page_view', resource_type: resource });
+  }, [location.pathname]);
+
+  // Throttled cursor tracking: normalize to 0–100, batch and send periodically
+  useEffect(() => {
+    const flush = () => {
+      const buf = cursorBufferRef.current;
+      if (buf.length === 0) return;
+      cursorBufferRef.current = [];
+      api.telemetry.batch(buf);
+    };
+    const interval = setInterval(flush, CURSOR_BATCH_FLUSH_MS);
+    const onMove = (e: MouseEvent) => {
+      const now = Date.now();
+      if (now - lastCursorRef.current < CURSOR_THROTTLE_MS) return;
+      lastCursorRef.current = now;
+      const w = window.innerWidth || 1;
+      const h = window.innerHeight || 1;
+      const x = Math.min(100, Math.max(0, (e.clientX / w) * 100));
+      const y = Math.min(100, Math.max(0, (e.clientY / h) * 100));
+      let section: string | undefined;
+      try {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el?.closest?.('[data-section]')) {
+          section = (el.closest('[data-section]') as HTMLElement).dataset.section;
+        }
+      } catch {
+        // ignore
+      }
+      const path = location.pathname || '/';
+      const resource = path === '/' ? 'dashboard' : path.slice(1).split('/')[0];
+      cursorBufferRef.current.push({
+        event_type: 'cursor',
+        resource_type: resource,
+        details: { x, y, viewport_w: w, viewport_h: h, ...(section && { section }) },
+      });
+      if (cursorBufferRef.current.length >= CURSOR_BATCH_MAX) flush();
+    };
+    window.addEventListener('mousemove', onMove, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      clearInterval(interval);
+      flush();
+    };
+  }, [location.pathname]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -36,7 +95,6 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
                   { to: '/analytics', label: 'Analytics', icon: '📈' },
                   { to: '/outreach', label: 'Outreach', icon: '🎯' },
                   ...(user.role === 'admin' ? [{ to: '/admin', label: 'Admin', icon: '🔐' }] : []),
-                  { to: '/settings', label: 'Settings', icon: '⚙️' },
                 ].map(({ to, label, icon }) => (
                   <NavLink
                     key={to}
@@ -54,11 +112,14 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
               </div>
               <div className="flex items-center gap-2 ml-2 pl-2 border-l border-pale-sky flex-shrink-0">
                 {user.picture && (
-                  <img src={user.picture} alt="" className="w-8 h-8 rounded-full" />
+                  <img src={user.picture} alt="" className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 )}
-                <span className="text-sm font-medium text-slate-700 hidden md:inline truncate max-w-[160px]">
+                <NavLink
+                  to="/profile"
+                  className="text-sm font-medium text-slate-700 hidden md:inline truncate max-w-[160px] hover:text-deep-navy"
+                >
                   Welcome, {user.name || user.email?.split('@')[0] || 'User'}
-                </span>
+                </NavLink>
                 <button
                   onClick={() => {
                     onLogout();
@@ -73,12 +134,17 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
           </div>
         </div>
       </nav>
-      <main className="flex-1 p-4 sm:p-6 lg:p-8">
-        <div key={location.pathname} className="page-enter">
-          <BackButton />
-          <Outlet context={{ user }} />
+      <div className="flex flex-1 min-h-0">
+        <main className="flex-1 min-w-0 min-h-0 overflow-auto p-4 sm:p-6 lg:p-8">
+          <div key={location.pathname} className="page-enter">
+            <BackButton />
+            <Outlet context={{ user }} />
+          </div>
+        </main>
+        <div className="hidden xl:flex xl:flex-col xl:min-h-[calc(100vh-3.5rem)] xl:flex-shrink-0">
+          <CommunitySidebar />
         </div>
-      </main>
+      </div>
     </div>
   );
 }

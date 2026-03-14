@@ -4,7 +4,7 @@ Outreach API - Pipeline, notes, activities, templates, sequences, profile analys
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from app.database import get_db
+from app.database import get_db, row_to_dict
 from app.auth_deps import get_current_user, get_current_user_optional
 from app.services.sentiment_analyzer import analyze_email_sentiment
 from app.services.profile_analyzer import analyze_contact_profile
@@ -369,6 +369,138 @@ async def get_send_timing(industry: Optional[str] = None, user: dict = Depends(g
     if industry and "tech" in industry.lower():
         windows.insert(0, {"day": "Tuesday", "time": "10:00-12:00", "reason": "Tech professionals often check email mid-morning"})
     return {"windows": windows[:3]}
+
+
+# --- Outreach Campaigns (community + individual) ---
+class OutreachCampaignCreate(BaseModel):
+    name: str
+    type: str = "individual"  # community | individual
+    description: Optional[str] = None
+    priority: int = 0
+
+
+class OutreachCampaignAddContacts(BaseModel):
+    contact_ids: list[int]
+
+
+@router.get("/campaigns")
+async def list_outreach_campaigns(user: dict = Depends(get_current_user)):
+    """List community and individual outreach campaigns. Community = institution priorities; individual = per-user."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT oc.*, u.name as owner_name, u.email as owner_email,
+               (SELECT COUNT(*) FROM outreach_campaign_contacts WHERE campaign_id = oc.id) as contact_count
+               FROM outreach_campaigns oc
+               LEFT JOIN users u ON oc.owner_id = u.id
+               ORDER BY oc.type ASC, oc.priority DESC, oc.updated_at DESC"""
+        )
+        rows = await cursor.fetchall()
+        return [row_to_dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+@router.post("/campaigns")
+async def create_outreach_campaign(payload: OutreachCampaignCreate, user: dict = Depends(get_current_user)):
+    """Create a community or individual outreach campaign."""
+    if payload.type not in ("community", "individual"):
+        raise HTTPException(400, "type must be community or individual")
+    db = await get_db()
+    try:
+        owner_id = user["id"] if payload.type == "individual" else None
+        cursor = await db.execute(
+            """INSERT INTO outreach_campaigns (name, type, owner_id, description, priority)
+               VALUES (?, ?, ?, ?, ?)""",
+            (payload.name, payload.type, owner_id, payload.description or "", payload.priority),
+        )
+        await db.commit()
+        return {"id": cursor.lastrowid, "ok": True}
+    finally:
+        await db.close()
+
+
+@router.get("/campaigns/{campaign_id}")
+async def get_outreach_campaign(campaign_id: int, user: dict = Depends(get_current_user)):
+    """Get campaign with contacts."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT oc.*, u.name as owner_name, u.email as owner_email
+               FROM outreach_campaigns oc LEFT JOIN users u ON oc.owner_id = u.id
+               WHERE oc.id = ?""",
+            (campaign_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Campaign not found")
+        campaign = row_to_dict(row)
+        cursor = await db.execute(
+            """SELECT c.* FROM contacts c
+               JOIN outreach_campaign_contacts occ ON occ.contact_id = c.id
+               WHERE occ.campaign_id = ?""",
+            (campaign_id,),
+        )
+        campaign["contacts"] = [row_to_dict(r) for r in await cursor.fetchall()]
+        return campaign
+    finally:
+        await db.close()
+
+
+@router.post("/campaigns/{campaign_id}/contacts")
+async def add_contacts_to_outreach_campaign(
+    campaign_id: int, payload: OutreachCampaignAddContacts, user: dict = Depends(get_current_user)
+):
+    """Add contacts to an outreach campaign."""
+    db = await get_db()
+    try:
+        for cid in payload.contact_ids:
+            await db.execute(
+                "INSERT OR IGNORE INTO outreach_campaign_contacts (campaign_id, contact_id) VALUES (?, ?)",
+                (campaign_id, cid),
+            )
+        await db.execute(
+            "UPDATE outreach_campaigns SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (campaign_id,),
+        )
+        await db.commit()
+        return {"ok": True, "added": len(payload.contact_ids)}
+    finally:
+        await db.close()
+
+
+@router.delete("/campaigns/{campaign_id}/contacts/{contact_id}")
+async def remove_contact_from_outreach_campaign(
+    campaign_id: int, contact_id: int, user: dict = Depends(get_current_user)
+):
+    """Remove a contact from an outreach campaign."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM outreach_campaign_contacts WHERE campaign_id = ? AND contact_id = ?",
+            (campaign_id, contact_id),
+        )
+        await db.execute(
+            "UPDATE outreach_campaigns SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (campaign_id,),
+        )
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.delete("/campaigns/{campaign_id}")
+async def delete_outreach_campaign(campaign_id: int, user: dict = Depends(get_current_user)):
+    """Delete an outreach campaign."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM outreach_campaign_contacts WHERE campaign_id = ?", (campaign_id,))
+        await db.execute("DELETE FROM outreach_campaigns WHERE id = ?", (campaign_id,))
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
 
 
 # --- Metrics (extended) ---

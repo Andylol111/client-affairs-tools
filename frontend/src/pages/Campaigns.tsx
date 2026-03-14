@@ -34,6 +34,16 @@ export default function Campaigns() {
     }
   };
 
+  const deleteCampaign = async (id: number, name: string) => {
+    if (!confirm(`Delete campaign "${name}"? This cannot be undone.`)) return;
+    try {
+      await api.campaigns.delete(id);
+      setCampaigns(await api.campaigns.list());
+    } catch (e: any) {
+      alert(e?.message || 'Failed to delete campaign');
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto">
       <div className="flex items-center justify-between gap-4 mb-6">
@@ -111,6 +121,13 @@ export default function Campaigns() {
                         Send
                       </button>
                     )}
+                    <button
+                      onClick={() => deleteCampaign(c.id, c.name)}
+                      className="px-4 py-2 rounded-lg text-sm border border-red-200 text-red-600 hover:bg-red-50"
+                      title="Delete campaign"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))

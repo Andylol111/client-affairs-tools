@@ -3,8 +3,72 @@ import { api } from '../api';
 
 const PIPELINE_STATUSES = ['cold', 'contacted', 'replied', 'meeting', 'closed'];
 
+function groupContactsByCompany(contacts: any[]): { company: string; contacts: any[] }[] {
+  const byCompany = new Map<string, any[]>();
+  for (const c of contacts) {
+    const key = (c.company || '').trim() || 'No company';
+    if (!byCompany.has(key)) byCompany.set(key, []);
+    byCompany.get(key)!.push(c);
+  }
+  return Array.from(byCompany.entries())
+    .map(([company, contacts]) => ({ company, contacts }))
+    .sort((a, b) => (a.company === 'No company' ? 1 : b.company === 'No company' ? -1 : a.company.localeCompare(b.company)));
+}
+
+function ContactCard({ c, selectedContact, onSelect, onUpdatePipeline }: {
+  c: any; selectedContact: any; onSelect: (c: any) => void; onUpdatePipeline: (id: number, status: string) => void;
+}) {
+  return (
+    <div
+      onClick={() => onSelect(c)}
+      className={`p-3 rounded-lg cursor-pointer border transition-colors ${
+        selectedContact?.id === c.id
+          ? 'border-[#1a2f5a] bg-[#1a2f5a]/5 ring-1 ring-[#1a2f5a]'
+          : 'border-pale-sky hover:border-[#1e3a6e] hover:bg-pale-sky/10'
+      }`}
+    >
+      <div className="font-medium text-slate-800 truncate text-sm">{c.name || c.email}</div>
+      <div className="text-xs text-slate-500 truncate mt-0.5">{c.company || c.email}</div>
+      <select
+        value={c.pipeline_status || 'cold'}
+        onChange={(e) => { e.stopPropagation(); onUpdatePipeline(c.id, e.target.value); }}
+        onClick={(e) => e.stopPropagation()}
+        className="mt-2 w-full text-xs px-2 py-1.5 rounded border border-pale-sky bg-white"
+      >
+        {PIPELINE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function CompanyFolder({ company, contacts, selectedContact, onSelect, onUpdatePipeline }: {
+  company: string; contacts: any[]; selectedContact: any; onSelect: (c: any) => void; onUpdatePipeline: (id: number, status: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <div className="rounded-lg border border-pale-sky overflow-hidden">
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        className="w-full px-3 py-2 flex items-center justify-between bg-pale-sky/20 hover:bg-pale-sky/30 text-left text-sm font-medium text-deep-navy"
+      >
+        <span className="truncate">{company}</span>
+        <span className="text-slate-500 text-xs shrink-0 ml-2">({contacts.length})</span>
+        <span className="text-slate-500">{expanded ? '▼' : '▶'}</span>
+      </button>
+      {expanded && (
+        <div className="p-2 space-y-1 bg-white">
+          {contacts.map((c) => (
+            <ContactCard key={c.id} c={c} selectedContact={selectedContact} onSelect={onSelect} onUpdatePipeline={onUpdatePipeline} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Outreach() {
-  const [activeTab, setActiveTab] = useState<'pipeline' | 'templates' | 'sequences'>('pipeline');
+  const [activeTab, setActiveTab] = useState<'pipeline' | 'campaigns' | 'priorities' | 'templates' | 'sequences'>('pipeline');
+  const [groupByCompany, setGroupByCompany] = useState(false);
   const [contacts, setContacts] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
   const [sequences, setSequences] = useState<any[]>([]);
@@ -20,13 +84,28 @@ export default function Outreach() {
   const [templateForm, setTemplateForm] = useState({ name: '', subject: '', body: '', industry: '', use_case: '' });
   const [sequenceForm, setSequenceForm] = useState({ name: '', steps: [{ days_after: 3, subject: '', body: '' }] });
   const [loading, setLoading] = useState(false);
+  const [outreachCampaigns, setOutreachCampaigns] = useState<any[]>([]);
+  const [campaignForm, setCampaignForm] = useState({ name: '', type: 'individual' as 'community' | 'individual', description: '' });
+  const [selectedCampaign, setSelectedCampaign] = useState<any>(null);
+  const [campaignContacts, setCampaignContacts] = useState<any[]>([]);
 
   useEffect(() => {
     api.contacts.list().then(setContacts).catch(() => setContacts([]));
     api.outreach.templates.list().then(setTemplates).catch(() => setTemplates([]));
     api.outreach.sequences.list().then(setSequences).catch(() => setSequences([]));
     api.outreach.pipelineMetrics().then(setPipelineMetrics).catch(() => setPipelineMetrics(null));
+    api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => setOutreachCampaigns([]));
   }, []);
+
+  useEffect(() => {
+    if (selectedCampaign?.id) {
+      api.outreach.campaigns.get(selectedCampaign.id).then((c) => {
+        setCampaignContacts(c.contacts || []);
+      }).catch(() => setCampaignContacts([]));
+    } else {
+      setCampaignContacts([]);
+    }
+  }, [selectedCampaign?.id]);
 
   useEffect(() => {
     if (selectedContact?.id) {
@@ -140,30 +219,41 @@ export default function Outreach() {
     <div className="max-w-7xl mx-auto">
       <h1 className="text-2xl font-bold text-deep-navy mb-6">Outreach Hub</h1>
 
-      <div className="flex gap-2 mb-6 border-b border-pale-sky">
-        {(['pipeline', 'templates', 'sequences'] as const).map((tab) => (
+      <div className="flex gap-2 mb-6 border-b border-pale-sky flex-wrap">
+        {(['pipeline', 'campaigns', 'priorities', 'templates', 'sequences'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 rounded-t-lg font-medium capitalize ${
+            className={`px-4 py-2 rounded-t-lg font-medium ${
               activeTab === tab ? 'bg-[#1a2f5a] text-white' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50'
             }`}
           >
-            {tab}
+            {tab === 'priorities' ? 'Club Priorities' : tab}
           </button>
         ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: List (or full-width pipeline board) */}
-        <div className={activeTab === 'pipeline' ? 'lg:col-span-3' : 'lg:col-span-1 space-y-4'}>
+        {/* Left: List (or full-width pipeline/priorities board) */}
+        <div className={activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : 'lg:col-span-1 space-y-4'}>
           {activeTab === 'pipeline' && (
             <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={groupByCompany}
+                    onChange={(e) => setGroupByCompany(e.target.checked)}
+                  />
+                  Group by company
+                </label>
+                <span className="text-xs text-slate-500">Merge contacts into company folders for easier management</span>
+              </div>
               {/* Full-width Kanban-style pipeline board */}
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 min-h-[420px]">
                 {PIPELINE_STATUSES.map((status) => {
-                  const count = pipelineMetrics?.by_status?.find((s: any) => s.pipeline_status === status)?.count ?? 0;
                   const inStatus = contacts.filter((c) => (c.pipeline_status || 'cold') === status);
+                  const count = pipelineMetrics?.by_status?.find((s: any) => s.pipeline_status === status)?.count ?? inStatus.length;
                   return (
                     <div
                       key={status}
@@ -172,37 +262,32 @@ export default function Outreach() {
                       <div className="px-4 py-3 border-b border-pale-sky bg-pale-sky/20 flex justify-between items-center">
                         <h3 className="font-semibold text-deep-navy capitalize">{status}</h3>
                         <span className="text-sm font-medium text-slate-600 bg-white px-2 py-0.5 rounded">
-                          {inStatus.length}
+                          {count}
                         </span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-[320px]">
-                        {inStatus.map((c) => (
-                          <div
-                            key={c.id}
-                            onClick={() => setSelectedContact(c)}
-                            className={`p-3 rounded-lg cursor-pointer border transition-colors ${
-                              selectedContact?.id === c.id
-                                ? 'border-[#1a2f5a] bg-[#1a2f5a]/5 ring-1 ring-[#1a2f5a]'
-                                : 'border-pale-sky hover:border-[#1e3a6e] hover:bg-pale-sky/10'
-                            }`}
-                          >
-                            <div className="font-medium text-slate-800 truncate text-sm">{c.name || c.email}</div>
-                            <div className="text-xs text-slate-500 truncate mt-0.5">{c.company || c.email}</div>
-                            <select
-                              value={c.pipeline_status || 'cold'}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                updatePipeline(c.id, e.target.value);
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              className="mt-2 w-full text-xs px-2 py-1.5 rounded border border-pale-sky bg-white"
-                            >
-                              {PIPELINE_STATUSES.map((s) => (
-                                <option key={s} value={s}>{s}</option>
-                              ))}
-                            </select>
-                          </div>
-                        ))}
+                        {groupByCompany ? (
+                          groupContactsByCompany(inStatus).map(({ company, contacts: companyContacts }) => (
+                            <CompanyFolder
+                              key={company}
+                              company={company}
+                              contacts={companyContacts}
+                              selectedContact={selectedContact}
+                              onSelect={setSelectedContact}
+                              onUpdatePipeline={updatePipeline}
+                            />
+                          ))
+                        ) : (
+                          inStatus.map((c) => (
+                            <ContactCard
+                              key={c.id}
+                              c={c}
+                              selectedContact={selectedContact}
+                              onSelect={setSelectedContact}
+                              onUpdatePipeline={updatePipeline}
+                            />
+                          ))
+                        )}
                         {inStatus.length === 0 && (
                           <div className="text-center text-slate-400 text-sm py-8">No contacts</div>
                         )}
@@ -210,6 +295,134 @@ export default function Outreach() {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+          {activeTab === 'campaigns' && (
+            <div className="bg-white border border-pale-sky rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4">
+              <h3 className="font-semibold text-deep-navy">Outreach Campaigns</h3>
+              <p className="text-sm text-slate-600">
+                Community = institution priorities. Individual = your outreach. Track what each person is working on.
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                <input
+                  value={campaignForm.name}
+                  onChange={(e) => setCampaignForm((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="Campaign name"
+                  className="px-3 py-2 rounded-lg border border-pale-sky text-sm flex-1 min-w-[140px]"
+                />
+                <select
+                  value={campaignForm.type}
+                  onChange={(e) => setCampaignForm((p) => ({ ...p, type: e.target.value as 'community' | 'individual' }))}
+                  className="px-3 py-2 rounded-lg border border-pale-sky text-sm"
+                >
+                  <option value="community">Community</option>
+                  <option value="individual">Individual</option>
+                </select>
+                <button
+                  onClick={async () => {
+                    if (!campaignForm.name.trim()) return;
+                    try {
+                      await api.outreach.campaigns.create({
+                        name: campaignForm.name.trim(),
+                        type: campaignForm.type,
+                        description: campaignForm.description || undefined,
+                      });
+                      setCampaignForm({ name: '', type: 'individual', description: '' });
+                      api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => {});
+                    } catch (e) {
+                      alert((e as Error)?.message);
+                    }
+                  }}
+                  disabled={!campaignForm.name.trim()}
+                  className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white text-sm font-medium disabled:opacity-50"
+                >
+                  Create
+                </button>
+              </div>
+              <div className="space-y-2">
+                {outreachCampaigns.map((oc) => (
+                  <div
+                    key={oc.id}
+                    onClick={() => setSelectedCampaign(oc)}
+                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                      selectedCampaign?.id === oc.id ? 'border-[#1a2f5a] bg-[#1a2f5a]/5' : 'border-pale-sky hover:bg-pale-sky/10'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-medium text-slate-800">{oc.name}</span>
+                        <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${oc.type === 'community' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                          {oc.type}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-500">{oc.contact_count ?? 0} contacts</span>
+                    </div>
+                    {(oc.owner_email || oc.owner_name) && (
+                      <div className="text-xs text-slate-500 mt-0.5">Author: {oc.owner_email || oc.owner_name}</div>
+                    )}
+                    {oc.type === 'community' && !oc.owner_email && !oc.owner_name && (
+                      <div className="text-xs text-slate-500 mt-0.5">Community initiative</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {activeTab === 'priorities' && (
+            <div className="bg-white border border-pale-sky rounded-xl p-6 shadow-sm">
+              <h2 className="text-xl font-semibold text-deep-navy mb-2">Club Priorities & Communities</h2>
+              <p className="text-sm text-slate-600 mb-6">
+                What everyone is working on. Author = Google account. Community = institution focus; Individual = member outreach.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm min-w-[600px]">
+                  <thead>
+                    <tr className="border-b border-pale-sky">
+                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Campaign</th>
+                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Author</th>
+                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Focus</th>
+                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Type</th>
+                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Contacts</th>
+                      <th className="text-left py-3 px-3 font-semibold text-deep-navy"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outreachCampaigns.map((oc) => (
+                      <tr
+                        key={oc.id}
+                        className="border-b border-pale-sky/50 hover:bg-pale-sky/5"
+                      >
+                        <td className="py-3 px-3 font-medium text-slate-800">{oc.name}</td>
+                        <td className="py-3 px-3 text-slate-600">
+                          {oc.type === 'community'
+                            ? 'Community'
+                            : (oc.owner_email || oc.owner_name || '—')}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 max-w-[280px]" title={oc.description || ''}>
+                          {oc.description || '—'}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${oc.type === 'community' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                            {oc.type}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-slate-500">{oc.contact_count ?? 0}</td>
+                        <td className="py-3 px-3">
+                          <button
+                            onClick={() => { setSelectedCampaign(oc); setActiveTab('campaigns'); }}
+                            className="text-xs text-[#1a2f5a] hover:underline font-medium"
+                          >
+                            View →
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {outreachCampaigns.length === 0 && (
+                  <p className="text-slate-500 text-sm py-8 text-center">No campaigns yet. Create one in the Campaigns tab.</p>
+                )}
               </div>
             </div>
           )}
@@ -255,7 +468,97 @@ export default function Outreach() {
         </div>
 
         {/* Right: Detail / Form */}
-        <div className={`${activeTab === 'pipeline' ? 'lg:col-span-3' : 'lg:col-span-2'} space-y-6`}>
+        <div className={`${activeTab === 'pipeline' || activeTab === 'campaigns' || activeTab === 'priorities' ? 'lg:col-span-3' : 'lg:col-span-2'} space-y-6`}>
+          {activeTab === 'campaigns' && selectedCampaign && (
+            <div className="bg-white border border-pale-sky rounded-xl p-6">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="font-semibold text-deep-navy">{selectedCampaign.name}</h3>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${selectedCampaign.type === 'community' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                    {selectedCampaign.type}
+                  </span>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Author: {selectedCampaign.type === 'community'
+                      ? 'Community'
+                      : (selectedCampaign.owner_email || selectedCampaign.owner_name || '—')}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      if (!confirm('Delete this campaign?')) return;
+                      try {
+                        await api.outreach.campaigns.delete(selectedCampaign.id);
+                        setSelectedCampaign(null);
+                        api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => {});
+                      } catch (e) {
+                        alert((e as Error)?.message);
+                      }
+                    }}
+                    className="text-sm text-red-600 hover:underline"
+                  >
+                    Delete
+                  </button>
+                  <button onClick={() => setSelectedCampaign(null)} className="text-sm text-slate-500 hover:text-slate-700">✕ Close</button>
+                </div>
+              </div>
+              <h4 className="text-sm font-medium text-slate-600 mb-2">Contacts in campaign</h4>
+              {campaignContacts.length === 0 ? (
+                <p className="text-slate-500 text-sm">No contacts yet. Add from the pipeline or contact list.</p>
+              ) : (
+                <ul className="space-y-2 max-h-60 overflow-y-auto mb-4">
+                  {campaignContacts.map((c) => (
+                    <li key={c.id} className="flex items-center justify-between py-2 border-b border-slate-100 text-sm">
+                      <span>{c.name || c.email} ({c.company || '—'})</span>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.outreach.campaigns.removeContact(selectedCampaign.id, c.id);
+                            setCampaignContacts((prev) => prev.filter((x) => x.id !== c.id));
+                          } catch (e) {
+                            alert((e as Error)?.message);
+                          }
+                        }}
+                        className="text-xs text-red-600 hover:underline"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="pt-4 border-t border-pale-sky">
+                <p className="text-xs text-slate-600 mb-2">Add contacts: select from pipeline, then use the &quot;Add to campaign&quot; action (or add bulk from Contacts page).</p>
+                <select
+                  className="w-full px-3 py-2 rounded-lg border border-pale-sky text-sm"
+                  onChange={async (e) => {
+                    const cid = parseInt(e.target.value, 10);
+                    if (!cid) return;
+                    try {
+                      await api.outreach.campaigns.addContacts(selectedCampaign.id, [cid]);
+                      const added = contacts.find((c) => c.id === cid);
+                      if (added) setCampaignContacts((prev) => [...prev, added]);
+                      e.target.value = '';
+                    } catch (err) {
+                      alert((err as Error)?.message);
+                    }
+                  }}
+                >
+                  <option value="">Add contact...</option>
+                  {contacts
+                    .filter((c) => !campaignContacts.some((cc) => cc.id === c.id))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>{c.name || c.email} — {c.company || '—'}</option>
+                    ))}
+                </select>
+              </div>
+            </div>
+          )}
+          {activeTab === 'campaigns' && !selectedCampaign && (
+            <div className="bg-white border border-pale-sky rounded-xl p-12 text-center">
+              <p className="text-slate-500">Select a campaign to view contacts and add more.</p>
+            </div>
+          )}
           {activeTab === 'pipeline' && (
             selectedContact ? (
             <>
@@ -269,8 +572,28 @@ export default function Outreach() {
                     ✕ Clear selection
                   </button>
                 </div>
-                <div className="flex gap-2 items-center mb-4">
+                <div className="flex flex-wrap gap-2 items-center mb-4">
                   <span className="text-sm text-slate-600">{selectedContact.email}</span>
+                  <select
+                    className="px-2 py-1 rounded text-xs border border-pale-sky bg-white"
+                    onChange={async (e) => {
+                      const cid = parseInt(e.target.value, 10);
+                      if (!cid || !selectedContact?.id) return;
+                      try {
+                        await api.outreach.campaigns.addContacts(cid, [selectedContact.id]);
+                        api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => {});
+                        e.target.value = '';
+                        alert('Added to campaign');
+                      } catch (err) {
+                        alert((err as Error)?.message);
+                      }
+                    }}
+                  >
+                    <option value="">+ Add to campaign</option>
+                    {outreachCampaigns.map((oc) => (
+                      <option key={oc.id} value={oc.id}>{oc.name} ({oc.type})</option>
+                    ))}
+                  </select>
                   <button
                     onClick={verifyEmail}
                     className="px-2 py-1 rounded text-xs bg-pale-sky/50 hover:bg-pale-sky"
@@ -432,7 +755,7 @@ export default function Outreach() {
                   disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
                   className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
                 >
-                  {loading ? 'Saving...' : 'Save template'}
+                  {loading ? 'Saving...' : 'Save Template'}
                 </button>
               </div>
             </div>
@@ -509,7 +832,7 @@ export default function Outreach() {
                   disabled={loading || !sequenceForm.name}
                   className="block px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
                 >
-                  {loading ? 'Saving...' : 'Save sequence'}
+                  {loading ? 'Saving...' : 'Save Sequence'}
                 </button>
               </div>
             </div>

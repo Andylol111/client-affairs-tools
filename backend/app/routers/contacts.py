@@ -3,11 +3,14 @@ Contacts API - Contact Scraper & Discovery Engine
 """
 import csv
 import io
+import os
+import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from app.database import get_db
-from app.models import ContactCreate, ScrapeRequest
+from app.models import ContactCreate, ScrapeRequest, SearchPersonRequest
 from app.auth_deps import get_current_user_optional
 from app.services.audit_service import log_audit
+from app.services.usage_service import log_event
 from app.services.contact_scraper import (
     scrape_contacts_from_domain,
     extract_domain_from_company,
@@ -175,7 +178,102 @@ async def import_contacts(file: UploadFile = File(...)):
                 pass
     finally:
         await db.close()
+    if user:
+        await log_event(
+            user["id"], "scrape_completed", "scraper",
+            {"company_name": req.company_name, "domain": domain, "linkedin_url": bool(req.linkedin_url), "count": len(created)},
+        )
     return {"contacts": created, "count": len(created)}
+
+
+@router.post("/search-person")
+async def search_person(req: SearchPersonRequest):
+    """Search the web for information about a person (name + optional company). Uses Tavily if TAVILY_API_KEY is set; optional LLM summary via Ollama."""
+    query = req.name.strip()
+    if req.company and req.company.strip():
+        query = f"{query} {req.company.strip()}"
+    if not query:
+        raise HTTPException(400, "Name is required")
+
+    api_key = (os.getenv("TAVILY_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "query": query,
+            "results": [],
+            "summary": None,
+            "message": "Web search is not configured. Set TAVILY_API_KEY in the backend .env to enable finding contact information from the internet.",
+        }
+
+    import httpx
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            r = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": f"{req.name} contact email professional {req.company or ''}".strip(),
+                    "search_depth": "basic",
+                    "max_results": 10,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPStatusError as e:
+            return {
+                "query": query,
+                "results": [],
+                "summary": None,
+                "message": f"Search API error: {e.response.status_code}",
+            }
+        except Exception as e:
+            return {
+                "query": query,
+                "results": [],
+                "summary": None,
+                "message": str(e),
+            }
+
+    results = [
+        {"title": x.get("title"), "url": x.get("url"), "content": (x.get("content") or "")[:500]}
+        for x in data.get("results") or []
+    ]
+
+    # Optional: LLM summary via Ollama
+    summary = None
+    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    if results:
+        snippets = "\n\n".join(
+            f"[{i+1}] {r.get('title', '')}\n{r.get('content', '')}" for i, r in enumerate(results[:6])
+        )
+        prompt = f"""Based on the following web search results about "{req.name}"{f' at {req.company}' if req.company else ''}, extract and list:
+- Possible job title and company
+- Email or contact info if mentioned
+- LinkedIn or social profile URLs if mentioned
+- One short paragraph summarizing who they are and relevance for outreach
+
+Search results:
+{snippets}
+
+Respond in clear bullet points and one short paragraph. If no contact info is found, say so."""
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client_ollama:
+                resp = await client_ollama.post(
+                    f"{ollama_url.rstrip('/')}/api/generate",
+                    json={"model": "llama3.2", "prompt": prompt, "stream": False},
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    summary = (body.get("response") or "").strip()
+        except Exception:
+            pass
+
+    return {
+        "query": query,
+        "results": results,
+        "summary": summary,
+        "message": None,
+    }
 
 
 @router.post("/scrape")

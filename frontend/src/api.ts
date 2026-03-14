@@ -17,12 +17,36 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
       ...options?.headers,
     },
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    try {
+      const j = JSON.parse(text);
+      const msg = typeof j.detail === 'string' ? j.detail : Array.isArray(j.detail) ? j.detail[0]?.msg : text;
+      throw new Error(msg || text);
+    } catch (e) {
+      if (e instanceof Error && e.message && e.message !== text) throw e;
+      throw new Error(text);
+    }
+  }
   return res.json();
 }
 
+/** Per-page cursor heatmap grid. Separate type avoids OXC parse issues with nested generics. */
+export type CursorHeatmapPage = { grid: number[][], bins: number };
+/** Cursor heatmap API response. */
+export type CursorHeatmapResponse = { days: number, pages: Record<string, CursorHeatmapPage> };
+
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
+  telemetry: {
+    event: (data: { event_type: string; resource_type?: string; details?: Record<string, unknown> }) =>
+      fetchApi<any>('/api/telemetry/event', { method: 'POST', body: JSON.stringify(data) }).catch(() => {}),
+    batch: (events: { event_type: string; resource_type?: string; details?: Record<string, unknown> }[]) =>
+      fetchApi<{ ok: boolean; count: number }>('/api/telemetry/batch', {
+        method: 'POST',
+        body: JSON.stringify({ events: events.slice(0, 50) }),
+      }).catch(() => ({ ok: false, count: 0 })),
+  },
   contacts: {
     list: (company?: string, mineOnly?: boolean) => {
       const params = new URLSearchParams();
@@ -52,6 +76,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+    searchPerson: (data: { name: string; company?: string }) =>
+      fetchApi<{ query: string; results: { title?: string; url?: string; content?: string }[]; summary: string | null; message: string | null }>(
+        '/api/contacts/search-person',
+        { method: 'POST', body: JSON.stringify(data) }
+      ),
   },
   emails: {
     generate: (data: {
@@ -66,7 +95,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    testSend: (data: { to_email: string; subject: string; body: string }) =>
+    testSend: (data: { to_email: string; subject: string; body: string; attachment_ids?: number[] }) =>
       fetchApi<any>('/api/emails/test-send', { method: 'POST', body: JSON.stringify(data) }),
     generated: (params?: { contact_id?: number; sort?: string }) =>
       fetchApi<any[]>(`/api/emails/generated${params && Object.keys(params).length ? '?' + new URLSearchParams(params as any) : ''}`),
@@ -89,6 +118,7 @@ export const api = {
   campaigns: {
     list: () => fetchApi<any[]>('/api/campaigns'),
     get: (id: number) => fetchApi<any>(`/api/campaigns/${id}`),
+    delete: (id: number) => fetchApi<any>(`/api/campaigns/${id}`, { method: 'DELETE' }),
     create: (name: string) =>
       fetchApi<any>('/api/campaigns', { method: 'POST', body: JSON.stringify({ name }) }),
     addContacts: (id: number, data: { contact_ids: number[]; email_subjects?: Record<string, string>; email_bodies?: Record<string, string> }) =>
@@ -109,10 +139,22 @@ export const api = {
     insights: () => fetchApi<{ insights: string[] }>('/api/analytics/insights'),
   },
   auth: {
+    profile: {
+      get: () => fetchApi<any>('/api/auth/profile'),
+      update: (data: { projects?: string; experience?: string; role_title?: string; linkedin_url?: string; slack_handle?: string; other_handles?: string }) =>
+        fetchApi<any>('/api/auth/profile', { method: 'PUT', body: JSON.stringify(data) }),
+    },
+    team: () => fetchApi<any[]>('/api/auth/team'),
+    myProjects: () => fetchApi<any[]>('/api/auth/my-projects'),
     notificationPrefs: {
       get: () => fetchApi<any>('/api/auth/notification-preferences'),
       update: (data: { admin_digest?: boolean; campaign_summary?: boolean }) =>
         fetchApi<any>('/api/auth/notification-preferences', { method: 'PUT', body: JSON.stringify(data) }),
+    },
+    slack: {
+      connectUrl: () => fetchApi<{ redirect_url: string }>('/api/auth/slack/connect'),
+      status: () => fetchApi<{ connected: boolean; team_name?: string }>('/api/auth/slack/status'),
+      disconnect: () => fetchApi<any>('/api/auth/slack/disconnect', { method: 'DELETE' }),
     },
   },
   admin: {
@@ -125,9 +167,72 @@ export const api = {
         fetchApi<any>(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
       updateStatus: (userId: number, isActive: boolean) =>
         fetchApi<any>(`/api/admin/users/${userId}/status`, { method: 'PATCH', body: JSON.stringify({ is_active: isActive }) }),
+      exportExcel: async () => {
+        const res = await fetch(`${API_BASE}/api/admin/users/export`, { headers: getAuthHeaders() });
+        if (!res.ok) {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            const d = j.detail;
+            throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+          } catch (e) {
+            if (e instanceof Error && e.message !== text) throw e;
+            throw new Error(text);
+          }
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'YUCG_users_export.xlsx';
+        a.click();
+        URL.revokeObjectURL(url);
+      },
     },
     auditLog: (limit?: number) =>
       fetchApi<any[]>(`/api/admin/audit-log?limit=${limit || 100}`),
+    exportAuditLogExcel: async () => {
+      const res = await fetch(`${API_BASE}/api/admin/audit-log/export`, { headers: getAuthHeaders() });
+      if (!res.ok) {
+        const text = await res.text();
+        try {
+          const j = JSON.parse(text);
+          const d = j.detail;
+          throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+        } catch (e) {
+          if (e instanceof Error && e.message !== text) throw e;
+          throw new Error(text);
+        }
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'YUCG_audit_log.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+    exportAllZip: async () => {
+      const res = await fetch(`${API_BASE}/api/admin/export/all`, { headers: getAuthHeaders() });
+      if (!res.ok) {
+        const text = await res.text();
+        try {
+          const j = JSON.parse(text);
+          const d = j.detail;
+          throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+        } catch (e) {
+          if (e instanceof Error && e.message !== text) throw e;
+          throw new Error(text);
+        }
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'YUCG_admin_export_all.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    },
     apiKeys: {
       list: () => fetchApi<any[]>('/api/admin/api-keys'),
       create: (name: string, scopes?: string) =>
@@ -136,11 +241,138 @@ export const api = {
         fetchApi<any>(`/api/admin/api-keys/${id}`, { method: 'DELETE' }),
     },
     twoFactor: {
+      status: () => fetchApi<{ status: 'enabled' | 'pending' | 'not_setup' }>('/api/admin/2fa/status'),
       setup: () => fetchApi<any>('/api/admin/2fa/setup', { method: 'POST' }),
       verify: (code: string) =>
         fetchApi<any>('/api/admin/2fa/verify', { method: 'POST', body: JSON.stringify({ code }) }),
       disable: (code: string) =>
         fetchApi<any>('/api/admin/2fa/disable', { method: 'POST', body: JSON.stringify({ code }) }),
+      reset: () => fetchApi<any>('/api/admin/2fa/reset', { method: 'POST' }),
+    },
+    projects: {
+      list: () => fetchApi<any[]>('/api/admin/projects'),
+      create: (data: { name: string; semester?: string; description?: string }) =>
+        fetchApi<any>('/api/admin/projects', { method: 'POST', body: JSON.stringify(data) }),
+      delete: (id: number) => fetchApi<any>(`/api/admin/projects/${id}`, { method: 'DELETE' }),
+      assignments: (projectId: number) => fetchApi<any[]>(`/api/admin/projects/${projectId}/assignments`),
+      assignUser: (userId: number, data: { project_id: number; role_in_project?: string }) =>
+        fetchApi<any>(`/api/admin/users/${userId}/project`, { method: 'PUT', body: JSON.stringify(data) }),
+      unassignUser: (userId: number, projectId: number) =>
+        fetchApi<any>(`/api/admin/users/${userId}/project/${projectId}`, { method: 'DELETE' }),
+      userProjects: (userId: number) => fetchApi<any[]>(`/api/admin/users/${userId}/projects`),
+    },
+    operations: {
+      events: (params?: { limit?: number; event_type?: string; days?: number }) =>
+        fetchApi<any[]>(`/api/admin/operations/events?${new URLSearchParams(params as any || {})}`),
+      heatmap: (params?: { days?: number; group_by?: string }) =>
+        fetchApi<{
+          group_by: string;
+          days: number;
+          grid: Record<string, Record<string, number>>;
+          rows: any[];
+          matrix_2d?: { row_labels: string[]; col_labels: string[]; values: number[][] };
+        }>(`/api/admin/operations/heatmap?${new URLSearchParams(params as any || {})}`),
+      cursorHeatmap: (params?: { days?: number; bins?: number }) =>
+        fetchApi<CursorHeatmapResponse>(
+          `/api/admin/operations/cursor-heatmap?${new URLSearchParams(params as any || {})}`
+        ),
+      aggregates: (days?: number) =>
+        fetchApi<{ by_event_type: { event_type: string; count: number }[]; by_resource_type: { resource_type: string; count: number }[]; days: number }>(
+          `/api/admin/operations/aggregates?days=${days ?? 30}`
+        ),
+      resources: {
+        list: () => fetchApi<any[]>('/api/admin/operations/resources'),
+        create: (data: { name: string; content_text: string; content_type?: string }) =>
+          fetchApi<any>('/api/admin/operations/resources', { method: 'POST', body: JSON.stringify(data) }),
+        upload: async (file: File) => {
+          const form = new FormData();
+          form.append('file', file);
+          const res = await fetch(`${API_BASE}/api/admin/operations/resources/upload`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: form,
+          });
+          if (!res.ok) throw new Error(await res.text());
+          return res.json();
+        },
+      },
+      ollamaQuery: (query: string) =>
+        fetchApi<{ answer: string | null; error: string | null }>('/api/admin/operations/ollama/query', {
+          method: 'POST',
+          body: JSON.stringify({ query }),
+        }),
+      exportInsightsExcel: async (days?: number) => {
+        const res = await fetch(
+          `${API_BASE}/api/admin/operations/export/insights?days=${days ?? 30}`,
+          { headers: getAuthHeaders() }
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            const d = j.detail;
+            throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+          } catch (e) {
+            if (e instanceof Error && e.message !== text) throw e;
+            throw new Error(text);
+          }
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `YUCG_operations_insights_${days ?? 30}d.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+      exportChartsZip: async (days?: number) => {
+        const res = await fetch(
+          `${API_BASE}/api/admin/operations/export/charts?days=${days ?? 30}`,
+          { headers: getAuthHeaders() }
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            const d = j.detail;
+            throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+          } catch (e) {
+            if (e instanceof Error && e.message !== text) throw e;
+            throw new Error(text);
+          }
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `YUCG_operations_charts_${days ?? 30}d.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+      exportFullZip: async (days?: number) => {
+        const res = await fetch(
+          `${API_BASE}/api/admin/operations/export/full?days=${days ?? 30}`,
+          { headers: getAuthHeaders() }
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          try {
+            const j = JSON.parse(text);
+            const d = j.detail;
+            throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+          } catch (e) {
+            if (e instanceof Error && e.message !== text) throw e;
+            throw new Error(text);
+          }
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `YUCG_operations_full_export_${days ?? 30}d.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
     },
   },
   outreach: {
@@ -194,12 +426,46 @@ export const api = {
     verifyEmail: (email: string) =>
       fetchApi<any>(`/api/outreach/verify-email?email=${encodeURIComponent(email)}`),
     pipelineMetrics: () => fetchApi<any>('/api/outreach/metrics/pipeline'),
+    campaigns: {
+      list: () => fetchApi<any[]>('/api/outreach/campaigns'),
+      get: (id: number) => fetchApi<any>(`/api/outreach/campaigns/${id}`),
+      create: (data: { name: string; type: 'community' | 'individual'; description?: string; priority?: number }) =>
+        fetchApi<any>('/api/outreach/campaigns', { method: 'POST', body: JSON.stringify(data) }),
+      addContacts: (id: number, contactIds: number[]) =>
+        fetchApi<any>(`/api/outreach/campaigns/${id}/contacts`, {
+          method: 'POST',
+          body: JSON.stringify({ contact_ids: contactIds }),
+        }),
+      removeContact: (campaignId: number, contactId: number) =>
+        fetchApi<any>(`/api/outreach/campaigns/${campaignId}/contacts/${contactId}`, { method: 'DELETE' }),
+      delete: (id: number) =>
+        fetchApi<any>(`/api/outreach/campaigns/${id}`, { method: 'DELETE' }),
+    },
     sendTiming: (industry?: string) =>
       fetchApi<any>(industry ? `/api/outreach/send-timing?industry=${encodeURIComponent(industry)}` : '/api/outreach/send-timing'),
   },
+  attachments: {
+    list: () => fetchApi<any[]>('/api/attachments'),
+    upload: (file: File, displayName?: string) => {
+      const form = new FormData();
+      form.append('file', file);
+      if (displayName) form.append('display_name', displayName);
+      return fetch(`${API_BASE}/api/attachments`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: form,
+      }).then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      }) as Promise<{ id: number; filename: string; display_name?: string; file_size: number }>;
+    },
+    delete: (id: number) =>
+      fetchApi<any>(`/api/attachments/${id}`, { method: 'DELETE' }),
+    downloadUrl: (id: number) => `${API_BASE}/api/attachments/${id}/download`,
+  },
   settings: {
     get: () => fetchApi<any>('/api/settings'),
-    update: (data: { signature?: string }) =>
+    update: (data: { signature?: string; signature_image_url?: string; attachments_enabled?: boolean }) =>
       fetchApi<any>('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
     customFormats: {
       list: () => fetchApi<any[]>('/api/settings/custom-formats'),

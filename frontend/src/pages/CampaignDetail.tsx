@@ -77,15 +77,32 @@ export default function CampaignDetail() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => navigate('/campaigns')}
+            className="text-slate-500 hover:text-deep-navy"
+          >
+            ← Back
+          </button>
+          <h1 className="text-2xl font-bold text-deep-navy">{campaign.name}</h1>
+          <span className="px-2 py-1 rounded text-sm bg-slate-100 text-slate-600">{campaign.status}</span>
+        </div>
         <button
-          onClick={() => navigate('/campaigns')}
-          className="text-slate-500 hover:text-deep-navy"
+          onClick={async () => {
+            if (!confirm(`Delete campaign "${campaign.name}"? This cannot be undone.`)) return;
+            try {
+              await api.campaigns.delete(campaign.id);
+              navigate('/campaigns');
+            } catch (e: any) {
+              alert(e?.message || 'Failed to delete campaign');
+            }
+          }}
+          className="px-4 py-2 rounded-lg text-sm border border-red-200 text-red-600 hover:bg-red-50"
+          title="Delete campaign"
         >
-          ← Back
+          Delete campaign
         </button>
-        <h1 className="text-2xl font-bold text-deep-navy">{campaign.name}</h1>
-        <span className="px-2 py-1 rounded text-sm bg-slate-100 text-slate-600">{campaign.status}</span>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white border border-pale-sky rounded-xl p-6 shadow-sm">

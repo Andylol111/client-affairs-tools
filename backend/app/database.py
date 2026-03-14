@@ -289,6 +289,129 @@ async def init_db():
             except Exception:
                 pass
 
+        # Outreach campaigns (community = institution priorities, individual = per-user)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS outreach_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'individual',
+                owner_id INTEGER REFERENCES users(id),
+                description TEXT,
+                priority INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS outreach_campaign_contacts (
+                campaign_id INTEGER NOT NULL REFERENCES outreach_campaigns(id),
+                contact_id INTEGER NOT NULL REFERENCES contacts(id),
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (campaign_id, contact_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_outreach_campaigns_owner ON outreach_campaigns(owner_id);
+            CREATE INDEX IF NOT EXISTS idx_outreach_campaign_contacts_campaign ON outreach_campaign_contacts(campaign_id);
+        """)
+        await db.commit()
+
+        # User profiles (projects, experience, role, handles)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id),
+                projects TEXT,
+                experience TEXT,
+                role_title TEXT,
+                linkedin_url TEXT,
+                slack_handle TEXT,
+                other_handles TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.commit()
+
+        # Projects (semester + client, e.g. Spring 2026 - Project Lego)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                semester TEXT,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS user_project_assignments (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                project_id INTEGER NOT NULL REFERENCES projects(id),
+                role_in_project TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, project_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_project_assignments_user ON user_project_assignments(user_id);
+            CREATE INDEX IF NOT EXISTS idx_user_project_assignments_project ON user_project_assignments(project_id);
+        """)
+        await db.commit()
+
+        # Pending 2FA setup (secret stored here until verified; then moved to users.totp_secret)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS pending_2fa_setup (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id),
+                secret TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.commit()
+
+        # Slack OAuth tokens (per-user)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS user_slack_tokens (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id),
+                access_token TEXT NOT NULL,
+                team_id TEXT,
+                team_name TEXT,
+                user_slack_id TEXT,
+                scope TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.commit()
+
+        # Email attachments library (intro PDFs, past workstreams, etc.)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS email_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                display_name TEXT,
+                storage_path TEXT NOT NULL UNIQUE,
+                file_size INTEGER,
+                mime_type TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.commit()
+
+        # Usage/telemetry events for Operations Intelligence (private, internal only)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS usage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                event_type TEXT NOT NULL,
+                resource_type TEXT,
+                details_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_events_user ON usage_events(user_id);
+            CREATE INDEX IF NOT EXISTS idx_usage_events_type ON usage_events(event_type);
+            CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at);
+
+            CREATE TABLE IF NOT EXISTS yucg_resources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                content_type TEXT,
+                content_text TEXT,
+                file_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.commit()
+
         # First user becomes admin if no admins exist
         try:
             cursor = await db.execute("SELECT COUNT(*) as n FROM users WHERE role = 'admin'")

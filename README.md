@@ -67,7 +67,18 @@ JWT_SECRET=your-secret-at-least-32-characters-long
 
 # Optional: LinkedIn scraping via Apify
 APIFY_API_TOKEN=your-apify-token
+
+# Optional: Slack integration (Community sidebar)
+SLACK_CLIENT_ID=your-slack-client-id
+SLACK_CLIENT_SECRET=your-slack-client-secret
+BACKEND_URL=http://localhost:8000
 ```
+
+**Slack OAuth setup (optional):**
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+2. Under OAuth & Permissions, add Redirect URL: `http://localhost:8000/api/auth/slack/callback` (use `https://` and your domain in production)
+3. Add Bot Token Scopes: `users:read`, `users:read.email`, `team:read`
+4. Copy Client ID and Client Secret to `.env`
 
 **Google OAuth setup:**
 1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)

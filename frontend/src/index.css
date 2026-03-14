@@ -33,6 +33,57 @@
   --warning: #d97706;
 }
 
+/* Dark mode (YUCG palette adapted) */
+.dark {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-card: #1e293b;
+  --text-primary: #e2e8f0;
+  --text-muted: #94a3b8;
+  --accent: #5b7fa6;
+  --accent-hover: #8aaabf;
+  --border: #334155;
+}
+
+.dark body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #334155;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
+.dark .bg-white { background-color: var(--bg-card); }
+.dark .bg-slate-50 { background-color: #334155; }
+.dark .bg-pale-sky\/50 { background-color: rgba(91, 127, 166, 0.2); }
+.dark .bg-pale-sky\/20 { background-color: rgba(91, 127, 166, 0.15); }
+.dark .bg-pale-sky\/30 { background-color: rgba(91, 127, 166, 0.2); }
+.dark .text-slate-600,
+.dark .text-slate-700,
+.dark .text-slate-800 { color: #e2e8f0; }
+.dark .text-slate-500,
+.dark .text-slate-400 { color: #94a3b8; }
+.dark .border-pale-sky,
+.dark .border-slate-200,
+.dark .border-slate-300 { border-color: #475569; }
+.dark .text-deep-navy { color: #e2e8f0; }
+.dark nav.border-b { border-color: #334155; }
+.dark .bg-\[#1a2f5a\] { background-color: #3d5c82; }
+.dark .bg-\[#1e3a6e\] { background-color: #5b7fa6; }
+.dark .hover\:bg-slate-50:hover { background-color: #334155; }
+.dark .hover\:bg-pale-sky\/30:hover { background-color: rgba(91, 127, 166, 0.2); }
+.dark .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+.dark .bg-red-50 { background-color: rgba(185, 28, 28, 0.15); }
+.dark .bg-green-50 { background-color: rgba(5, 150, 105, 0.15); }
+.dark .bg-amber-50 { background-color: rgba(180, 83, 9, 0.15); }
+.dark .bg-slate-50 { background-color: #334155; }
+.dark code { background-color: #475569; color: #e2e8f0; }
+
 body {
   margin: 0;
   font-family: 'Lato', system-ui, sans-serif;
@@ -41,8 +92,39 @@ body {
   min-height: 100vh;
 }
 
+#root {
+  min-height: 100vh;
+}
+
 input, select, textarea {
   background-color: white;
+}
+
+/* Standardized button press animation site-wide */
+button:not([disabled]) {
+  transition: transform 0.1s ease, box-shadow 0.1s ease, opacity 0.15s ease;
+}
+button:not([disabled]):active {
+  transform: scale(0.98);
+}
+.btn-press {
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.btn-press:active {
+  transform: scale(0.98);
+}
+
+/* Pillbox toggle animation */
+@keyframes pillbox-pop {
+  0% { transform: scale(0.96); opacity: 0.9; }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.pillbox-pill {
+  transition: background-color 0.25s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+.pillbox-pill:active {
+  animation: pillbox-pop 0.35s ease-out;
 }
 
 @keyframes fadeIn {

@@ -10,6 +10,7 @@ from app.models import EmailGenerateRequest, EmailGenerateResponse, EmailGenerat
 from app.services.ollama_email_service import generate_email
 from app.services.gmail_api import send_via_gmail_api
 from app.services.settings_service import get_setting
+from app.services.usage_service import log_event
 
 router = APIRouter()
 
@@ -18,6 +19,7 @@ class TestSendRequest(BaseModel):
     to_email: str
     subject: str
     body: str
+    attachment_ids: Optional[list[int]] = None
 
 
 @router.post("/generate", response_model=EmailGenerateResponse)
@@ -55,6 +57,10 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
         )
         await db.commit()
 
+        await log_event(
+            user["id"], "email_generated", "email",
+            {"contact_id": req.contact_id, "tone": req.tone, "length": req.length, "angle": req.angle},
+        )
         return EmailGenerateResponse(
             subject=subject,
             body=body,
@@ -89,15 +95,20 @@ async def generate_email_template(req: EmailGenerateTemplateRequest):
 
 @router.post("/test-send")
 async def test_send_email(req: TestSendRequest, user: dict = Depends(get_current_user)):
-    """Send a test email to the logged-in user's inbox via Gmail API (OAuth). No Settings config needed."""
+    """Send a test email to the logged-in user's inbox via Gmail API (OAuth). Optional attachments from library."""
     try:
         signature = await get_setting("signature")
+        attachments_data = []
+        if req.attachment_ids:
+            from app.routers.attachments import get_attachment_data_for_send
+            attachments_data = await get_attachment_data_for_send(req.attachment_ids)
         await send_via_gmail_api(
             user_id=user["id"],
             to_email=req.to_email,
             subject=req.subject,
             body=req.body,
             signature=signature,
+            attachments=attachments_data if attachments_data else None,
         )
         return {"ok": True, "message": f"Test email sent to {req.to_email}"}
     except ValueError as e:

@@ -1,7 +1,53 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { api } from '../api';
 import { loadDrafts, saveDraft, deleteDraft, type EmailDraft } from '../lib/emailDrafts';
+
+function groupContactsByCompany(contacts: any[]): { company: string; contacts: any[] }[] {
+  const byCompany = new Map<string, any[]>();
+  for (const c of contacts) {
+    const key = (c.company || '').trim() || 'No company';
+    if (!byCompany.has(key)) byCompany.set(key, []);
+    byCompany.get(key)!.push(c);
+  }
+  return Array.from(byCompany.entries())
+    .map(([company, contacts]) => ({ company, contacts }))
+    .sort((a, b) => (a.company === 'No company' ? 1 : b.company === 'No company' ? -1 : a.company.localeCompare(b.company)));
+}
+
+function CompanyFolder({ company, contacts, selected, onSelect }: {
+  company: string; contacts: any[]; selected: any; onSelect: (c: any) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <div className="rounded-lg border border-pale-sky overflow-hidden">
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        className="w-full px-3 py-2 flex items-center justify-between bg-pale-sky/20 hover:bg-pale-sky/30 text-left text-sm font-medium text-deep-navy"
+      >
+        <span className="truncate">{company}</span>
+        <span className="text-slate-500 text-xs shrink-0 ml-2">({contacts.length})</span>
+        <span className="text-slate-500">{expanded ? '▼' : '▶'}</span>
+      </button>
+      {expanded && (
+        <div className="divide-y divide-slate-100">
+          {contacts.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => onSelect(c)}
+              className={`w-full text-left px-3 py-2 hover:bg-slate-50 transition-colors ${
+                selected?.id === c.id ? 'bg-pale-sky/50 border-l-4 border-l-deep-navy' : ''
+              }`}
+            >
+              <div className="font-medium text-slate-800 text-xs truncate">{c.name || c.email}</div>
+              <div className="text-xs text-slate-600 truncate">{c.title}{c.company ? ` • ${c.company}` : ''}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function EmailStudio() {
   const { user } = useOutletContext<{ user: { email: string; name?: string } }>();
@@ -9,6 +55,7 @@ export default function EmailStudio() {
   const [selected, setSelected] = useState<any>(null);
   const [email, setEmail] = useState<{ subject: string; body: string } | null>(null);
   const [signature, setSignature] = useState('');
+  const [signatureImageUrl, setSignatureImageUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [testSending, setTestSending] = useState(false);
   const [tone, setTone] = useState('professional');
@@ -30,16 +77,41 @@ export default function EmailStudio() {
   const [sentimentAnalysis, setSentimentAnalysis] = useState<any>(null);
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [sentimentIndustry, setSentimentIndustry] = useState('');
+  const [attachmentsEnabled, setAttachmentsEnabled] = useState(false);
+  const [attachmentLibrary, setAttachmentLibrary] = useState<any[]>([]);
+  const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<Set<number>>(new Set());
+  const [groupByCompany, setGroupByCompany] = useState(false);
+  const [contactsPanelExpanded, setContactsPanelExpanded] = useState(true);
 
   useEffect(() => {
     api.contacts.list().then(setContacts).catch(() => setContacts([]));
-    api.settings.get().then((s) => setSignature(s.signature || '')).catch(() => {});
+    api.settings.get().then((s: any) => {
+      setSignature(s.signature || '');
+      setSignatureImageUrl(s.signature_image_url || '');
+      setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
+    }).catch(() => {});
     setDrafts(loadDrafts());
   }, []);
 
   useEffect(() => {
+    if (attachmentsEnabled) {
+      api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
+    } else {
+      setAttachmentLibrary([]);
+      setSelectedAttachmentIds(new Set());
+    }
+  }, [attachmentsEnabled]);
+
+  useEffect(() => {
     api.emails.generated({ sort: sortBy }).then(setGeneratedEmails).catch(() => setGeneratedEmails([]));
   }, [sortBy, email]);
+
+  // Sync contentEditable body when email.body is set externally (e.g. Generate, Load Draft)
+  useEffect(() => {
+    if (bodyRef.current != null && email?.body !== undefined && bodyRef.current.innerHTML !== email.body) {
+      bodyRef.current.innerHTML = email.body;
+    }
+  }, [email?.body]);
 
   const refreshDrafts = () => setDrafts(loadDrafts());
 
@@ -156,6 +228,7 @@ export default function EmailStudio() {
         to_email: toEmail,
         subject: email.subject,
         body: email.body,
+        attachment_ids: selectedAttachmentIds.size > 0 ? Array.from(selectedAttachmentIds) : undefined,
       });
       alert(`Test email sent to ${toEmail}. Check your inbox to verify delivery.`);
     } catch (e: any) {
@@ -173,62 +246,120 @@ export default function EmailStudio() {
     setDraftTargetAudience('');
     setDraftCompany('');
     setSelectedDraftId(null);
+    setSelectedAttachmentIds(new Set());
     setActiveTab('editor');
     document.getElementById('email-generator-section')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const toggleAttachment = (id: number) => {
+    setSelectedAttachmentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   const previewBody = email
     ? (signature ? `${email.body.trim()}\n\n--\n\n${signature}` : email.body)
     : '';
+  const signatureHtmlPart = !signature
+    ? ''
+    : signature.includes('<') && signature.includes('>')
+      ? `<br><br>--<br><br>${signature}`
+      : `<br><br>--<br><br>${signature.replace(/\n/g, '<br>')}`;
+  const previewBodyHtml = email?.body
+    ? email.body + signatureHtmlPart + (signatureImageUrl ? `<br><img src="${signatureImageUrl}" alt="" style="max-width:200px;height:auto;" />` : '')
+    : '';
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="w-full max-w-[1920px] mx-auto">
       <h1 className="text-2xl font-bold text-deep-navy mb-6">Email Studio</h1>
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-1 bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200 flex gap-2 flex-wrap">
-            <button
-              onClick={() => setActiveTab('editor')}
-              className={`flex-1 min-w-0 py-1 rounded text-sm font-medium ${activeTab === 'editor' ? 'bg-pale-sky/50 text-deep-navy' : 'text-slate-600'}`}
-            >
-              Contacts
-            </button>
-            <button
-              onClick={() => setActiveTab('cache')}
-              className={`flex-1 min-w-0 py-1 rounded text-sm font-medium ${activeTab === 'cache' ? 'bg-pale-sky/50 text-deep-navy' : 'text-slate-600'}`}
-            >
-              Generated
-            </button>
-            <button
-              onClick={startNewEmail}
-              className="px-3 py-1 rounded text-sm font-medium bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white active:scale-[0.98] transition-all"
-            >
-              + New
-            </button>
-          </div>
-          <div className="max-h-[400px] overflow-y-auto">
+      <div className="flex flex-col xl:flex-row gap-4">
+        <div className={`bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden flex-shrink-0 transition-[width] duration-200 ${contactsPanelExpanded ? 'w-full xl:w-[260px]' : 'w-full xl:w-14'}`}>
+          {contactsPanelExpanded ? (
+            <>
+              <div className="px-4 py-3 border-b border-slate-200 flex gap-2 flex-wrap items-center">
+                <button
+                  onClick={() => setContactsPanelExpanded(false)}
+                  className="p-1.5 rounded text-slate-500 hover:bg-pale-sky/30 hover:text-deep-navy shrink-0"
+                  title="Collapse panel"
+                  aria-label="Collapse contacts panel"
+                >
+                  ◀
+                </button>
+                <button
+                  onClick={() => setActiveTab('editor')}
+                  className={`flex-1 min-w-0 py-2 rounded text-sm font-medium ${activeTab === 'editor' ? 'bg-pale-sky/50 text-deep-navy' : 'text-slate-600'}`}
+                >
+                  Contacts
+                </button>
+                <button
+                  onClick={() => setActiveTab('cache')}
+                  className={`flex-1 min-w-0 py-2 rounded text-sm font-medium ${activeTab === 'cache' ? 'bg-pale-sky/50 text-deep-navy' : 'text-slate-600'}`}
+                >
+                  Generated
+                </button>
+                <button
+                  onClick={startNewEmail}
+                  className="px-3 py-2 rounded text-sm font-medium bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white active:scale-[0.98] transition-all shrink-0"
+                >
+                  + New
+                </button>
+              </div>
+              <div className="max-h-[calc(100vh-14rem)] overflow-y-auto">
             {activeTab === 'editor' ? (
               contacts.length === 0 ? (
                 <div className="p-4">
                   <p className="text-slate-600 text-sm mb-3">No contacts yet. Use Quick Compose in the generator to create emails.</p>
                 </div>
               ) : (
-                contacts.map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => {
-                      setSelected(c);
-                      setEmail(null);
-                      setSelectedDraftId(null);
-                    }}
-                    className={`w-full text-left px-4 py-3 border-b border-slate-200/50 hover:bg-slate-50 transition-colors ${
-                      selected?.id === c.id ? 'bg-pale-sky/50 border-l-4 border-l-deep-navy' : ''
-                    }`}
-                  >
-                    <div className="font-medium text-slate-800">{c.name || c.email}</div>
-                    <div className="text-sm text-slate-600">{c.title} • {c.company}</div>
-                  </button>
-                ))
+                <>
+                  <div className="px-4 py-2 border-b border-slate-200 flex items-center gap-2">
+                    <label className="text-xs text-slate-600">Group by company</label>
+                    <input
+                      type="checkbox"
+                      checked={groupByCompany}
+                      onChange={(e) => setGroupByCompany(e.target.checked)}
+                      className="rounded"
+                    />
+                  </div>
+                  {groupByCompany ? (
+                    <div className="p-2 space-y-2">
+                      {groupContactsByCompany(contacts).map(({ company, contacts: companyContacts }) => (
+                        <CompanyFolder
+                          key={company}
+                          company={company}
+                          contacts={companyContacts}
+                          selected={selected}
+                          onSelect={(c) => {
+                            setSelected(c);
+                            setEmail(null);
+                            setSelectedDraftId(null);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    contacts.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          setSelected(c);
+                          setEmail(null);
+                          setSelectedDraftId(null);
+                        }}
+                        className={`w-full text-left px-3 py-2 border-b border-slate-200/50 hover:bg-slate-50 transition-colors ${
+                          selected?.id === c.id ? 'bg-pale-sky/50 border-l-4 border-l-deep-navy' : ''
+                        }`}
+                      >
+                        <div className="font-medium text-slate-800 text-xs truncate">{c.name || c.email}</div>
+                        <div className="text-xs text-slate-600 truncate">{c.title}{c.company ? ` • ${c.company}` : ''}</div>
+                      </button>
+                    ))
+                  )}
+                </>
               )
             ) : (
               <div className="p-4">
@@ -266,110 +397,126 @@ export default function EmailStudio() {
                 )}
               </div>
             )}
-          </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center py-4 xl:py-6 gap-2">
+              <button
+                onClick={() => setContactsPanelExpanded(true)}
+                className="p-2 rounded text-slate-500 hover:bg-pale-sky/30 hover:text-deep-navy"
+                title="Expand panel"
+                aria-label="Expand contacts panel"
+              >
+                ▶
+              </button>
+              <span className="text-xs text-slate-500 hidden xl:block" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+                Contacts
+              </span>
+            </div>
+          )}
         </div>
-        <div className="lg:col-span-2 space-y-4">
-          <div id="email-generator-section" className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-4 min-w-0">
+          <div id="email-generator-section" className="bg-white border border-pale-sky shadow-sm rounded-xl p-6 overflow-y-auto max-h-[calc(100vh-12rem)] min-w-0">
             <h2 className="font-semibold text-deep-navy mb-4">AI Email Generator</h2>
             <p className="text-sm text-slate-600 mb-4">
               Describe the email, set the audience, and assign a company. Then use Quick Compose or select a contact.
             </p>
             <div className="space-y-3 mb-4">
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">What does this email do?</label>
                 <input
                   type="text"
                   value={draftDescription}
                   onChange={(e) => setDraftDescription(e.target.value)}
                   placeholder="e.g. Cold outreach for consulting services"
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
                 />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Target audience</label>
                 <input
                   type="text"
                   value={draftTargetAudience}
                   onChange={(e) => setDraftTargetAudience(e.target.value)}
                   placeholder="e.g. CTOs at mid-size tech companies"
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
                 />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Assign company</label>
                 <input
                   type="text"
                   value={draftCompany}
                   onChange={(e) => setDraftCompany(e.target.value)}
                   placeholder="e.g. Acme Corp"
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
                 />
               </div>
             </div>
             <div className="border-t border-pale-sky pt-4 mb-4">
-              <h3 className="text-sm font-medium text-slate-blue mb-2">Quick Compose (recipient for AI)</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <h3 className="text-sm font-medium text-slate-700 mb-2">Quick Compose (recipient for AI)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input
                   type="text"
                   placeholder="Name"
                   value={quickCompose.name}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, name: e.target.value }))}
-                  className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
                 />
                 <input
                   type="email"
                   placeholder="Email (for test send)"
                   value={quickCompose.email}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, email: e.target.value }))}
-                  className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
                 />
                 <input
                   type="text"
                   placeholder="Company"
                   value={quickCompose.company}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, company: e.target.value }))}
-                  className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
                 />
                 <input
                   type="text"
                   placeholder="Title"
                   value={quickCompose.title}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, title: e.target.value }))}
-                  className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
                 />
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Tone</label>
                 <select
                   value={tone}
                   onChange={(e) => setTone(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
                 >
                   {['professional', 'conversational', 'bold', 'empathetic', 'authority'].map((t) => (
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Length</label>
                 <select
                   value={length}
                   onChange={(e) => setLength(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
                 >
                   {['ultra-short', 'short', 'standard'].map((l) => (
                     <option key={l} value={l}>{l}</option>
                   ))}
                 </select>
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Angle</label>
                 <select
                   value={angle}
                   onChange={(e) => setAngle(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
                 >
                   {['pain_point', 'social_proof', 'case_study', 'question_hook', 'compliment'].map((a) => (
                     <option key={a} value={a}>{a.replace('_', ' ')}</option>
@@ -378,24 +525,24 @@ export default function EmailStudio() {
               </div>
             </div>
             <div className="space-y-3 mb-4">
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Value Proposition</label>
                 <input
                   type="text"
                   value={valueProp}
                   onChange={(e) => setValueProp(e.target.value)}
                   placeholder="e.g. our solution that helps companies like yours..."
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
                 />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-sm text-slate-600 mb-1">Custom Instructions</label>
                 <input
                   type="text"
                   value={customInstructions}
                   onChange={(e) => setCustomInstructions(e.target.value)}
                   placeholder="e.g. mention our Series B"
-                  className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
                 />
               </div>
             </div>
@@ -407,60 +554,109 @@ export default function EmailStudio() {
               {loading ? 'Generating with Ollama...' : 'Generate Email'}
             </button>
           </div>
-          <div id="email-editor-section" className="bg-white border border-pale-sky shadow-sm rounded-xl overflow-hidden">
-            <h2 className="font-semibold text-deep-navy p-4 border-b border-pale-sky">
+          <div id="email-editor-section" className="bg-white border border-pale-sky shadow-sm rounded-xl overflow-hidden overflow-y-auto max-h-[calc(100vh-12rem)] min-w-0">
+            <h2 className="font-semibold text-deep-navy p-4 border-b border-pale-sky truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
               Email for {selected?.name || quickCompose.name || 'Recipient'} ({selected?.email || quickCompose.email || 'enter email for test send'})
             </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 divide-x divide-pale-sky">
-              <div className="p-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-x divide-pale-sky min-w-0">
+              <div className="p-4 min-w-0">
                 <h3 className="text-sm font-medium text-slate-600 mb-2">Live Editor</h3>
-                <div className="flex gap-4 mb-4 flex-wrap">
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Email font</label>
-                    <select
-                      value={emailFont}
-                      onChange={(e) => setEmailFont(e.target.value)}
-                      className="px-2 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
-                    >
-                      {['Lato', 'Open Sans', 'Roboto', 'Georgia', 'Times New Roman', 'Arial', 'Helvetica', 'Verdana', 'Courier New'].map((f) => (
-                        <option key={f} value={f}>{f}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Font size</label>
-                    <select
-                      value={emailFontSize}
-                      onChange={(e) => setEmailFontSize(Number(e.target.value))}
-                      className="px-2 py-1.5 rounded-lg bg-white border border-slate-300 text-sm"
-                    >
-                      {[12, 14, 16, 18, 20, 24].map((s) => (
-                        <option key={s} value={s}>{s}px</option>
-                      ))}
-                    </select>
-                  </div>
+                {/* Text formatting toolbar */}
+                <div className="flex flex-wrap items-center gap-1 mb-2 p-2 rounded-lg bg-slate-50 border border-slate-200">
+                  <button type="button" onClick={() => document.execCommand('bold')} className="px-2 py-1.5 rounded hover:bg-slate-200 font-bold text-sm" title="Bold">B</button>
+                  <button type="button" onClick={() => document.execCommand('italic')} className="px-2 py-1.5 rounded hover:bg-slate-200 italic text-sm" title="Italic">I</button>
+                  <button type="button" onClick={() => document.execCommand('underline')} className="px-2 py-1.5 rounded hover:bg-slate-200 underline text-sm" title="Underline">U</button>
+                  <button type="button" onClick={() => document.execCommand('insertUnorderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 text-sm" title="Bullet list">• List</button>
+                  <button type="button" onClick={() => document.execCommand('insertOrderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 text-sm" title="Numbered list">1. List</button>
+                  <span className="w-px h-5 bg-slate-300 mx-1" />
+                  <select
+                    value={emailFont}
+                    onChange={(e) => { setEmailFont(e.target.value); if (bodyRef.current) { bodyRef.current.style.fontFamily = e.target.value; } }}
+                    className="px-2 py-1 rounded border border-slate-300 text-sm bg-white"
+                  >
+                    {['Lato', 'Open Sans', 'Roboto', 'Georgia', 'Times New Roman', 'Arial', 'Helvetica', 'Verdana', 'Courier New'].map((f) => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={emailFontSize}
+                    onChange={(e) => { const s = Number(e.target.value); setEmailFontSize(s); if (bodyRef.current) bodyRef.current.style.fontSize = s + 'px'; }}
+                    className="px-2 py-1 rounded border border-slate-300 text-sm bg-white"
+                  >
+                    {[12, 14, 16, 18, 20, 24].map((s) => (
+                      <option key={s} value={s}>{s}px</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="space-y-4">
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-sm text-slate-600 mb-1">Subject</label>
                     <input
                       type="text"
                       value={email?.subject ?? ''}
                       onChange={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), subject: e.target.value }))}
                       placeholder="Enter subject line..."
-                      className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                      className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-sm text-slate-600 mb-1">Body</label>
-                    <textarea
-                      value={email?.body ?? ''}
-                      onChange={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: e.target.value }))}
-                      rows={10}
-                      placeholder="Type your email here or click Generate Email for AI assistance..."
-                      className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                    <div className="relative min-w-0">
+                    <div
+                      ref={bodyRef}
+                      contentEditable
+                      suppressContentEditableWarning
+                      onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: (e.target as HTMLDivElement).innerHTML }))}
+                      style={{ fontFamily: emailFont, fontSize: emailFontSize }}
+                      className="min-h-[280px] w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 resize-y overflow-auto"
                     />
+                    {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
+                      <span className="absolute left-3 top-2 text-slate-400 pointer-events-none text-sm">
+                        Type your email here or click Generate Email for AI assistance.
+                      </span>
+                    )}
                   </div>
+                  </div>
+                  {attachmentsEnabled && (
+                    <div className="w-full p-3 rounded-lg border border-pale-sky bg-pale-sky/10">
+                      <h4 className="text-sm font-medium text-deep-navy mb-2">Attachments</h4>
+                      <p className="text-xs text-slate-600 mb-2">Select files to include with this email (intro PDFs, past workstreams, etc.)</p>
+                      {attachmentLibrary.length === 0 ? (
+                        <p className="text-xs text-slate-500">No attachments in library. Admins can upload in Profile → Settings.</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {attachmentLibrary.map((a) => (
+                            <label
+                              key={a.id}
+                              className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm transition-colors ${
+                                selectedAttachmentIds.has(a.id)
+                                  ? 'border-deep-navy bg-pale-sky/50 text-deep-navy'
+                                  : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedAttachmentIds.has(a.id)}
+                                onChange={() => toggleAttachment(a.id)}
+                                className="rounded"
+                              />
+                              <span className="truncate max-w-[180px]" title={a.display_name || a.filename}>
+                                {a.display_name || a.filename}
+                              </span>
+                              {a.file_size && (
+                                <span className="text-xs text-slate-500">
+                                  ({(a.file_size / 1024).toFixed(1)} KB)
+                                </span>
+                              )}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      {selectedAttachmentIds.size > 0 && (
+                        <p className="text-xs text-slate-600 mt-2">{selectedAttachmentIds.size} file(s) will be attached</p>
+                      )}
+                    </div>
+                  )}
                   <div className="flex gap-2 flex-wrap items-center">
                     <button
                       onClick={saveCurrentAsDraft}
@@ -524,7 +720,7 @@ export default function EmailStudio() {
                   )}
                 </div>
               </div>
-              <div className="p-4 bg-pale-sky/30">
+              <div className="p-4 bg-pale-sky/30 min-w-0">
                 <h3 className="text-sm font-medium text-slate-600 mb-2 flex items-center gap-2">
                   <span className="inline-block w-2 h-2 rounded-full bg-steel-blue animate-pulse" />
                   Live Gmail Preview
@@ -557,34 +753,43 @@ export default function EmailStudio() {
                       {email?.subject || 'No subject'}
                     </div>
                     <div
-                      className="text-slate-700 whitespace-pre-wrap leading-relaxed"
+                      className="text-slate-700 leading-relaxed prose prose-sm max-w-none"
                       style={{
                         fontFamily: emailFont,
                         fontSize: `${emailFontSize}px`,
                       }}
                     >
-                      {previewBody || 'Start typing above or generate with AI to see a live preview.'}
+                      {email?.body && /<[a-z][\s\S]*>/i.test(email.body) ? (
+                        <div dangerouslySetInnerHTML={{ __html: previewBodyHtml || '' }} />
+                      ) : (
+                        <span className="whitespace-pre-wrap">{previewBody || 'Start typing above or generate with AI to see a live preview.'}</span>
+                      )}
                     </div>
+                    {signatureImageUrl && (
+                      <img src={signatureImageUrl} alt="" className="mt-2 max-h-16 object-contain" />
+                    )}
                   </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
-        <div className="lg:col-span-1 bg-white border border-pale-sky shadow-sm rounded-xl overflow-hidden">
+      </div>
+      <div className="mt-4 w-full">
+        <div className="bg-white border border-pale-sky shadow-sm rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-pale-sky">
             <h2 className="font-semibold text-deep-navy">Saved Drafts</h2>
             <p className="text-xs text-slate-500 mt-0.5">Stored locally in your browser</p>
           </div>
-          <div className="max-h-[600px] overflow-y-auto p-4">
+          <div className="max-h-[320px] overflow-y-auto p-4">
             {drafts.length === 0 ? (
               <p className="text-slate-500 text-sm">No drafts yet. Generate an email and click Save Draft.</p>
             ) : (
-              <ul className="space-y-2">
+              <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                 {drafts.map((d) => (
                   <li
                     key={d.id}
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                    className={`p-4 rounded-lg border cursor-pointer transition-colors min-w-0 ${
                       selectedDraftId === d.id
                         ? 'border-deep-navy bg-pale-sky/50'
                         : 'border-pale-sky hover:bg-pale-sky/30'
@@ -592,12 +797,12 @@ export default function EmailStudio() {
                   >
                     <button
                       onClick={() => loadDraftIntoEditor(d)}
-                      className="w-full text-left"
+                      className="w-full text-left min-w-0"
                     >
-                      <div className="font-medium text-sm text-slate-800 truncate">{d.description || 'Untitled'}</div>
-                      <div className="text-xs text-slate-500 mt-0.5">{d.targetAudience || '—'}</div>
+                      <div className="font-medium text-sm text-slate-800 break-words">{d.description || 'Untitled'}</div>
+                      <div className="text-xs text-slate-500 mt-1">{d.targetAudience || '—'}</div>
                       <div className="text-xs text-slate-500 mt-0.5">Company: {d.company || '—'}</div>
-                      <div className="text-xs text-slate-400 mt-1 truncate">{d.subject}</div>
+                      <div className="text-xs text-slate-400 mt-1 break-words">{d.subject}</div>
                     </button>
                     <button
                       onClick={(e) => {

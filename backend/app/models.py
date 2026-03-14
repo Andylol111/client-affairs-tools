@@ -32,6 +32,12 @@ class ScrapeRequest(BaseModel):
     linkedin_max_employees: Optional[int] = 50  # max employees when using Apify
 
 
+class SearchPersonRequest(BaseModel):
+    """Search the web for information about a contact (name, optional company)."""
+    name: str
+    company: Optional[str] = None
+
+
 class EmailGenerateRequest(BaseModel):
     contact_id: int
     tone: str = "professional"  # professional, conversational, bold, empathetic, authority

@@ -8,10 +8,12 @@ import CampaignDetail from './pages/CampaignDetail';
 import Analytics from './pages/Analytics';
 import Outreach from './pages/Outreach';
 import Admin from './pages/Admin';
-import Settings from './pages/Settings';
+import Profile from './pages/Profile';
 import LoginPage from './pages/LoginPage';
 import MainApp from './pages/MainApp';
 import ErrorBoundary from './components/ErrorBoundary';
+import { ToastProvider } from './contexts/ToastContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 // In dev, use same-origin so Vite proxy forwards /api to backend
 const API_BASE = import.meta.env.DEV
@@ -19,7 +21,7 @@ const API_BASE = import.meta.env.DEV
   : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
 
 function AppContent() {
-  const [user, setUser] = useState<{ email: string; name?: string; picture?: string } | null>(null);
+  const [user, setUser] = useState<{ id?: number; email: string; name?: string; picture?: string; role?: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   // Process OAuth callback immediately - token in URL means we just came back from Google
@@ -171,7 +173,8 @@ function AppContent() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="outreach" element={<Outreach />} />
         <Route path="admin" element={<Admin />} />
-        <Route path="settings" element={<Settings />} />
+        <Route path="profile" element={<Profile />} />
+        <Route path="settings" element={<Navigate to="/profile?tab=settings" replace />} />
       </Route>
     </Routes>
   );
@@ -180,9 +183,13 @@ function AppContent() {
 function App() {
   return (
     <ErrorBoundary>
-      <BrowserRouter>
-        <AppContent />
-      </BrowserRouter>
+      <ThemeProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <AppContent />
+          </BrowserRouter>
+        </ToastProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

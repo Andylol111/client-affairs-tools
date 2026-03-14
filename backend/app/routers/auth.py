@@ -217,8 +217,9 @@ async def update_my_notification_prefs(
             (user["id"],),
         )
         row = await cursor.fetchone()
-        ad = payload.admin_digest if payload.admin_digest is not None else (bool(row["admin_digest"]) if row else True)
-        cs = payload.campaign_summary if payload.campaign_summary is not None else (bool(row["campaign_summary"]) if row else False)
+        row = row_to_dict(row) if row else None
+        ad = payload.admin_digest if payload.admin_digest is not None else (bool(row.get("admin_digest")) if row else True)
+        cs = payload.campaign_summary if payload.campaign_summary is not None else (bool(row.get("campaign_summary")) if row else False)
         await db.execute(
             "INSERT OR REPLACE INTO notification_preferences (user_id, admin_digest, campaign_summary) VALUES (?, ?, ?)",
             (user["id"], 1 if ad else 0, 1 if cs else 0),
@@ -227,3 +228,219 @@ async def update_my_notification_prefs(
         return {"ok": True}
     finally:
         await db.close()
+
+
+# --- User profile ---
+class ProfileUpdate(BaseModel):
+    projects: str | None = None
+    experience: str | None = None
+    role_title: str | None = None
+    linkedin_url: str | None = None
+    slack_handle: str | None = None
+    other_handles: str | None = None
+
+
+@router.get("/profile")
+async def get_my_profile(user: dict = Depends(get_current_user)):
+    """Get current user's profile (projects, experience, role, handles)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM user_profiles WHERE user_id = ?",
+            (user["id"],),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return row_to_dict(row)
+        return {"user_id": user["id"], "projects": None, "experience": None, "role_title": None, "linkedin_url": None, "slack_handle": None, "other_handles": None}
+    finally:
+        await db.close()
+
+
+@router.put("/profile")
+async def update_my_profile(payload: ProfileUpdate, user: dict = Depends(get_current_user)):
+    """Update current user's profile."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM user_profiles WHERE user_id = ?", (user["id"],))
+        existing = await cursor.fetchone()
+        existing = row_to_dict(existing) if existing else {}
+        proj = payload.projects if payload.projects is not None else (existing.get("projects") or "")
+        exp = payload.experience if payload.experience is not None else (existing.get("experience") or "")
+        role = payload.role_title if payload.role_title is not None else (existing.get("role_title") or "")
+        li = payload.linkedin_url if payload.linkedin_url is not None else (existing.get("linkedin_url") or "")
+        slack = payload.slack_handle if payload.slack_handle is not None else (existing.get("slack_handle") or "")
+        other = payload.other_handles if payload.other_handles is not None else (existing.get("other_handles") or "")
+        await db.execute(
+            """INSERT OR REPLACE INTO user_profiles (user_id, projects, experience, role_title, linkedin_url, slack_handle, other_handles, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (user["id"], proj, exp, role, li, slack, other),
+        )
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+# --- Slack OAuth ---
+SLACK_CLIENT_ID = (os.getenv("SLACK_CLIENT_ID") or "").strip()
+SLACK_CLIENT_SECRET = (os.getenv("SLACK_CLIENT_SECRET") or "").strip()
+SLACK_SCOPES = "users:read,users:read.email,team:read"
+_slack_oauth_states: dict[str, int] = {}  # state -> user_id
+
+
+@router.get("/slack/connect")
+async def slack_connect(user: dict = Depends(get_current_user)):
+    """Return Slack OAuth URL for the frontend to redirect to. Requires auth."""
+    if not SLACK_CLIENT_ID or not SLACK_CLIENT_SECRET:
+        raise HTTPException(400, "Slack integration not configured. Add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to .env")
+    state = secrets.token_urlsafe(32)
+    _slack_oauth_states[state] = user["id"]
+    redirect_uri = f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/auth/slack/callback"
+    params = {
+        "client_id": SLACK_CLIENT_ID,
+        "scope": SLACK_SCOPES,
+        "redirect_uri": redirect_uri,
+        "state": state,
+    }
+    url = "https://slack.com/oauth/v2/authorize?" + urlencode(params)
+    return {"redirect_url": url}
+
+
+@router.get("/slack/callback")
+async def slack_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+    """Exchange Slack OAuth code for token, store, redirect to frontend."""
+    if error:
+        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=denied")
+    if not code or not state or state not in _slack_oauth_states:
+        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+    user_id = _slack_oauth_states.pop(state, None)
+    if not user_id:
+        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+
+    redirect_uri = f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/auth/slack/callback"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        res = await client.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "client_id": SLACK_CLIENT_ID,
+                "client_secret": SLACK_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    if res.status_code != 200:
+        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+    data = res.json()
+    if not data.get("ok"):
+        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+    access_token = data.get("access_token")
+    team = data.get("team") or {}
+    team_id = team.get("id")
+    team_name = team.get("name")
+    authed_user = data.get("authed_user") or {}
+    user_slack_id = authed_user.get("id")
+    scope = data.get("scope")
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT OR REPLACE INTO user_slack_tokens (user_id, access_token, team_id, team_name, user_slack_id, scope, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (user_id, access_token, team_id, team_name, user_slack_id, scope),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=connected")
+
+
+@router.get("/slack/status")
+async def slack_status(user: dict = Depends(get_current_user)):
+    """Check if current user has Slack connected."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT team_name FROM user_slack_tokens WHERE user_id = ?",
+            (user["id"],),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return {"connected": True, "team_name": row_to_dict(row).get("team_name")}
+        return {"connected": False}
+    finally:
+        await db.close()
+
+
+@router.delete("/slack/disconnect")
+async def slack_disconnect(user: dict = Depends(get_current_user)):
+    """Disconnect Slack for current user."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM user_slack_tokens WHERE user_id = ?", (user["id"],))
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+# --- My project assignments (for profile) ---
+@router.get("/my-projects")
+async def get_my_projects(user: dict = Depends(get_current_user)):
+    """List current user's project assignments (e.g. Spring 2026 - Project Lego)."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT p.id, p.name, p.semester, upa.role_in_project
+               FROM user_project_assignments upa
+               JOIN projects p ON p.id = upa.project_id
+               WHERE upa.user_id = ?
+               ORDER BY p.semester DESC, p.name""",
+            (user["id"],),
+        )
+        rows = await cursor.fetchall()
+        return [row_to_dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+# --- Team / community (who's online, roles) ---
+@router.get("/team")
+async def get_team(user: dict = Depends(get_current_user)):
+    """List team members with roles, last seen, and project assignments. For community sidebar."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """SELECT u.id, u.email, u.name, u.picture, u.role,
+               (SELECT ll.created_at FROM login_log ll WHERE ll.user_id = u.id ORDER BY ll.created_at DESC LIMIT 1) as last_seen
+               FROM users u WHERE COALESCE(u.is_active, 1) = 1 ORDER BY u.name, u.email"""
+        )
+        rows = await cursor.fetchall()
+        users = [row_to_dict(r) for r in rows]
+    except Exception:
+        cursor = await db.execute(
+            "SELECT id, email, name, picture, role FROM users ORDER BY name, email"
+        )
+        rows = await cursor.fetchall()
+        users = [row_to_dict(r) for r in rows]
+
+    # Add project assignments for each user
+    try:
+        for u in users:
+            cursor = await db.execute(
+                """SELECT p.name, p.semester, upa.role_in_project
+                   FROM user_project_assignments upa
+                   JOIN projects p ON p.id = upa.project_id
+                   WHERE upa.user_id = ?
+                   ORDER BY p.semester DESC, p.name""",
+                (u["id"],),
+            )
+            proj_rows = await cursor.fetchall()
+            u["project_assignments"] = [row_to_dict(r) for r in proj_rows]
+    except Exception:
+        for u in users:
+            u["project_assignments"] = []
+    finally:
+        await db.close()
+    return users

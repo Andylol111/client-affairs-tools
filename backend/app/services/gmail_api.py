@@ -6,6 +6,7 @@ import os
 import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
 from typing import Optional
 import httpx
 
@@ -79,13 +80,32 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
 
 
 def append_signature(body: str, signature: Optional[str]) -> str:
-    """Append signature to email body if present."""
+    """Append signature to email body (plain text part). If signature is HTML, strip tags for plain."""
     if not signature or not signature.strip():
         return body
     sig = signature.strip()
+    # For plain-text part, use plain version of signature (strip HTML if present)
+    if "<" in sig and ">" in sig:
+        sig_plain = _strip_html_to_plain(sig)
+    else:
+        sig_plain = sig.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    if not sig_plain:
+        return body.rstrip()
     if body.rstrip().endswith("--") or body.rstrip().endswith("---"):
-        return body.rstrip() + "\n\n" + sig
-    return body.rstrip() + "\n\n--\n\n" + sig
+        return body.rstrip() + "\n\n" + sig_plain
+    return body.rstrip() + "\n\n--\n\n" + sig_plain
+
+
+def _attach_files(msg: MIMEMultipart, attachments: list[tuple[bytes, str, str]]) -> None:
+    """Attach files to MIME message. Each tuple is (content, filename, mime_type)."""
+    import email.encoders
+    for content, filename, mime_type in attachments:
+        main_type, sub_type = (mime_type.split("/") + ["octet-stream", "stream"])[:2]
+        part = MIMEBase(main_type, sub_type)
+        part.set_payload(content)
+        email.encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(part)
 
 
 async def send_via_gmail_api(
@@ -95,6 +115,7 @@ async def send_via_gmail_api(
     body: str,
     from_name: Optional[str] = None,
     signature: Optional[str] = None,
+    attachments: Optional[list[tuple[bytes, str, str]]] = None,
 ) -> bool:
     """
     Send email via Gmail API using the user's OAuth tokens.
@@ -114,6 +135,8 @@ async def send_via_gmail_api(
     msg["From"] = f"{from_name or 'YUCG Outreach'} <{from_email}>"
     msg["To"] = to_email
     msg.attach(MIMEText(full_body, "plain", "utf-8"))
+    if attachments:
+        _attach_files(msg, attachments)
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii").rstrip("=")
 
@@ -137,6 +160,38 @@ async def send_via_gmail_api(
     return True
 
 
+def _strip_html_to_plain(html_fragment: str) -> str:
+    """Convert HTML to plain text for the plain-part of the email."""
+    import re
+    text = re.sub(r"<br\s*/?>", "\n", html_fragment, flags=re.I)
+    text = re.sub(r"</p>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return (text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').strip())
+
+
+def _signature_html(signature: Optional[str], image_url: Optional[str]) -> str:
+    """Build HTML fragment for signature. Signature may be plain text or HTML (e.g. with embedded images)."""
+    import html
+    import re
+    parts = []
+    if signature and signature.strip():
+        sig = signature.strip()
+        # If it looks like HTML (e.g. contains tags or data URLs), use as-is but sanitize (remove script/style)
+        if "<" in sig and ">" in sig:
+            sanitized = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", sig, flags=re.I)
+            sanitized = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", sanitized, flags=re.I)
+            sanitized = re.sub(r"on\w+\s*=", "", sanitized, flags=re.I)  # strip event handlers
+            parts.append(sanitized)
+        else:
+            parts.append(html.escape(sig).replace(chr(10), "<br>"))
+    if image_url and image_url.strip():
+        url = image_url.strip()
+        parts.append(f'<img src="{html.escape(url)}" alt="" style="max-width:200px;height:auto;" />')
+    if not parts:
+        return ""
+    return "<br><br>--<br><br>" + "".join(parts)
+
+
 async def send_via_gmail_api_with_tracking(
     user_id: int,
     to_email: str,
@@ -145,6 +200,7 @@ async def send_via_gmail_api_with_tracking(
     campaign_contact_id: int,
     from_name: Optional[str] = None,
     signature: Optional[str] = None,
+    signature_image_url: Optional[str] = None,
 ) -> bool:
     """Send HTML email with open-tracking pixel for campaigns."""
     from app.routers.track import get_tracking_pixel_url
@@ -157,8 +213,10 @@ async def send_via_gmail_api_with_tracking(
     access_token, from_email = result
 
     full_body = append_signature(body, signature)
+    sig_html = _signature_html(signature, signature_image_url)
     tracking_url = get_tracking_pixel_url(campaign_contact_id)
-    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{full_body.replace(chr(10), '<br>')}
+    # HTML: body only (no duplicate signature) + signature HTML + tracking pixel
+    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{body.replace(chr(10), '<br>')}{sig_html}
 <img src="{tracking_url}" width="1" height="1" alt="" style="display:none" /></body></html>"""
 
     msg = MIMEMultipart("alternative")
