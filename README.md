@@ -1,6 +1,6 @@
 # YUCG Outreach
 
-**Intelligent Client Outreach Platform** — AI-powered email generation, contact scraping, and campaign management for the Yale Undergraduate Consulting Group.
+**Intelligent Client Outreach Platform** : email generation, contact scraping, and campaign management
 
 ---
 
