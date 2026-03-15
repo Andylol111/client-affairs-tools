@@ -283,17 +283,27 @@ async def update_my_profile(payload: ProfileUpdate, user: dict = Depends(get_cur
 
 
 # --- Slack OAuth ---
-SLACK_CLIENT_ID = (os.getenv("SLACK_CLIENT_ID") or "").strip()
-SLACK_CLIENT_SECRET = (os.getenv("SLACK_CLIENT_SECRET") or "").strip()
 SLACK_SCOPES = "users:read,users:read.email,team:read"
 _slack_oauth_states: dict[str, int] = {}  # state -> user_id
+
+
+def _get_slack_credentials() -> tuple[str, str]:
+    """Read Slack credentials at request time so they always reflect loaded .env."""
+    cid = (os.getenv("SLACK_CLIENT_ID") or "").strip()
+    secret = (os.getenv("SLACK_CLIENT_SECRET") or "").strip()
+    return cid, secret
 
 
 @router.get("/slack/connect")
 async def slack_connect(user: dict = Depends(get_current_user)):
     """Return Slack OAuth URL for the frontend to redirect to. Requires auth."""
+    SLACK_CLIENT_ID, SLACK_CLIENT_SECRET = _get_slack_credentials()
     if not SLACK_CLIENT_ID or not SLACK_CLIENT_SECRET:
-        raise HTTPException(400, "Slack integration not configured. Add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to .env")
+        raise HTTPException(
+            400,
+            "Slack integration not configured. Add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to backend/.env. "
+            f"(Debug: client_id present={bool(SLACK_CLIENT_ID)}, client_secret present={bool(SLACK_CLIENT_SECRET)})"
+        )
     state = secrets.token_urlsafe(32)
     _slack_oauth_states[state] = user["id"]
     redirect_uri = f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/auth/slack/callback"
@@ -319,12 +329,13 @@ async def slack_callback(code: str | None = None, state: str | None = None, erro
         return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
 
     redirect_uri = f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/auth/slack/callback"
+    slack_client_id, slack_client_secret = _get_slack_credentials()
     async with httpx.AsyncClient(timeout=15.0) as client:
         res = await client.post(
             "https://slack.com/api/oauth.v2.access",
             data={
-                "client_id": SLACK_CLIENT_ID,
-                "client_secret": SLACK_CLIENT_SECRET,
+                "client_id": slack_client_id,
+                "client_secret": slack_client_secret,
                 "code": code,
                 "redirect_uri": redirect_uri,
             },

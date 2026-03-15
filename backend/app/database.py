@@ -242,6 +242,19 @@ async def init_db():
             except Exception:
                 pass
 
+        # Migration: follow-up sequences on campaigns
+        try:
+            await db.execute("ALTER TABLE campaigns ADD COLUMN sequence_id INTEGER REFERENCES follow_up_sequences(id)")
+            await db.commit()
+        except Exception:
+            pass
+        for col, col_type in [("sequence_step_sent", "INTEGER DEFAULT 0"), ("last_sequence_sent_at", "TIMESTAMP")]:
+            try:
+                await db.execute(f"ALTER TABLE campaign_contacts ADD COLUMN {col} {col_type}")
+                await db.commit()
+            except Exception:
+                pass
+
         # Roles, audit, API keys, notifications, 2FA
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS audit_log (

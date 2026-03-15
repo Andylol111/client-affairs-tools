@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import { api } from '../api';
 import type { CursorHeatmapResponse } from '../api';
 import { useToast } from '../contexts/ToastContext';
+import { AnimatedEventTypeChart, AnimatedResourceChart } from '../components/AnimatedOperationsCharts';
 
 export default function Admin() {
   const { user } = useOutletContext<{ user: { id?: number; email: string; role?: string } }>();
@@ -761,20 +762,24 @@ export default function Admin() {
               <p className="text-sm text-slate-500">No cursor data yet. Cursor position is recorded while you use the app (throttled); data appears after some activity.</p>
             )}
 
-            <h3 className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] mt-6 mb-2">Event counts by type</h3>
+            <h3 className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] mt-6 mb-2">Event counts by type (animated)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+              <AnimatedEventTypeChart aggregates={opsAggregates} />
+              <AnimatedResourceChart aggregates={opsAggregates} />
+            </div>
             {opsAggregates && (opsAggregates.by_event_type?.length > 0 || opsAggregates.by_resource_type?.length > 0) ? (
-              <div className="flex flex-wrap gap-6">
+              <div className="flex flex-wrap gap-6 text-sm">
                 <div>
-                  <p className="text-xs text-slate-500 mb-1">By event type</p>
-                  <ul className="text-sm space-y-1">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">By event type (list)</p>
+                  <ul className="space-y-1">
                     {(opsAggregates.by_event_type || []).slice(0, 12).map((r) => (
                       <li key={r.event_type} className="flex justify-between gap-4"><span>{r.event_type}</span><span className="font-medium">{r.count}</span></li>
                     ))}
                   </ul>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-500 mb-1">By resource</p>
-                  <ul className="text-sm space-y-1">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">By resource (list)</p>
+                  <ul className="space-y-1">
                     {(opsAggregates.by_resource_type || []).filter((r) => r.resource_type).slice(0, 12).map((r) => (
                       <li key={r.resource_type} className="flex justify-between gap-4"><span>{r.resource_type}</span><span className="font-medium">{r.count}</span></li>
                     ))}
@@ -782,7 +787,7 @@ export default function Admin() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-slate-500">No aggregates yet.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">No aggregates yet.</p>
             )}
 
             <h3 className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] mt-6 mb-2">Recent events (raw data)</h3>

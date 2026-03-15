@@ -9,14 +9,17 @@ export default function CampaignDetail() {
   const [contacts, setContacts] = useState<any[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [addContactSearch, setAddContactSearch] = useState('');
+  const [sequences, setSequences] = useState<any[]>([]);
 
   useEffect(() => {
     if (!id) return;
     const cid = parseInt(id, 10);
-    Promise.all([api.campaigns.get(cid), api.contacts.list()])
-      .then(([c, contacts]) => {
+    Promise.all([api.campaigns.get(cid), api.contacts.list({}), api.outreach.sequences.list()])
+      .then(([c, contacts, seqs]) => {
         setCampaign(c);
         setContacts(contacts);
+        setSequences(seqs || []);
       })
       .catch(() => navigate('/campaigns'))
       .finally(() => setLoading(false));
@@ -74,6 +77,10 @@ export default function CampaignDetail() {
   }
 
   const existingIds = new Set((campaign.contacts || []).map((c: any) => c.contact_id));
+  const addContactSearchLower = addContactSearch.trim().toLowerCase();
+  const contactsToAdd = contacts
+    .filter((c) => !existingIds.has(c.id))
+    .filter((c) => !addContactSearchLower || [c.name, c.email, c.company, c.title].some((v) => (v || '').toLowerCase().includes(addContactSearchLower)));
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -87,6 +94,28 @@ export default function CampaignDetail() {
           </button>
           <h1 className="text-2xl font-bold text-deep-navy">{campaign.name}</h1>
           <span className="px-2 py-1 rounded text-sm bg-slate-100 text-slate-600">{campaign.status}</span>
+          {campaign.status === 'draft' && sequences.length > 0 && (
+            <select
+              value={campaign.sequence_id ?? ''}
+              onChange={async (e) => {
+                const val = e.target.value;
+                const seqId = val ? parseInt(val, 10) : null;
+                try {
+                  await api.campaigns.update(campaign.id, { sequence_id: seqId ?? undefined });
+                  setCampaign((p: any) => ({ ...p, sequence_id: seqId }));
+                } catch (err) {
+                  alert((err as Error)?.message);
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg border border-pale-sky text-sm"
+              title="Follow-up sequence"
+            >
+              <option value="">No follow-up sequence</option>
+              {sequences.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
         </div>
         <button
           onClick={async () => {
@@ -108,8 +137,17 @@ export default function CampaignDetail() {
         <div className="bg-white border border-pale-sky rounded-xl p-6 shadow-sm">
           <h2 className="font-semibold text-deep-navy mb-4">Add Contacts</h2>
           <p className="text-slate-500 text-sm mb-4">Select contacts to add. Generate emails in Email Studio first, then add them here.</p>
+          <input
+            type="search"
+            placeholder="Search name, email, company... (press /)"
+            value={addContactSearch}
+            onChange={(e) => setAddContactSearch(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-pale-sky text-sm mb-3"
+            aria-label="Search contacts to add"
+            data-search-input
+          />
           <div className="max-h-[300px] overflow-y-auto space-y-2 mb-4">
-            {contacts.filter((c) => !existingIds.has(c.id)).map((c) => (
+            {contactsToAdd.map((c) => (
               <label key={c.id} className="flex items-center gap-2 p-2 rounded bg-white hover:bg-slate-50 cursor-pointer">
                 <input
                   type="checkbox"
@@ -120,8 +158,10 @@ export default function CampaignDetail() {
                 <span className="text-slate-500 text-sm">{c.company}</span>
               </label>
             ))}
-            {contacts.filter((c) => !existingIds.has(c.id)).length === 0 && (
-              <p className="text-slate-500 text-sm">All contacts already in campaign.</p>
+            {contactsToAdd.length === 0 && (
+              <p className="text-slate-500 text-sm">
+                {addContactSearch.trim() ? 'No contacts match your search.' : 'All contacts already in campaign.'}
+              </p>
             )}
           </div>
           <div className="flex gap-2">

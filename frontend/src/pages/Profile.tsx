@@ -6,6 +6,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { SignatureEditor } from '../components/SignatureEditor';
+import { getStoredPreferences, savePreferences, applyUserPreferences, resetPreferencesToDefault, type UserPreferences } from '../lib/userPreferences';
 
 export default function Profile() {
   const { user } = useOutletContext<{ user: { email: string; name?: string; picture?: string; role?: string } }>();
@@ -56,6 +57,13 @@ export default function Profile() {
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [formatAdded, setFormatAdded] = useState(false);
   const [error, setError] = useState('');
+  const [accentColor, setAccentColor] = useState(() => getStoredPreferences().accent);
+  const [compactMode, setCompactMode] = useState(() => getStoredPreferences().compact);
+  const [uiFontSize, setUiFontSize] = useState<UserPreferences['fontSize']>(() => getStoredPreferences().fontSize);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredPreferences().sidebarCollapsed);
+  const [reduceMotion, setReduceMotion] = useState(() => getStoredPreferences().reduceMotion);
+  const [borderRadius, setBorderRadius] = useState<UserPreferences['borderRadius']>(() => getStoredPreferences().borderRadius);
+  const [checklistBadge, setChecklistBadge] = useState(() => getStoredPreferences().checklistBadge);
 
   useEffect(() => {
     api.auth.profile.get().then((p) => {
@@ -72,6 +80,14 @@ export default function Profile() {
 
   useEffect(() => {
     if (activeTab === 'settings') {
+      const prefs = getStoredPreferences();
+      setAccentColor(prefs.accent);
+      setCompactMode(prefs.compact);
+      setUiFontSize(prefs.fontSize);
+      setSidebarCollapsed(prefs.sidebarCollapsed);
+      setReduceMotion(prefs.reduceMotion);
+      setBorderRadius(prefs.borderRadius);
+      setChecklistBadge(prefs.checklistBadge);
       api.settings.get().then((s: any) => {
         setSignature(s.signature || '');
         setSignatureImageUrl(s.signature_image_url || '');
@@ -257,7 +273,7 @@ export default function Profile() {
 
       {activeTab === 'settings' && (
         <div className="space-y-8">
-          <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky shadow-sm rounded-xl p-6">
+          <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky dark:border-slate-600 shadow-sm rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Appearance</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">Choose light or dark theme.</p>
             <div className="inline-flex p-1 rounded-xl bg-pale-sky/60 dark:bg-slate-700/60 border border-pale-sky/50 dark:border-slate-500">
@@ -266,8 +282,8 @@ export default function Profile() {
                 onClick={() => theme !== 'light' && toggleDark()}
                 className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 ease-out pillbox-pill ${
                   theme === 'light'
-                    ? 'bg-[#1a2f5a] text-white shadow-md dark:!bg-[#5b7fa6] dark:!text-white'
-                    : 'text-slate-600 bg-transparent hover:bg-pale-sky/40 dark:!bg-slate-600/50 dark:!text-slate-300 dark:hover:!bg-slate-600/70'
+                    ? 'bg-[#1a2f5a] text-white shadow-md'
+                    : 'text-slate-600 dark:text-slate-400 bg-transparent hover:bg-pale-sky/40 dark:hover:bg-slate-600/50'
                 }`}
               >
                 Light
@@ -277,12 +293,120 @@ export default function Profile() {
                 onClick={() => theme !== 'dark' && toggleDark()}
                 className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 ease-out pillbox-pill ${
                   theme === 'dark'
-                    ? 'bg-[#1a2f5a] text-white shadow-md dark:!bg-[#5b7fa6] dark:!text-white'
-                    : 'text-slate-600 bg-transparent hover:bg-pale-sky/40 dark:!bg-slate-600/50 dark:!text-slate-300 dark:hover:!bg-slate-600/70'
+                    ? 'bg-[#1a2f5a] text-white shadow-md'
+                    : 'text-slate-600 dark:text-slate-400 bg-transparent hover:bg-pale-sky/40 dark:hover:bg-slate-600/50'
                 }`}
               >
                 Dark
               </button>
+            </div>
+            <div className="mt-6 pt-4 border-t border-pale-sky dark:border-slate-600 space-y-4">
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">Accent Color</label>
+                <input
+                  type="color"
+                  value={accentColor}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setAccentColor(v);
+                    savePreferences({ accent: v });
+                    applyUserPreferences({ ...getStoredPreferences(), accent: v });
+                  }}
+                  className="w-10 h-10 rounded border border-pale-sky dark:border-slate-500 cursor-pointer"
+                />
+                <span className="text-xs text-slate-500 dark:text-slate-400">Buttons and links</span>
+              </div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={compactMode}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setCompactMode(v);
+                    savePreferences({ compact: v });
+                    applyUserPreferences({ ...getStoredPreferences(), compact: v });
+                  }}
+                />
+                <span className="text-sm text-deep-navy dark:text-[var(--text-primary)]">Compact Mode (tighter spacing)</span>
+              </label>
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">UI Font Size</label>
+                <select
+                  value={uiFontSize}
+                  onChange={(e) => {
+                    const v = e.target.value as UserPreferences['fontSize'];
+                    setUiFontSize(v);
+                    savePreferences({ fontSize: v });
+                    applyUserPreferences({ ...getStoredPreferences(), fontSize: v });
+                  }}
+                  className="px-3 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
+                >
+                  <option value="small">Small</option>
+                  <option value="medium">Medium</option>
+                  <option value="large">Large</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">Corner Radius</label>
+                <select
+                  value={borderRadius}
+                  onChange={(e) => {
+                    const v = e.target.value as UserPreferences['borderRadius'];
+                    setBorderRadius(v);
+                    savePreferences({ borderRadius: v });
+                    applyUserPreferences({ ...getStoredPreferences(), borderRadius: v });
+                  }}
+                  className="px-3 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
+                >
+                  <option value="sharp">Sharp</option>
+                  <option value="medium">Medium</option>
+                  <option value="round">Round</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={reduceMotion}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setReduceMotion(v);
+                    savePreferences({ reduceMotion: v });
+                    applyUserPreferences({ ...getStoredPreferences(), reduceMotion: v });
+                  }}
+                />
+                <span className="text-sm text-deep-navy dark:text-[var(--text-primary)]">Reduce Motion</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={checklistBadge}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setChecklistBadge(v);
+                    savePreferences({ checklistBadge: v });
+                  }}
+                />
+                <span className="text-sm text-deep-navy dark:text-[var(--text-primary)]">Show Checklist Badge (pending count)</span>
+              </label>
+            </div>
+            <div className="mt-6 pt-4 border-t border-pale-sky dark:border-slate-600">
+              <button
+                type="button"
+                onClick={() => {
+                  const def = resetPreferencesToDefault();
+                  setAccentColor(def.accent);
+                  setCompactMode(def.compact);
+                  setUiFontSize(def.fontSize);
+                  setSidebarCollapsed(def.sidebarCollapsed);
+                  setReduceMotion(def.reduceMotion);
+                  setBorderRadius(def.borderRadius);
+                  setChecklistBadge(def.checklistBadge);
+                }}
+                className="px-4 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)] font-medium hover:bg-slate-50 dark:hover:bg-slate-600"
+              >
+                Revert to Default
+              </button>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Restore original appearance settings.</p>
             </div>
           </div>
           <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">

@@ -73,8 +73,13 @@
 .dark .border-slate-300 { border-color: #475569; }
 .dark .text-deep-navy { color: #e2e8f0; }
 .dark nav.border-b { border-color: #334155; }
-.dark .bg-\[#1a2f5a\] { background-color: #3d5c82; }
-.dark .bg-\[#1e3a6e\] { background-color: #5b7fa6; }
+/* Primary buttons and pillbox: lighter in dark mode so they stand out (was too dark) */
+.dark .bg-\[#1a2f5a\] { background-color: #6b8fba; }
+.dark .bg-\[#1e3a6e\] { background-color: #7aa3c9; }
+.dark .hover\:bg-\[#1e3a6e\]:hover { background-color: #7aa3c9; }
+.dark .hover\:bg-\[#1a2f5a\]:hover { background-color: #6b8fba; }
+.dark button.bg-\[#1a2f5a\],
+.dark button.bg-\[#1e3a6e\] { color: #fff; }
 .dark .hover\:bg-slate-50:hover { background-color: #334155; }
 .dark .hover\:bg-pale-sky\/30:hover { background-color: rgba(91, 127, 166, 0.2); }
 .dark .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
@@ -98,6 +103,52 @@ body {
 
 input, select, textarea {
   background-color: white;
+}
+
+/* Email Studio: white background + Lato + YUCG navy text in light mode */
+.email-studio-input,
+.email-studio-body {
+  background-color: #ffffff;
+  color: #1a2f5a;
+  font-family: 'Lato', system-ui, sans-serif;
+}
+.email-studio-input::placeholder {
+  color: #64748b;
+}
+.dark .email-studio-input,
+.dark .email-studio-body {
+  background-color: #334155;
+  color: #e2e8f0;
+}
+.dark .email-studio-input::placeholder {
+  color: #94a3b8;
+}
+
+/* Email Studio: attachments + editor blocks white in light mode */
+.email-studio-block {
+  background-color: #ffffff;
+  border-color: #e2e8f0;
+  border-width: 1px;
+}
+.dark .email-studio-block {
+  background-color: rgba(51, 65, 85, 0.3);
+  border-color: #475569;
+}
+
+/* Email Studio: generator header white in light mode (no gray) */
+.email-generator-header {
+  background-color: #ffffff;
+}
+.dark .email-generator-header {
+  background-color: rgba(51, 65, 85, 0.5);
+}
+
+/* Email Studio: editor column white in light mode */
+.email-studio-editor-column {
+  background-color: #ffffff;
+}
+.dark .email-studio-editor-column {
+  background-color: var(--bg-card);
 }
 
 /* Standardized button press animation site-wide */
@@ -134,4 +185,35 @@ button:not([disabled]):active {
 
 .page-enter {
   animation: fadeIn 0.25s ease-out forwards;
+}
+
+/* User preferences: compact mode */
+body.yucg-compact main {
+  padding: 0.5rem 0.75rem;
+}
+body.yucg-compact {
+  font-size: 14px;
+}
+
+/* User preferences: UI font size */
+body[data-ui-font="small"] {
+  font-size: 14px;
+}
+body[data-ui-font="large"] {
+  font-size: 17px;
+}
+
+/* User preferences: border radius */
+body[data-border-radius="sharp"] .rounded-lg { border-radius: 0.25rem; }
+body[data-border-radius="sharp"] .rounded-xl { border-radius: 0.375rem; }
+body[data-border-radius="round"] .rounded-lg { border-radius: 0.75rem; }
+body[data-border-radius="round"] .rounded-xl { border-radius: 1rem; }
+
+/* User preferences: reduce motion */
+body.yucg-reduce-motion *,
+body.yucg-reduce-motion *::before,
+body.yucg-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }

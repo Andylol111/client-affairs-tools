@@ -93,7 +93,16 @@ export default function Campaigns() {
           <h2 className="font-semibold text-deep-navy mb-4">Your Campaigns</h2>
           <div className="space-y-3">
             {campaigns.length === 0 ? (
-              <p className="text-slate-500">No campaigns yet.</p>
+              <div className="bg-white border border-pale-sky rounded-xl p-8 text-center">
+                <p className="text-slate-600 mb-2">No campaigns yet.</p>
+                <p className="text-sm text-slate-500 mb-4">Create a campaign, add contacts from Email Studio or Scraper, then send.</p>
+                <button
+                  onClick={() => document.getElementById('create-campaign-input')?.focus()}
+                  className="px-4 py-2 rounded-lg bg-pale-sky/50 text-deep-navy font-medium hover:bg-pale-sky"
+                >
+                  Create your first campaign
+                </button>
+              </div>
             ) : (
               campaigns.map((c) => (
                 <div

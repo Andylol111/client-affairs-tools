@@ -7,7 +7,9 @@ import { useEffect, useRef } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import BackButton from '../components/BackButton';
 import CommunitySidebar from '../components/CommunitySidebar';
+import ChecklistOverlay from '../components/ChecklistOverlay';
 import { api } from '../api';
+import { applyStoredPreferences } from '../lib/userPreferences';
 
 type MainAppProps = {
   user: { email: string; name?: string; picture?: string; role?: string };
@@ -25,10 +27,32 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
   const lastCursorRef = useRef<number>(0);
 
   useEffect(() => {
+    applyStoredPreferences();
+  }, []);
+
+  useEffect(() => {
     const path = location.pathname || '/';
     const resource = path === '/' ? 'dashboard' : path.slice(1).split('/')[0];
     api.telemetry.event({ event_type: 'page_view', resource_type: resource });
   }, [location.pathname]);
+
+  // Keyboard shortcuts: / focus search, Esc clear selection/close
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName || '')) {
+        e.preventDefault();
+        const first = document.querySelector<HTMLInputElement>('[data-search-input]');
+        if (first) {
+          first.focus();
+        }
+      }
+      if (e.key === 'Escape') {
+        (e.target as HTMLElement)?.blur?.();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Throttled cursor tracking: normalize to 0–100, batch and send periodically
   useEffect(() => {
@@ -145,6 +169,7 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
           <CommunitySidebar />
         </div>
       </div>
+      <ChecklistOverlay />
     </div>
   );
 }

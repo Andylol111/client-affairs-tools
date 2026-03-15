@@ -15,20 +15,33 @@ function groupContactsByCompany(contacts: any[]): { company: string; contacts: a
     .sort((a, b) => (a.company === 'No company' ? 1 : b.company === 'No company' ? -1 : a.company.localeCompare(b.company)));
 }
 
-function ContactCard({ c, selectedContact, onSelect, onUpdatePipeline }: {
-  c: any; selectedContact: any; onSelect: (c: any) => void; onUpdatePipeline: (id: number, status: string) => void;
+function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect, onUpdatePipeline, draggable }: {
+  c: any; selectedContact: any; selectedIds: Set<number>; onSelect: (c: any) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
 }) {
   return (
     <div
+      draggable={draggable}
+      onDragStart={(e) => { e.dataTransfer.setData('contactId', String(c.id)); e.dataTransfer.setData('currentStatus', c.pipeline_status || 'cold'); }}
       onClick={() => onSelect(c)}
       className={`p-3 rounded-lg cursor-pointer border transition-colors ${
         selectedContact?.id === c.id
           ? 'border-[#1a2f5a] bg-[#1a2f5a]/5 ring-1 ring-[#1a2f5a]'
           : 'border-pale-sky hover:border-[#1e3a6e] hover:bg-pale-sky/10'
-      }`}
+      } ${selectedIds.has(c.id) ? 'ring-2 ring-amber-500' : ''}`}
     >
-      <div className="font-medium text-slate-800 truncate text-sm">{c.name || c.email}</div>
-      <div className="text-xs text-slate-500 truncate mt-0.5">{c.company || c.email}</div>
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={selectedIds.has(c.id)}
+          onChange={(e) => { e.stopPropagation(); onToggleSelect(c.id); }}
+          onClick={(e) => e.stopPropagation()}
+          className="rounded shrink-0"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="font-medium text-slate-800 truncate text-sm">{c.name || c.email}</div>
+          <div className="text-xs text-slate-500 truncate mt-0.5">{c.company || c.email}</div>
+        </div>
+      </div>
       <select
         value={c.pipeline_status || 'cold'}
         onChange={(e) => { e.stopPropagation(); onUpdatePipeline(c.id, e.target.value); }}
@@ -41,8 +54,8 @@ function ContactCard({ c, selectedContact, onSelect, onUpdatePipeline }: {
   );
 }
 
-function CompanyFolder({ company, contacts, selectedContact, onSelect, onUpdatePipeline }: {
-  company: string; contacts: any[]; selectedContact: any; onSelect: (c: any) => void; onUpdatePipeline: (id: number, status: string) => void;
+function CompanyFolder({ company, contacts, selectedContact, selectedIds, onSelect, onToggleSelect, onUpdatePipeline, draggable }: {
+  company: string; contacts: any[]; selectedContact: any; selectedIds: Set<number>; onSelect: (c: any) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   return (
@@ -58,7 +71,7 @@ function CompanyFolder({ company, contacts, selectedContact, onSelect, onUpdateP
       {expanded && (
         <div className="p-2 space-y-1 bg-white">
           {contacts.map((c) => (
-            <ContactCard key={c.id} c={c} selectedContact={selectedContact} onSelect={onSelect} onUpdatePipeline={onUpdatePipeline} />
+            <ContactCard key={c.id} c={c} selectedContact={selectedContact} selectedIds={selectedIds} onSelect={onSelect} onToggleSelect={onToggleSelect} onUpdatePipeline={onUpdatePipeline} draggable={draggable} />
           ))}
         </div>
       )}
@@ -88,9 +101,18 @@ export default function Outreach() {
   const [campaignForm, setCampaignForm] = useState({ name: '', type: 'individual' as 'community' | 'individual', description: '' });
   const [selectedCampaign, setSelectedCampaign] = useState<any>(null);
   const [campaignContacts, setCampaignContacts] = useState<any[]>([]);
+  const [contactSearch, setContactSearch] = useState('');
+  const [contactPipelineFilter, setContactPipelineFilter] = useState<string>('');
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    api.contacts.list().then(setContacts).catch(() => setContacts([]));
+    const params: { q?: string; pipeline_status?: string } = {};
+    if (contactSearch.trim()) params.q = contactSearch.trim();
+    if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
+    api.contacts.list(params).then(setContacts).catch(() => setContacts([]));
+  }, [contactSearch, contactPipelineFilter]);
+
+  useEffect(() => {
     api.outreach.templates.list().then(setTemplates).catch(() => setTemplates([]));
     api.outreach.sequences.list().then(setSequences).catch(() => setSequences([]));
     api.outreach.pipelineMetrics().then(setPipelineMetrics).catch(() => setPipelineMetrics(null));
@@ -128,6 +150,44 @@ export default function Outreach() {
         prev.map((c) => (c.id === contactId ? { ...c, pipeline_status: status } : c))
       );
       if (selectedContact?.id === contactId) setSelectedContact((p: any) => (p ? { ...p, pipeline_status: status } : null));
+    } catch (e) {
+      alert((e as Error)?.message || 'Failed');
+    }
+  };
+
+  const toggleContactSelection = (id: number) => {
+    setSelectedContactIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleColumnDrop = (newStatus: string) => (e: React.DragEvent) => {
+    e.preventDefault();
+    const contactId = e.dataTransfer.getData('contactId');
+    if (contactId) updatePipeline(parseInt(contactId, 10), newStatus);
+  };
+
+  const handleBulkMove = async (newStatus: string) => {
+    if (selectedContactIds.size === 0) return;
+    for (const id of selectedContactIds) {
+      await updatePipeline(id, newStatus);
+    }
+    setSelectedContactIds(new Set());
+  };
+
+  const handleBulkAddToCampaign = async (campaignId: number) => {
+    if (selectedContactIds.size === 0) return;
+    try {
+      await api.outreach.campaigns.addContacts(campaignId, Array.from(selectedContactIds));
+      setSelectedContactIds(new Set());
+      api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => {});
+      if (selectedCampaign?.id === campaignId) {
+        api.outreach.campaigns.get(campaignId).then((c) => setCampaignContacts(c.contacts || [])).catch(() => {});
+      }
+      alert(`Added ${selectedContactIds.size} contact(s) to campaign.`);
     } catch (e) {
       alert((e as Error)?.message || 'Failed');
     }
@@ -238,7 +298,27 @@ export default function Outreach() {
         <div className={activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : activeTab === 'campaigns' ? 'lg:col-span-2 space-y-4' : 'lg:col-span-1 space-y-4'}>
           {activeTab === 'pipeline' && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  type="search"
+                  placeholder="Search name, email, company... (press /)"
+                  value={contactSearch}
+                  onChange={(e) => setContactSearch(e.target.value)}
+                  className="px-3 py-2 rounded-lg border border-pale-sky text-sm w-56 max-w-full"
+                  aria-label="Search contacts"
+                  data-search-input
+                />
+                <select
+                  value={contactPipelineFilter}
+                  onChange={(e) => setContactPipelineFilter(e.target.value)}
+                  className="px-3 py-2 rounded-lg border border-pale-sky text-sm bg-white"
+                  aria-label="Filter by pipeline status"
+                >
+                  <option value="">All statuses</option>
+                  {PIPELINE_STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
                 <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
                   <input
                     type="checkbox"
@@ -247,8 +327,32 @@ export default function Outreach() {
                   />
                   Group by company
                 </label>
-                <span className="text-xs text-slate-500">Merge contacts into company folders for easier management</span>
+                <span className="text-xs text-slate-500 hidden sm:inline">Merge contacts into company folders</span>
               </div>
+              {selectedContactIds.size > 0 && (
+                <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-amber-50 border border-amber-200">
+                  <span className="text-sm font-medium text-amber-800">{selectedContactIds.size} selected</span>
+                  <select
+                    onChange={(e) => { const v = e.target.value; if (v) handleBulkMove(v); e.target.value = ''; }}
+                    className="text-sm px-2 py-1.5 rounded border border-amber-300 bg-white"
+                  >
+                    <option value="">Move to...</option>
+                    {PIPELINE_STATUSES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <select
+                    onChange={(e) => { const v = e.target.value; if (v) handleBulkAddToCampaign(parseInt(v, 10)); e.target.value = ''; }}
+                    className="text-sm px-2 py-1.5 rounded border border-amber-300 bg-white"
+                  >
+                    <option value="">Add to campaign...</option>
+                    {outreachCampaigns.map((oc) => (
+                      <option key={oc.id} value={oc.id}>{oc.name}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => setSelectedContactIds(new Set())} className="text-sm text-amber-700 hover:underline">Clear</button>
+                </div>
+              )}
               {/* Full-width Kanban-style pipeline board */}
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 min-h-[420px]">
                 {PIPELINE_STATUSES.map((status) => {
@@ -258,6 +362,8 @@ export default function Outreach() {
                     <div
                       key={status}
                       className="bg-white border border-pale-sky rounded-xl flex flex-col overflow-hidden shadow-sm"
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={handleColumnDrop(status)}
                     >
                       <div className="px-4 py-3 border-b border-pale-sky bg-pale-sky/20 flex justify-between items-center">
                         <h3 className="font-semibold text-deep-navy capitalize">{status}</h3>
@@ -273,8 +379,11 @@ export default function Outreach() {
                               company={company}
                               contacts={companyContacts}
                               selectedContact={selectedContact}
+                              selectedIds={selectedContactIds}
                               onSelect={setSelectedContact}
+                              onToggleSelect={toggleContactSelection}
                               onUpdatePipeline={updatePipeline}
+                              draggable={!groupByCompany}
                             />
                           ))
                         ) : (
@@ -283,8 +392,11 @@ export default function Outreach() {
                               key={c.id}
                               c={c}
                               selectedContact={selectedContact}
+                              selectedIds={selectedContactIds}
                               onSelect={setSelectedContact}
+                              onToggleSelect={toggleContactSelection}
                               onUpdatePipeline={updatePipeline}
+                              draggable={true}
                             />
                           ))
                         )}

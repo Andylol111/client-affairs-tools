@@ -13,6 +13,7 @@ export default function Scraper() {
   const [importing, setImporting] = useState(false);
   const [contacts, setContacts] = useState<any[]>([]);
   const [error, setError] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [findName, setFindName] = useState('');
@@ -32,6 +33,7 @@ export default function Scraper() {
     }
     setLoading(true);
     setError('');
+    setInfoMessage('');
     setContacts([]);
     try {
       const res = await api.contacts.scrape({
@@ -41,6 +43,13 @@ export default function Scraper() {
         linkedin_max_employees: linkedinUrl ? linkedinMaxEmployees : undefined,
       });
       setContacts(res.contacts);
+      if (res.duplicates_skipped && res.duplicates_skipped > 0) {
+        setInfoMessage(`Found ${res.count} new contacts. ${res.duplicates_skipped} duplicate(s) skipped (existing email).`);
+      } else if (res.count > 0) {
+        setInfoMessage(`Scraped ${res.count} contact(s).`);
+      } else {
+        setInfoMessage('');
+      }
     } catch (e: any) {
       setError(e.message || 'Scrape failed');
     } finally {
@@ -73,10 +82,18 @@ export default function Scraper() {
     if (!file) return;
     setImporting(true);
     setError('');
+    setInfoMessage('');
     setContacts([]);
     try {
       const res = await api.contacts.importFile(file);
       setContacts(res.contacts);
+      if (res.duplicates_skipped && res.duplicates_skipped > 0) {
+        setInfoMessage(`Imported ${res.count} contacts. ${res.duplicates_skipped} duplicate(s) skipped (existing email).`);
+      } else if (res.count > 0) {
+        setInfoMessage(`Imported ${res.count} contact(s).`);
+      } else {
+        setInfoMessage('');
+      }
     } catch (e: any) {
       setError(e.message || 'Import failed');
     } finally {
@@ -182,6 +199,7 @@ export default function Scraper() {
             </div>
           </div>
           {error && <p className="text-[#ff3b30] text-[13px] px-1 mt-2">{error}</p>}
+          {infoMessage && <p className="text-emerald-600 text-[13px] px-1 mt-2">{infoMessage}</p>}
         </div>
       )}
 
@@ -281,6 +299,7 @@ export default function Scraper() {
             </div>
           </div>
           {error && <p className="text-[#ff3b30] text-[13px] px-1">{error}</p>}
+          {infoMessage && activeTab === 'import' && <p className="text-emerald-600 text-[13px] px-1 mt-2">{infoMessage}</p>}
         </div>
       )}
 

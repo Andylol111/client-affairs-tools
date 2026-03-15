@@ -192,6 +192,56 @@ def _signature_html(signature: Optional[str], image_url: Optional[str]) -> str:
     return "<br><br>--<br><br>" + "".join(parts)
 
 
+async def send_via_gmail_api_multipart(
+    user_id: int,
+    to_email: str,
+    subject: str,
+    body: str,
+    from_name: Optional[str] = None,
+    signature: Optional[str] = None,
+    signature_image_url: Optional[str] = None,
+    attachments: Optional[list[tuple[bytes, str, str]]] = None,
+) -> bool:
+    """Send email as multipart (plain + HTML) with optional signature and signature image. No tracking pixel."""
+    result = await get_valid_access_token(user_id)
+    if not result:
+        raise ValueError(
+            "No Gmail access. Sign out and sign in again with Google to grant email-sending permission."
+        )
+    access_token, from_email = result
+
+    full_body = append_signature(body, signature)
+    sig_html = _signature_html(signature, signature_image_url)
+    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{body.replace(chr(10), "<br>")}{sig_html}</body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"{from_name or 'YUCG Outreach'} <{from_email}>"
+    msg["To"] = to_email
+    msg.attach(MIMEText(full_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    if attachments:
+        _attach_files(msg, attachments)
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii").rstrip("=")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            json={"raw": raw},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        if r.status_code == 401:
+            raise ValueError(
+                "Gmail access expired. Sign out and sign in again to re-authorize."
+            )
+        if r.status_code >= 400:
+            raise RuntimeError(f"Gmail API error: {r.status_code} - {r.text}")
+    return True
+
+
 async def send_via_gmail_api_with_tracking(
     user_id: int,
     to_email: str,

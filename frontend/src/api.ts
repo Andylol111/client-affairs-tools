@@ -48,10 +48,12 @@ export const api = {
       }).catch(() => ({ ok: false, count: 0 })),
   },
   contacts: {
-    list: (company?: string, mineOnly?: boolean) => {
+    list: (opts?: { company?: string; mine_only?: boolean; q?: string; pipeline_status?: string }) => {
       const params = new URLSearchParams();
-      if (company) params.set('company', company);
-      if (mineOnly) params.set('mine_only', 'true');
+      if (opts?.company) params.set('company', opts.company);
+      if (opts?.mine_only) params.set('mine_only', 'true');
+      if (opts?.q?.trim()) params.set('q', opts.q.trim());
+      if (opts?.pipeline_status) params.set('pipeline_status', opts.pipeline_status);
       return fetchApi<any[]>(`/api/contacts${params.toString() ? '?' + params : ''}`);
     },
     get: (id: number) => fetchApi<any>(`/api/contacts/${id}`),
@@ -59,20 +61,20 @@ export const api = {
       fetchApi<any>('/api/contacts', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: number) =>
       fetchApi<any>(`/api/contacts/${id}`, { method: 'DELETE' }),
-    importFile: (file: File) => {
+    importFile: (file: File, skipDuplicates = true) => {
       const form = new FormData();
       form.append('file', file);
-      return fetch(`${API_BASE}/api/contacts/import`, {
+      return fetch(`${API_BASE}/api/contacts/import?skip_duplicates=${skipDuplicates}`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: form,
       }).then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         return res.json();
-      }) as Promise<{ contacts: any[]; count: number }>;
+      }) as Promise<{ contacts: any[]; count: number; duplicates_skipped?: number }>;
     },
     scrape: (data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number }) =>
-      fetchApi<{ contacts: any[]; count: number }>('/api/contacts/scrape', {
+      fetchApi<{ contacts: any[]; count: number; duplicates_skipped?: number }>('/api/contacts/scrape', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
@@ -132,11 +134,29 @@ export const api = {
       fetchApi<any>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
         method: 'PATCH',
       }),
+    update: (id: number, data: { sequence_id?: number | null }) =>
+      fetchApi<any>(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
   analytics: {
     dashboard: () => fetchApi<any>('/api/analytics/dashboard'),
     campaignMetrics: (id: number) => fetchApi<any>(`/api/analytics/campaigns/${id}/metrics`),
     insights: () => fetchApi<{ insights: string[] }>('/api/analytics/insights'),
+    dueFollowUps: () => fetchApi<{ count: number }>('/api/analytics/due-follow-ups'),
+    timeSeries: (days?: number) =>
+      fetchApi<{ labels: string[]; sent: number[]; opened: number[]; replied: number[] }>(
+        `/api/analytics/time-series${days != null ? `?days=${days}` : ''}`
+      ),
+    exportCsv: async () => {
+      const res = await fetch(`${API_BASE}/api/analytics/export`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'analytics_export.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    },
   },
   auth: {
     profile: {

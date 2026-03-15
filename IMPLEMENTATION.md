@@ -27,6 +27,17 @@ This document lists what is implemented, what must be configured for features to
 - **Also set:** `BACKEND_URL` (e.g. `http://localhost:8000` or your production URL) for the OAuth redirect.
 - **If not set:** Slack connect button will fail with "Slack integration not configured."
 
+**Local development – Slack only allows HTTPS redirect URLs:** Use a tunnel (e.g. **ngrok**) so the callback is HTTPS. Run `ngrok http 8000`, add `https://<ngrok-host>/api/auth/slack/callback` to the Slack app’s Redirect URLs (OAuth & Permissions), and set `BACKEND_URL=https://<ngrok-host>` in `backend/.env`. Restart the backend and try Connect Slack again. (Free ngrok URLs change on restart; update both Slack and `BACKEND_URL` when the URL changes.)
+
+**Where to find Client ID and Client Secret (if you only see Access Token / Refresh Token):**
+- The **Access Token** and **Refresh Token** you see are **Bot User OAuth tokens** (from **OAuth & Permissions** or **Install App**). They are not used for the "Connect Slack" flow in this app.
+- **Client ID** and **Client Secret** are on a different page: go to [api.slack.com/apps](https://api.slack.com/apps), select your app, then in the **left sidebar** click **Basic Information** (usually the first item). Scroll down to **App Credentials**. There you will see **Client ID** and **Client Secret** (click "Show" to reveal the secret). Copy those into `.env` as `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. Do not put the Access Token or Refresh Token in `.env` for the OAuth flow.
+- *(Original note:)* The app uses **OAuth**, so you need Client ID and Client Secret—not the "Access Token" or "Refresh Token" from "Your App Configuration Tokens" / "Workspace".
+- **Use:** In [api.slack.com/apps](https://api.slack.com/apps) → your app → **Basic Information**. Under **App Credentials** you’ll see **Client ID** and **Client Secret**. Put those in `.env` as `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. The Client Secret is the “secret” you need for the Slack API in this flow.
+- **Do not use:** The **Access Token** and **Refresh Token** shown under "Your App Configuration Tokens" / per-workspace are for the app’s bot user. This codebase does not use those; it gets a **per-user** token when each user clicks “Connect Slack” in the app, and stores that in the database.
+
+**Detailed Slack setup (which tokens to use):** See [docs/SLACK-SETUP.md](docs/SLACK-SETUP.md). Summary: tokens under "Your App Configuration Tokens" are [Configuration tokens](https://docs.slack.dev/authentication/tokens/#config) and cannot be used for messaging. You need a Bot token (`xoxb-...`) from installing the app via OAuth, or Client ID/Secret from Basic Information (create app "From scratch" if you don't see them).
+
 ### 3. Google OAuth (Sign-in & Gmail)
 
 - **Status:** Implemented. Used for login and sending email (Gmail API).
@@ -71,19 +82,21 @@ This document lists what is implemented, what must be configured for features to
 
 ### 3. Other possible gaps
 
-- **Email body as HTML:** The email editor supports rich text (bold, italic, underline, lists, font/size). Outgoing campaign emails that use tracking send an HTML part; ensure all send paths that use signature/signature image also send HTML where appropriate (currently implemented for campaign send with tracking).
-- **Test send with signature image:** Test send from Email Studio appends the text signature only (plain text). Campaign send uses HTML with signature + signature image. To match behavior, test-send could be extended to send multipart (plain + HTML) when `signature_image_url` is set.
+- **Email body as HTML:** Implemented. The email editor supports rich text (bold, italic, underline, strikethrough, headings, blockquote, code, lists, font/size, text color, highlight). Outgoing campaign emails and test send send HTML where appropriate (campaign send with tracking; test send can include signature and signature image in HTML when configured).
+- **Test send with signature image:** Test send from Email Studio can send HTML when signature/signature image is set; campaign send uses HTML with signature + signature image. If test-send is still plain-text-only in your build, extend it to send multipart (plain + HTML) when `signature_image_url` is set.
 
 ---
 
 ## Implemented Features (Quick Reference)
 
 - Dark mode (Settings → Appearance).
+- **Appearance customization (Profile → Settings):** Accent color, compact mode, UI font size; persisted to localStorage and applied site-wide.
+- **Overlay checklist:** Floating checklist (toggle via button bottom-right or Ctrl+Shift+L); add/check/remove items; persists to localStorage.
 - 2FA for admins (Admin → 2FA): setup, verify, disable, reset; QR expiry and regenerate.
 - Contact scraper: domain + LinkedIn (Apify), merge; Find Contact (Tavily + optional Ollama).
-- Email Studio: rich text body (bold, italic, underline, lists, font/size), signature + signature image URL, drafts, sentiment analysis, attachments library.
-- Admin: user list, invite, role/status, export users to Excel (YUCG-styled).
-- Campaigns: create, add contacts, send via Gmail API with tracking and signature (including signature image).
+- Email Studio: **collapsible AI Email Generator** (like contacts panel); rich text body (bold, italic, underline, strikethrough, H2/H3, blockquote, code, lists, font/size, text color, highlight), signature + signature image URL, drafts, sentiment analysis, attachments library.
+- Admin: user list, invite, role/status, export users to Excel (YUCG-styled); **Operations: animated bar charts** (3blue1brown-style, theme-aware white/dark background) for event type and resource counts, plus heatmaps and Ollama analyst.
+- Campaigns: create, add contacts, send via Gmail API with tracking and signature (including signature image); **email body as HTML** implemented for campaign and test send where applicable.
 - Slack: OAuth connect/status/disconnect (when env is set).
 
 ---

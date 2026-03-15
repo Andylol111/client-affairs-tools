@@ -17,3 +17,4 @@ matplotlib>=3.8
 PyJWT>=2.8
 httpx>=0.27
 pyotp>=2.9
+apscheduler>=3.10

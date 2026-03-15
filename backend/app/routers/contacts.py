@@ -138,8 +138,12 @@ def _parse_excel(content: bytes) -> list[dict]:
 
 
 @router.post("/import")
-async def import_contacts(file: UploadFile = File(...)):
-    """Import contacts from CSV or Excel (.xlsx, .xls). Columns: name, email, title, company."""
+async def import_contacts(
+    file: UploadFile = File(...),
+    skip_duplicates: bool = True,
+    user: dict | None = Depends(get_current_user_optional),
+):
+    """Import contacts from CSV or Excel. Duplicates (by email) are skipped by default; set skip_duplicates=false to get errors on duplicate."""
     content = await file.read()
     filename = (file.filename or "").lower()
     if filename.endswith(".csv"):
@@ -152,11 +156,17 @@ async def import_contacts(file: UploadFile = File(...)):
         raise HTTPException(400, "No valid contacts found. Ensure file has 'email' column and at least one row.")
     db = await get_db()
     created = []
+    duplicates_skipped = 0
     try:
         for c in rows:
             try:
                 email_clean = sanitize_email(c.get("email") or "")
                 domain_clean = normalize_domain(c.get("company_domain") or "")
+                if skip_duplicates:
+                    cursor = await db.execute("SELECT id FROM contacts WHERE email = ?", (email_clean,))
+                    if await cursor.fetchone():
+                        duplicates_skipped += 1
+                        continue
                 cursor = await db.execute(
                     """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department)
                        VALUES (?, ?, ?, ?, ?, ?, 'medium', ?)""",
@@ -175,15 +185,17 @@ async def import_contacts(file: UploadFile = File(...)):
                 created.append({"id": row_id, **c})
             except Exception:
                 await db.rollback()
+                if not skip_duplicates:
+                    raise
                 pass
     finally:
         await db.close()
     if user:
         await log_event(
             user["id"], "scrape_completed", "scraper",
-            {"company_name": req.company_name, "domain": domain, "linkedin_url": bool(req.linkedin_url), "count": len(created)},
+            {"source": "import", "count": len(created), "duplicates_skipped": duplicates_skipped},
         )
-    return {"contacts": created, "count": len(created)}
+    return {"contacts": created, "count": len(created), "duplicates_skipped": duplicates_skipped}
 
 
 @router.post("/search-person")
@@ -324,11 +336,16 @@ async def scrape_contacts(req: ScrapeRequest):
 
     db = await get_db()
     created = []
+    duplicates_skipped = 0
     try:
         for c in contacts_data:
             try:
                 email_clean = sanitize_email(c.get("email") or "")
                 domain_clean = normalize_domain(c.get("company_domain") or "")
+                cursor = await db.execute("SELECT id FROM contacts WHERE email = ?", (email_clean,))
+                if await cursor.fetchone():
+                    duplicates_skipped += 1
+                    continue
                 cursor = await db.execute(
                     """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -351,23 +368,32 @@ async def scrape_contacts(req: ScrapeRequest):
                 pass
     finally:
         await db.close()
-    return {"contacts": created, "count": len(created)}
+    return {"contacts": created, "count": len(created), "duplicates_skipped": duplicates_skipped}
 
 
 @router.get("")
 async def list_contacts(
     company: str | None = None,
-    limit: int = 100,
+    q: str | None = None,
+    pipeline_status: str | None = None,
+    limit: int = 500,
     mine_only: bool = False,
     user: dict | None = Depends(get_current_user_optional),
 ):
-    """List contacts. Standard users see only their contacts + unassigned. Admins see all. Use mine_only=true for owned only."""
+    """List contacts. Optional q (search name/email/company), pipeline_status filter. Standard users see only their contacts + unassigned. Admins see all."""
     db = await get_db()
     try:
         conditions, params = [], []
         if company:
             conditions.append("company LIKE ?")
             params.append(f"%{company}%")
+        if q and q.strip():
+            q_term = f"%{q.strip()}%"
+            conditions.append("(name LIKE ? OR email LIKE ? OR company LIKE ? OR title LIKE ?)")
+            params.extend([q_term, q_term, q_term, q_term])
+        if pipeline_status and pipeline_status.strip():
+            conditions.append("(pipeline_status = ? OR (pipeline_status IS NULL AND ? = 'cold'))")
+            params.append(pipeline_status.strip().lower(), pipeline_status.strip().lower())
         if user and user.get("role") != "admin":
             if mine_only:
                 conditions.append("owner_id = ?")

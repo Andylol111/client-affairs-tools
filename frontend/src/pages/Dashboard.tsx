@@ -24,6 +24,7 @@ function fetchWithTimeout(url: string, ms = 5000) {
 export default function Dashboard() {
   const [data, setData] = useState<any>(DEFAULT_DATA);
   const [insights, setInsights] = useState<string[]>([]);
+  const [dueFollowUps, setDueFollowUps] = useState<number>(0);
   const [apiError, setApiError] = useState(false);
 
   useEffect(() => {
@@ -43,10 +44,18 @@ export default function Dashboard() {
       .catch(() => setInsights([]));
   }, []);
 
+  useEffect(() => {
+    fetchWithTimeout(`${API_BASE}/api/analytics/due-follow-ups`)
+      .then((r: unknown) => (r as Response).json())
+      .then((d: { count?: number }) => setDueFollowUps(d?.count ?? 0))
+      .catch(() => setDueFollowUps(0));
+  }, []);
+
   const cards = [
     { label: 'Contacts Discovered Today', value: data.contacts_discovered_today ?? 0, link: '/scraper', color: 'cyan' },
     { label: 'Emails in Queue', value: data.emails_in_queue ?? 0, link: '/studio', color: 'teal' },
     { label: 'Active Campaigns', value: data.active_campaigns ?? 0, link: '/campaigns', color: 'cyan' },
+    { label: 'Due Follow-ups', value: dueFollowUps, link: '/campaigns', color: 'amber' },
     { label: 'Total Sent', value: data.total_sent ?? 0, color: 'slate' },
     { label: 'Open Rate', value: `${data.open_rate ?? 0}%`, color: 'emerald' },
     { label: 'Reply Rate', value: `${data.reply_rate ?? 0}%`, color: 'emerald' },

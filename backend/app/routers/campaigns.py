@@ -6,7 +6,12 @@ from app.database import get_db
 from app.auth_deps import get_current_user, get_current_user_optional
 from app.services.audit_service import log_audit
 from app.services.usage_service import log_event
+from pydantic import BaseModel
 from app.models import CampaignCreate, CampaignContactAdd
+
+
+class CampaignUpdate(BaseModel):
+    sequence_id: int | None = None
 
 router = APIRouter()
 
@@ -17,7 +22,7 @@ async def list_campaigns():
     db = await get_db()
     try:
         cursor = await db.execute(
-            """SELECT c.*, 
+            """SELECT c.*, c.sequence_id,
                (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id) as contact_count,
                (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id AND status = 'sent') as sent_count
                FROM campaigns c ORDER BY created_at DESC"""
@@ -140,7 +145,8 @@ async def send_campaign(campaign_id: int, user: dict = Depends(get_current_user)
                     signature_image_url=signature_image_url,
                 )
                 await db.execute(
-                    "UPDATE campaign_contacts SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    """UPDATE campaign_contacts SET status = 'sent', sent_at = CURRENT_TIMESTAMP,
+                       last_sequence_sent_at = CURRENT_TIMESTAMP WHERE id = ?""",
                     (row["id"],),
                 )
                 sent += 1
@@ -177,6 +183,30 @@ async def delete_campaign(campaign_id: int, user: dict = Depends(get_current_use
         await db.commit()
         await log_audit(user["id"], "campaign_delete", "campaign", str(campaign_id), f"Deleted campaign {campaign_id}")
         return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.patch("/{campaign_id}")
+async def update_campaign(
+    campaign_id: int,
+    payload: CampaignUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Update campaign (e.g. attach a follow-up sequence)."""
+    db = await get_db()
+    try:
+        if payload.sequence_id is not None:
+            await db.execute(
+                "UPDATE campaigns SET sequence_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (payload.sequence_id, campaign_id),
+            )
+            await db.commit()
+        cursor = await db.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Campaign not found")
+        return dict(row)
     finally:
         await db.close()
 

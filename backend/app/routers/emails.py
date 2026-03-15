@@ -95,19 +95,22 @@ async def generate_email_template(req: EmailGenerateTemplateRequest):
 
 @router.post("/test-send")
 async def test_send_email(req: TestSendRequest, user: dict = Depends(get_current_user)):
-    """Send a test email to the logged-in user's inbox via Gmail API (OAuth). Optional attachments from library."""
+    """Send a test email via Gmail API. Uses multipart (plain + HTML) with signature and signature image when set."""
+    from app.services.gmail_api import send_via_gmail_api_multipart
     try:
         signature = await get_setting("signature")
+        signature_image_url = await get_setting("signature_image_url") or None
         attachments_data = []
         if req.attachment_ids:
             from app.routers.attachments import get_attachment_data_for_send
             attachments_data = await get_attachment_data_for_send(req.attachment_ids)
-        await send_via_gmail_api(
+        await send_via_gmail_api_multipart(
             user_id=user["id"],
             to_email=req.to_email,
             subject=req.subject,
             body=req.body,
             signature=signature,
+            signature_image_url=signature_image_url,
             attachments=attachments_data if attachments_data else None,
         )
         return {"ok": True, "message": f"Test email sent to {req.to_email}"}

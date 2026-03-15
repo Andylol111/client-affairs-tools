@@ -82,9 +82,10 @@ export default function EmailStudio() {
   const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<Set<number>>(new Set());
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [contactsPanelExpanded, setContactsPanelExpanded] = useState(true);
+  const [aiGeneratorExpanded, setAiGeneratorExpanded] = useState(true);
+  const [contactSearch, setContactSearch] = useState('');
 
   useEffect(() => {
-    api.contacts.list().then(setContacts).catch(() => setContacts([]));
     api.settings.get().then((s: any) => {
       setSignature(s.signature || '');
       setSignatureImageUrl(s.signature_image_url || '');
@@ -92,6 +93,11 @@ export default function EmailStudio() {
     }).catch(() => {});
     setDrafts(loadDrafts());
   }, []);
+
+  useEffect(() => {
+    const params = contactSearch.trim() ? { q: contactSearch.trim() } : {};
+    api.contacts.list(params).then(setContacts).catch(() => setContacts([]));
+  }, [contactSearch]);
 
   useEffect(() => {
     if (attachmentsEnabled) {
@@ -277,7 +283,7 @@ export default function EmailStudio() {
     <div className="w-full max-w-[1920px] mx-auto">
       <h1 className="text-2xl font-bold text-deep-navy mb-6">Email Studio</h1>
       <div className="flex flex-col xl:flex-row gap-4">
-        <div className={`bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden flex-shrink-0 transition-[width] duration-200 ${contactsPanelExpanded ? 'w-full xl:w-[260px]' : 'w-full xl:w-14'}`}>
+        <div className={`bg-white dark:bg-[var(--bg-card)] border border-slate-200 dark:border-slate-600 shadow-sm rounded-xl overflow-hidden flex-shrink-0 transition-[width] duration-200 ${contactsPanelExpanded ? 'w-full xl:w-[260px]' : 'w-full xl:w-14'}`}>
           {contactsPanelExpanded ? (
             <>
               <div className="px-4 py-3 border-b border-slate-200 flex gap-2 flex-wrap items-center">
@@ -310,9 +316,21 @@ export default function EmailStudio() {
               </div>
               <div className="max-h-[calc(100vh-14rem)] overflow-y-auto">
             {activeTab === 'editor' ? (
-              contacts.length === 0 ? (
+              <>
+                <div className="px-4 py-2 border-b border-slate-200">
+                  <input
+                    type="search"
+                    placeholder="Search contacts... (press /)"
+                    value={contactSearch}
+                    onChange={(e) => setContactSearch(e.target.value)}
+                    className="w-full px-3 py-2 rounded border border-slate-200 text-sm"
+                    aria-label="Search contacts"
+                    data-search-input
+                  />
+                </div>
+              {contacts.length === 0 ? (
                 <div className="p-4">
-                  <p className="text-slate-600 text-sm mb-3">No contacts yet. Use Quick Compose in the generator to create emails.</p>
+                  <p className="text-slate-600 text-sm mb-3">{contactSearch.trim() ? 'No contacts match your search.' : 'No contacts yet. Use Quick Compose in the generator to create emails.'}</p>
                 </div>
               ) : (
                 <>
@@ -360,7 +378,8 @@ export default function EmailStudio() {
                     ))
                   )}
                 </>
-              )
+              )}
+              </>
             ) : (
               <div className="p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -415,84 +434,101 @@ export default function EmailStudio() {
             </div>
           )}
         </div>
-        <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-4 min-w-0">
-          <div id="email-generator-section" className="bg-white border border-pale-sky shadow-sm rounded-xl p-6 overflow-y-auto max-h-[calc(100vh-12rem)] min-w-0">
-            <h2 className="font-semibold text-deep-navy mb-4">AI Email Generator</h2>
-            <p className="text-sm text-slate-600 mb-4">
+        <div className="flex-1 flex min-w-0 gap-4">
+          <div
+            id="email-generator-section"
+            className={`bg-white dark:bg-[var(--bg-card)] border border-pale-sky dark:border-slate-600 shadow-sm rounded-xl overflow-hidden flex-shrink-0 flex flex-col transition-[width] duration-200 ${aiGeneratorExpanded ? 'w-full xl:min-w-[380px] xl:w-[42%]' : 'w-full xl:w-14'}`}
+          >
+            {aiGeneratorExpanded ? (
+            <>
+            <div className="email-generator-header px-4 py-3 border-b border-pale-sky dark:border-slate-600 flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setAiGeneratorExpanded(false)}
+                className="p-1.5 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-600 shrink-0"
+                title="Collapse panel"
+                aria-label="Collapse AI generator panel"
+              >
+                ◀
+              </button>
+              <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">AI Email Generator</h2>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1 min-h-0 max-h-[calc(100vh-16rem)]">
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
               Describe the email, set the audience, and assign a company. Then use Quick Compose or select a contact.
             </p>
             <div className="space-y-3 mb-4">
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">What does this email do?</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">What Does This Email Do?</label>
                 <input
                   type="text"
                   value={draftDescription}
                   onChange={(e) => setDraftDescription(e.target.value)}
                   placeholder="e.g. Cold outreach for consulting services"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500"
                 />
               </div>
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Target audience</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Target Audience</label>
                 <input
                   type="text"
                   value={draftTargetAudience}
                   onChange={(e) => setDraftTargetAudience(e.target.value)}
                   placeholder="e.g. CTOs at mid-size tech companies"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500"
                 />
               </div>
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Assign company</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Assign Company</label>
                 <input
                   type="text"
                   value={draftCompany}
                   onChange={(e) => setDraftCompany(e.target.value)}
                   placeholder="e.g. Acme Corp"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500"
                 />
               </div>
             </div>
-            <div className="border-t border-pale-sky pt-4 mb-4">
-              <h3 className="text-sm font-medium text-slate-700 mb-2">Quick Compose (recipient for AI)</h3>
+            <div className="border-t border-pale-sky dark:border-slate-600 pt-4 mb-4">
+              <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Quick Compose (Recipient for AI)</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input
                   type="text"
                   placeholder="Name"
                   value={quickCompose.name}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, name: e.target.value }))}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-sm placeholder-slate-400 dark:placeholder-slate-500"
                 />
                 <input
                   type="email"
                   placeholder="Email (for test send)"
                   value={quickCompose.email}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, email: e.target.value }))}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-sm placeholder-slate-400 dark:placeholder-slate-500"
                 />
                 <input
                   type="text"
                   placeholder="Company"
                   value={quickCompose.company}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, company: e.target.value }))}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-sm placeholder-slate-400 dark:placeholder-slate-500"
                 />
                 <input
                   type="text"
                   placeholder="Title"
                   value={quickCompose.title}
                   onChange={(e) => setQuickCompose((p) => ({ ...p, title: e.target.value }))}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-sm"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-sm placeholder-slate-400 dark:placeholder-slate-500"
                 />
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Tone</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Tone</label>
                 <select
                   value={tone}
                   onChange={(e) => setTone(e.target.value)}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200"
                 >
                   {['professional', 'conversational', 'bold', 'empathetic', 'authority'].map((t) => (
                     <option key={t} value={t}>{t}</option>
@@ -500,11 +536,11 @@ export default function EmailStudio() {
                 </select>
               </div>
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Length</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Length</label>
                 <select
                   value={length}
                   onChange={(e) => setLength(e.target.value)}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200"
                 >
                   {['ultra-short', 'short', 'standard'].map((l) => (
                     <option key={l} value={l}>{l}</option>
@@ -512,11 +548,11 @@ export default function EmailStudio() {
                 </select>
               </div>
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Angle</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Angle</label>
                 <select
                   value={angle}
                   onChange={(e) => setAngle(e.target.value)}
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200"
                 >
                   {['pain_point', 'social_proof', 'case_study', 'question_hook', 'compliment'].map((a) => (
                     <option key={a} value={a}>{a.replace('_', ' ')}</option>
@@ -526,53 +562,80 @@ export default function EmailStudio() {
             </div>
             <div className="space-y-3 mb-4">
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Value Proposition</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Value Proposition</label>
                 <input
                   type="text"
                   value={valueProp}
                   onChange={(e) => setValueProp(e.target.value)}
                   placeholder="e.g. our solution that helps companies like yours..."
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500"
                 />
               </div>
               <div className="min-w-0">
-                <label className="block text-sm text-slate-600 mb-1">Custom Instructions</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Custom Instructions</label>
                 <input
                   type="text"
                   value={customInstructions}
                   onChange={(e) => setCustomInstructions(e.target.value)}
                   placeholder="e.g. mention our Series B"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500"
                 />
               </div>
             </div>
             <button
               onClick={generateEmail}
               disabled={loading}
-              className="w-full py-3.5 rounded-xl bg-[#1a2f5a] hover:bg-[#1e3a6e] active:scale-[0.98] text-white font-semibold disabled:opacity-50 transition-all"
+              className="w-full py-3.5 rounded-xl bg-[#1a2f5a] hover:bg-[#1e3a6e] dark:bg-[var(--accent)] dark:hover:bg-[var(--accent-hover)] active:scale-[0.98] text-white font-semibold disabled:opacity-50 transition-all"
             >
-              {loading ? 'Generating with Ollama...' : 'Generate Email'}
+              {loading ? 'Generating With Ollama...' : 'Generate Email'}
             </button>
+            </div>
+            </>
+            ) : (
+            <div className="flex flex-col items-center py-4 xl:py-6 gap-2">
+              <button
+                type="button"
+                onClick={() => setAiGeneratorExpanded(true)}
+                className="p-2 rounded text-slate-500 hover:bg-pale-sky/30 dark:hover:bg-slate-600/50"
+                title="Expand panel"
+                aria-label="Expand AI generator panel"
+              >
+                ▶
+              </button>
+              <span className="text-xs text-slate-500 dark:text-slate-400 hidden xl:block" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+                AI Generator
+              </span>
+            </div>
+            )}
           </div>
-          <div id="email-editor-section" className="bg-white border border-pale-sky shadow-sm rounded-xl overflow-hidden overflow-y-auto max-h-[calc(100vh-12rem)] min-w-0">
-            <h2 className="font-semibold text-deep-navy p-4 border-b border-pale-sky truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
+          <div id="email-editor-section" className="flex-1 min-w-0 bg-white dark:bg-[var(--bg-card)] border border-pale-sky dark:border-slate-600 shadow-sm rounded-xl overflow-hidden overflow-y-auto max-h-[calc(100vh-12rem)]">
+            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] p-4 border-b border-pale-sky dark:border-slate-600 truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
               Email for {selected?.name || quickCompose.name || 'Recipient'} ({selected?.email || quickCompose.email || 'enter email for test send'})
             </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 divide-x divide-pale-sky min-w-0">
-              <div className="p-4 min-w-0">
-                <h3 className="text-sm font-medium text-slate-600 mb-2">Live Editor</h3>
-                {/* Text formatting toolbar */}
-                <div className="flex flex-wrap items-center gap-1 mb-2 p-2 rounded-lg bg-slate-50 border border-slate-200">
-                  <button type="button" onClick={() => document.execCommand('bold')} className="px-2 py-1.5 rounded hover:bg-slate-200 font-bold text-sm" title="Bold">B</button>
-                  <button type="button" onClick={() => document.execCommand('italic')} className="px-2 py-1.5 rounded hover:bg-slate-200 italic text-sm" title="Italic">I</button>
-                  <button type="button" onClick={() => document.execCommand('underline')} className="px-2 py-1.5 rounded hover:bg-slate-200 underline text-sm" title="Underline">U</button>
-                  <button type="button" onClick={() => document.execCommand('insertUnorderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 text-sm" title="Bullet list">• List</button>
-                  <button type="button" onClick={() => document.execCommand('insertOrderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 text-sm" title="Numbered list">1. List</button>
-                  <span className="w-px h-5 bg-slate-300 mx-1" />
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-x divide-pale-sky dark:divide-slate-600 min-w-0">
+              <div className="p-4 min-w-0 email-studio-editor-column bg-white dark:bg-[var(--bg-card)]">
+                <h3 className="text-sm font-medium text-deep-navy dark:text-slate-400 mb-2">Live Editor</h3>
+                {/* Text formatting toolbar - white in light mode */}
+                <div className="email-studio-block flex flex-wrap items-center gap-1 mb-2 p-2 rounded-lg border dark:bg-slate-700/50 dark:border-slate-600">
+                  <button type="button" onClick={() => document.execCommand('bold')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] font-bold text-sm" title="Bold">B</button>
+                  <button type="button" onClick={() => document.execCommand('italic')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] italic text-sm" title="Italic">I</button>
+                  <button type="button" onClick={() => document.execCommand('underline')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] underline text-sm" title="Underline">U</button>
+                  <button type="button" onClick={() => document.execCommand('strikeThrough')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] line-through text-sm" title="Strikethrough">S</button>
+                  <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
+                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'h2')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm font-semibold" title="Heading 2">H2</button>
+                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'h3')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm font-semibold" title="Heading 3">H3</button>
+                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'blockquote')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm border-l-2 border-slate-400 dark:border-slate-500 pl-1" title="Blockquote">"</button>
+                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'pre')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] font-mono text-xs" title="Code block">{"</>"}</button>
+                  <button type="button" onClick={() => document.execCommand('insertUnorderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm" title="Bullet list">• List</button>
+                  <button type="button" onClick={() => document.execCommand('insertOrderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm" title="Numbered list">1. List</button>
+                  <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
+                  <input type="color" defaultValue="#000000" onInput={(e) => { document.execCommand('foreColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Text color" />
+                  <input type="color" defaultValue="#ffff00" onInput={(e) => { document.execCommand('backColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Highlight" />
+                  <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
                   <select
                     value={emailFont}
                     onChange={(e) => { setEmailFont(e.target.value); if (bodyRef.current) { bodyRef.current.style.fontFamily = e.target.value; } }}
-                    className="px-2 py-1 rounded border border-slate-300 text-sm bg-white"
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
                   >
                     {['Lato', 'Open Sans', 'Roboto', 'Georgia', 'Times New Roman', 'Arial', 'Helvetica', 'Verdana', 'Courier New'].map((f) => (
                       <option key={f} value={f}>{f}</option>
@@ -581,7 +644,7 @@ export default function EmailStudio() {
                   <select
                     value={emailFontSize}
                     onChange={(e) => { const s = Number(e.target.value); setEmailFontSize(s); if (bodyRef.current) bodyRef.current.style.fontSize = s + 'px'; }}
-                    className="px-2 py-1 rounded border border-slate-300 text-sm bg-white"
+                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
                   >
                     {[12, 14, 16, 18, 20, 24].map((s) => (
                       <option key={s} value={s}>{s}px</option>
@@ -590,17 +653,17 @@ export default function EmailStudio() {
                 </div>
                 <div className="space-y-4">
                   <div className="min-w-0">
-                    <label className="block text-sm text-slate-600 mb-1">Subject</label>
+                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Subject</label>
                     <input
                       type="text"
                       value={email?.subject ?? ''}
                       onChange={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), subject: e.target.value }))}
                       placeholder="Enter subject line..."
-                      className="w-full min-w-0 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
+                      className="email-studio-input w-full min-w-0 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:placeholder-slate-500"
                     />
                   </div>
                   <div className="min-w-0">
-                    <label className="block text-sm text-slate-600 mb-1">Body</label>
+                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Body</label>
                     <div className="relative min-w-0">
                     <div
                       ref={bodyRef}
@@ -608,21 +671,21 @@ export default function EmailStudio() {
                       suppressContentEditableWarning
                       onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: (e.target as HTMLDivElement).innerHTML }))}
                       style={{ fontFamily: emailFont, fontSize: emailFontSize }}
-                      className="min-h-[280px] w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 resize-y overflow-auto"
+                      className="email-studio-body min-h-[280px] w-full px-3 py-2 rounded-lg border border-slate-300 resize-y overflow-auto focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-0 dark:border-slate-600 dark:focus:ring-offset-transparent"
                     />
                     {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
-                      <span className="absolute left-3 top-2 text-slate-400 pointer-events-none text-sm">
+                      <span className="absolute left-3 top-2 text-deep-navy/50 dark:text-slate-500 pointer-events-none text-sm">
                         Type your email here or click Generate Email for AI assistance.
                       </span>
                     )}
                   </div>
                   </div>
                   {attachmentsEnabled && (
-                    <div className="w-full p-3 rounded-lg border border-pale-sky bg-pale-sky/10">
-                      <h4 className="text-sm font-medium text-deep-navy mb-2">Attachments</h4>
-                      <p className="text-xs text-slate-600 mb-2">Select files to include with this email (intro PDFs, past workstreams, etc.)</p>
+                    <div className="email-studio-block w-full p-3 rounded-lg border dark:border-slate-600">
+                      <h4 className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Attachments</h4>
+                      <p className="text-xs text-deep-navy/80 dark:text-slate-400 mb-2">Select files to include with this email (intro PDFs, past workstreams, etc.)</p>
                       {attachmentLibrary.length === 0 ? (
-                        <p className="text-xs text-slate-500">No attachments in library. Admins can upload in Profile → Settings.</p>
+                        <p className="text-xs text-deep-navy/70 dark:text-slate-400">No attachments in library. Admins can upload in Profile → Settings.</p>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {attachmentLibrary.map((a) => (
@@ -630,8 +693,8 @@ export default function EmailStudio() {
                               key={a.id}
                               className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm transition-colors ${
                                 selectedAttachmentIds.has(a.id)
-                                  ? 'border-deep-navy bg-pale-sky/50 text-deep-navy'
-                                  : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                                  ? 'border-deep-navy dark:border-[var(--accent)] bg-pale-sky/30 dark:bg-slate-600/50 text-deep-navy dark:text-[var(--text-primary)]'
+                                  : 'border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600/50 text-deep-navy dark:text-slate-300'
                               }`}
                             >
                               <input
@@ -653,22 +716,28 @@ export default function EmailStudio() {
                         </div>
                       )}
                       {selectedAttachmentIds.size > 0 && (
-                        <p className="text-xs text-slate-600 mt-2">{selectedAttachmentIds.size} file(s) will be attached</p>
+                        <p className="text-xs text-deep-navy/80 dark:text-slate-400 mt-2">{selectedAttachmentIds.size} file(s) will be attached</p>
                       )}
+                      <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
+                        <span className="text-xs text-deep-navy dark:text-slate-400">Cloud:</span>
+                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming soon">Insert From Google Drive</button>
+                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming soon">Insert From OneDrive</button>
+                        <span className="text-xs text-deep-navy/60 dark:text-slate-400">(Coming Soon)</span>
+                      </div>
                     </div>
                   )}
                   <div className="flex gap-2 flex-wrap items-center">
                     <button
                       onClick={saveCurrentAsDraft}
                       disabled={!email?.subject && !email?.body}
-                      className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white text-sm font-medium disabled:opacity-50 transition-all"
+                      className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] dark:bg-[var(--accent)] dark:hover:bg-[var(--accent-hover)] text-white text-sm font-medium disabled:opacity-50 transition-all"
                     >
                       Save Draft
                     </button>
                     <button
                       onClick={analyzeSentiment}
                       disabled={sentimentLoading || (!email?.subject && !email?.body)}
-                      className="px-4 py-2 rounded-lg bg-[#1e3a6e] hover:bg-[#1a2f5a] text-white text-sm font-medium disabled:opacity-50 transition-all"
+                      className="px-4 py-2 rounded-lg bg-[#1e3a6e] hover:bg-[#1a2f5a] dark:bg-[var(--accent-hover)] dark:hover:bg-[var(--accent)] text-white text-sm font-medium disabled:opacity-50 transition-all"
                     >
                       {sentimentLoading ? 'Analyzing...' : 'Analyze Sentiment'}
                     </button>
@@ -677,28 +746,28 @@ export default function EmailStudio() {
                       value={sentimentIndustry}
                       onChange={(e) => setSentimentIndustry(e.target.value)}
                       placeholder="Industry (optional)"
-                      className="w-32 px-2 py-1.5 rounded-lg border border-pale-sky text-sm"
+                      className="w-32 px-2 py-1.5 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-sm placeholder-slate-400 dark:placeholder-slate-500"
                     />
                     <button
                       onClick={testSend}
                       disabled={testSending || !email?.body}
-                      className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white text-sm font-medium disabled:opacity-50 transition-all"
+                      className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] dark:bg-[var(--accent)] dark:hover:bg-[var(--accent-hover)] text-white text-sm font-medium disabled:opacity-50 transition-all"
                     >
                       {testSending ? 'Sending...' : 'Email Tester'}
                     </button>
-                    <span className="text-xs text-slate-500">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
                       Sends to {user?.email || 'your email'} to verify delivery
                     </span>
                   </div>
                   {sentimentAnalysis && (
-                    <div className="mt-4 p-4 rounded-lg border border-pale-sky bg-pale-sky/20">
-                      <h4 className="font-medium text-deep-navy mb-2">Sentiment Analysis</h4>
+                    <div className="mt-4 p-4 rounded-lg border border-pale-sky dark:border-slate-600 bg-pale-sky/20 dark:bg-slate-700/30">
+                      <h4 className="font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Sentiment Analysis</h4>
                       {sentimentAnalysis.error ? (
-                        <p className="text-red-600 text-sm">{sentimentAnalysis.error}</p>
+                        <p className="text-red-600 dark:text-red-400 text-sm">{sentimentAnalysis.error}</p>
                       ) : (
                         <div className="space-y-2 text-sm">
                           <div>
-                            <span className="text-slate-600">Score:</span>{' '}
+                            <span className="text-slate-600 dark:text-slate-400">Score:</span>{' '}
                             <span className="font-medium">{(sentimentAnalysis.sentiment_score ?? 0).toFixed(2)}</span>
                             <span className="text-slate-500 ml-2">({sentimentAnalysis.sentiment_label})</span>
                           </div>
