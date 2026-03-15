@@ -110,7 +110,7 @@ export default function CampaignDetail() {
               className="px-3 py-1.5 rounded-lg border border-pale-sky text-sm"
               title="Follow-up sequence"
             >
-              <option value="">No follow-up sequence</option>
+              <option value="">No Follow-Up Sequence</option>
               {sequences.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
@@ -170,14 +170,14 @@ export default function CampaignDetail() {
               disabled={selectedIds.size === 0 || generating}
               className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium disabled:opacity-50"
             >
-              Add {selectedIds.size} contact(s)
+              Add {selectedIds.size} Contact(s)
             </button>
             <button
               onClick={() => addSelected(true)}
               disabled={selectedIds.size === 0 || generating}
               className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white font-medium disabled:opacity-50"
             >
-              {generating ? 'Generating with Ollama...' : 'Generate & Add'}
+              {generating ? 'Generating With Ollama...' : 'Generate & Add'}
             </button>
           </div>
         </div>

@@ -288,7 +288,7 @@ export default function Outreach() {
               activeTab === tab ? 'bg-[#1a2f5a] text-white' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50'
             }`}
           >
-            {tab === 'priorities' ? 'Club Priorities' : tab}
+            {tab === 'priorities' ? 'Club Priorities' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
       </div>
@@ -314,7 +314,7 @@ export default function Outreach() {
                   className="px-3 py-2 rounded-lg border border-pale-sky text-sm bg-white"
                   aria-label="Filter by pipeline status"
                 >
-                  <option value="">All statuses</option>
+                  <option value="">All Statuses</option>
                   {PIPELINE_STATUSES.map((s) => (
                     <option key={s} value={s}>{s}</option>
                   ))}
@@ -336,7 +336,7 @@ export default function Outreach() {
                     onChange={(e) => { const v = e.target.value; if (v) handleBulkMove(v); e.target.value = ''; }}
                     className="text-sm px-2 py-1.5 rounded border border-amber-300 bg-white"
                   >
-                    <option value="">Move to...</option>
+                    <option value="">Move To...</option>
                     {PIPELINE_STATUSES.map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
@@ -345,7 +345,7 @@ export default function Outreach() {
                     onChange={(e) => { const v = e.target.value; if (v) handleBulkAddToCampaign(parseInt(v, 10)); e.target.value = ''; }}
                     className="text-sm px-2 py-1.5 rounded border border-amber-300 bg-white"
                   >
-                    <option value="">Add to campaign...</option>
+                    <option value="">Add To Campaign...</option>
                     {outreachCampaigns.map((oc) => (
                       <option key={oc.id} value={oc.id}>{oc.name}</option>
                     ))}
@@ -614,7 +614,7 @@ export default function Outreach() {
                   <button onClick={() => setSelectedCampaign(null)} className="text-sm text-slate-500 hover:text-slate-700">✕ Close</button>
                 </div>
               </div>
-              <h4 className="text-sm font-medium text-slate-600 mb-2">Contacts in campaign</h4>
+              <h4 className="text-sm font-medium text-slate-600 mb-2">Contacts In Campaign</h4>
               {campaignContacts.length === 0 ? (
                 <p className="text-slate-500 text-sm">No contacts yet. Add from the pipeline or contact list.</p>
               ) : (
@@ -656,7 +656,7 @@ export default function Outreach() {
                     }
                   }}
                 >
-                  <option value="">Add contact...</option>
+                  <option value="">Add Contact...</option>
                   {contacts
                     .filter((c) => !campaignContacts.some((cc) => cc.id === c.id))
                     .map((c) => (
@@ -681,7 +681,7 @@ export default function Outreach() {
                     onClick={() => setSelectedContact(null)}
                     className="text-sm text-slate-500 hover:text-slate-700"
                   >
-                    ✕ Clear selection
+                    ✕ Clear Selection
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-2 items-center mb-4">
@@ -701,7 +701,7 @@ export default function Outreach() {
                       }
                     }}
                   >
-                    <option value="">+ Add to campaign</option>
+                    <option value="">+ Add To Campaign</option>
                     {outreachCampaigns.map((oc) => (
                       <option key={oc.id} value={oc.id}>{oc.name} ({oc.type})</option>
                     ))}
@@ -710,7 +710,7 @@ export default function Outreach() {
                     onClick={verifyEmail}
                     className="px-2 py-1 rounded text-xs bg-pale-sky/50 hover:bg-pale-sky"
                   >
-                    Verify email
+                    Verify Email
                   </button>
                   {emailVerified !== null && (
                     <span className={`text-xs ${emailVerified ? 'text-green-600' : 'text-red-600'}`}>
@@ -745,7 +745,7 @@ export default function Outreach() {
                       disabled={loading}
                       className="mt-2 px-3 py-1 rounded bg-pale-sky/50 text-sm hover:bg-pale-sky"
                     >
-                      {loading ? 'Refreshing...' : 'Refresh analysis'}
+                      {loading ? 'Refreshing...' : 'Refresh Analysis'}
                     </button>
                   </div>
                 ) : (
@@ -759,7 +759,7 @@ export default function Outreach() {
                   <textarea
                     value={newNote}
                     onChange={(e) => setNewNote(e.target.value)}
-                    placeholder="Add a note..."
+                    placeholder="Add A Note..."
                     className="flex-1 px-3 py-2 rounded-lg border border-pale-sky text-sm"
                     rows={2}
                   />
@@ -790,7 +790,7 @@ export default function Outreach() {
                     onChange={(e) => setNewActivityType(e.target.value)}
                     className="px-3 py-2 rounded-lg border border-pale-sky text-sm"
                   >
-                    <option value="email_sent">Email sent</option>
+                    <option value="email_sent">Email Sent</option>
                     <option value="call">Call</option>
                     <option value="meeting">Meeting</option>
                     <option value="replied">Replied</option>
@@ -937,7 +937,7 @@ export default function Outreach() {
                   }
                   className="text-sm text-[#1a2f5a] hover:underline"
                 >
-                  + Add step
+                  + Add Step
                 </button>
                 <button
                   onClick={saveSequence}

@@ -565,7 +565,7 @@ export default function Admin() {
             {(twoFactorStatus === 'not_setup' || twoFactorStatus === 'pending' || twoFactorStatus === null) && (
               <div className="flex gap-2 flex-wrap">
                 <button onClick={handle2FASetup} className="btn-press px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">
-                  {twoFactorStatus === 'pending' && !qrDataUrl ? 'Regenerate QR code' : twoFactorStatus === 'pending' ? 'Regenerate QR code' : 'Setup 2FA'}
+                  {twoFactorStatus === 'pending' && !qrDataUrl ? 'Regenerate QR Code' : twoFactorStatus === 'pending' ? 'Regenerate QR Code' : 'Setup 2FA'}
                 </button>
               </div>
             )}
@@ -603,7 +603,7 @@ export default function Admin() {
             </div>
             <div className="pt-4 border-t border-pale-sky">
               <button onClick={handle2FAReset} className="text-sm text-slate-500 hover:text-red-600">
-                Reset 2FA (if stuck, e.g. lost phone before verifying)
+                Reset 2FA (If Stuck, e.g. Lost Phone Before Verifying)
               </button>
             </div>
           </div>
@@ -627,8 +627,8 @@ export default function Admin() {
               <label className="flex items-center gap-2">
                 <span className="text-sm text-slate-600">Heatmap by</span>
                 <select value={opsGroupBy} onChange={(e) => setOpsGroupBy(e.target.value as 'hour' | 'day_of_week')} className="px-2 py-1.5 rounded-lg border border-pale-sky bg-white dark:bg-slate-700 dark:border-slate-600">
-                  <option value="hour">Hour of day</option>
-                  <option value="day_of_week">Day of week</option>
+                  <option value="hour">Hour Of Day</option>
+                  <option value="day_of_week">Day Of Week</option>
                 </select>
               </label>
               <button
@@ -836,7 +836,7 @@ export default function Admin() {
                 htmlFor="ops-resource-file"
                 className="inline-flex items-center px-4 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium cursor-pointer hover:bg-pale-sky/30 dark:hover:bg-slate-600 transition-colors"
               >
-                Browse / Upload file
+                Browse / Upload File
               </label>
             </div>
             <textarea value={opsResourceText} onChange={(e) => setOpsResourceText(e.target.value)} placeholder="Paste text content (e.g. past workstream, playbook)..." rows={4} className="w-full px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700 mb-2" />
@@ -853,7 +853,7 @@ export default function Admin() {
               disabled={!opsResourceName.trim() || !opsResourceText.trim()}
               className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
             >
-              Add resource
+              Add Resource
             </button>
             <ul className="mt-4 space-y-2 max-h-40 overflow-y-auto">
               {opsResources.map((r) => (

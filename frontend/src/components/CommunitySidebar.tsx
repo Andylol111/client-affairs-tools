@@ -126,12 +126,12 @@ export default function CommunitySidebar() {
             <div className="flex items-center gap-2 p-2 rounded-lg border border-pale-sky/50 dark:border-slate-600 text-sm text-slate-500 dark:text-slate-400">
               <img src="/google-drive-logo.png" alt="" className="w-5 h-5 object-contain flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               <span>Google Drive</span>
-              <span className="text-xs ml-auto">Coming soon</span>
+              <span className="text-xs ml-auto">Coming Soon</span>
             </div>
             <div className="flex items-center gap-2 p-2 rounded-lg border border-pale-sky/50 dark:border-slate-600 text-sm text-slate-500 dark:text-slate-400">
               <img src="/microsoft-365-logo.png" alt="" className="w-5 h-5 object-contain flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
               <span>Microsoft 365</span>
-              <span className="text-xs ml-auto">Coming soon</span>
+              <span className="text-xs ml-auto">Coming Soon</span>
             </div>
           </div>
         </div>

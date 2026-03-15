@@ -104,7 +104,7 @@ export default function ChecklistOverlay() {
                   value={newText}
                   onChange={(e) => setNewText(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addItem()}
-                  placeholder="Add an item..."
+                  placeholder="Add An Item..."
                   className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)] placeholder-slate-400"
                 />
                 <button
@@ -156,7 +156,7 @@ export default function ChecklistOverlay() {
               </ul>
             </div>
             <div className="px-4 py-2 border-t border-pale-sky dark:border-slate-600 text-xs text-slate-500 dark:text-slate-400">
-              Ctrl+Shift+L to toggle · Esc to close
+              Ctrl+Shift+L To Toggle · Esc To Close
             </div>
           </div>
         </div>

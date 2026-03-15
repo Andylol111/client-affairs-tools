@@ -335,7 +335,7 @@ export default function EmailStudio() {
               ) : (
                 <>
                   <div className="px-4 py-2 border-b border-slate-200 flex items-center gap-2">
-                    <label className="text-xs text-slate-600">Group by company</label>
+                    <label className="text-xs text-slate-600">Group By Company</label>
                     <input
                       type="checkbox"
                       checked={groupByCompany}
@@ -389,9 +389,9 @@ export default function EmailStudio() {
                     onChange={(e) => setSortBy(e.target.value)}
                     className="text-sm px-2 py-1 rounded bg-white border border-slate-300"
                   >
-                    <option value="created_desc">Newest first</option>
-                    <option value="created_asc">Oldest first</option>
-                    <option value="contact">By contact</option>
+                    <option value="created_desc">Newest First</option>
+                    <option value="created_asc">Oldest First</option>
+                    <option value="contact">By Contact</option>
                   </select>
                 </div>
                 {generatedEmails.length === 0 ? (
@@ -720,8 +720,8 @@ export default function EmailStudio() {
                       )}
                       <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
                         <span className="text-xs text-deep-navy dark:text-slate-400">Cloud:</span>
-                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming soon">Insert From Google Drive</button>
-                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming soon">Insert From OneDrive</button>
+                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming Soon">Insert From Google Drive</button>
+                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming Soon">Insert From OneDrive</button>
                         <span className="text-xs text-deep-navy/60 dark:text-slate-400">(Coming Soon)</span>
                       </div>
                     </div>

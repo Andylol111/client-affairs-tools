@@ -185,7 +185,7 @@ export default function Settings() {
                   htmlFor="attachment-upload"
                   className={`px-4 py-2 rounded-lg border border-slate-300 text-sm font-medium cursor-pointer hover:bg-slate-50 ${attachmentUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
-                  {attachmentUploading ? 'Uploading...' : '+ Upload file'}
+                  {attachmentUploading ? 'Uploading...' : '+ Upload File'}
                 </label>
               </div>
               {attachmentLibrary.length > 0 ? (

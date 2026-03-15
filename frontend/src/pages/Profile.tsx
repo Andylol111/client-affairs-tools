@@ -406,7 +406,7 @@ export default function Profile() {
               >
                 Revert to Default
               </button>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Restore original appearance settings.</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Restore Original Appearance Settings.</p>
             </div>
           </div>
           <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">

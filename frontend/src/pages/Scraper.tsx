@@ -175,7 +175,7 @@ export default function Scraper() {
                   className="flex-1 w-full px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50 focus:ring-2 focus:ring-steel-blue/40 focus:ring-offset-0 focus:border-steel-blue transition-shadow"
                 />
                 <div className="flex items-center gap-2 shrink-0">
-                  <label htmlFor="max-employees" className="text-[15px] text-slate-blue whitespace-nowrap">Max employees</label>
+                  <label htmlFor="max-employees" className="text-[15px] text-slate-blue whitespace-nowrap">Max Employees</label>
                   <input
                     id="max-employees"
                     type="number"
@@ -207,7 +207,7 @@ export default function Scraper() {
         <div className="space-y-6">
           <div className="bg-white dark:bg-[var(--bg-card)] rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-pale-sky">
             <div className="px-5 py-4 border-b border-pale-sky">
-              <h2 className="text-[15px] font-semibold text-deep-navy">Find a contact</h2>
+              <h2 className="text-[15px] font-semibold text-deep-navy">Find A Contact</h2>
               <p className="text-[13px] text-slate-500 mt-0.5">
                 Search the web for a person by name (and optional company). We use web search and optional LLM to summarize contact-relevant info.
               </p>
