@@ -1,0 +1,8 @@
+# Optional deps for local RAG (scripts/rag_index_codebase.py).
+# Install in a venv or separate env; not required for main app.
+# pip install -r scripts/requirements-rag.txt
+
+llama-index>=0.10
+llama-index-vector-stores-chroma
+chromadb
+llama-index-embeddings-huggingface
