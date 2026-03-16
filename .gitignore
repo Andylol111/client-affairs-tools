@@ -7,3 +7,4 @@ venv/
 clientreach.db
 backend/attachments/
 .DS_Store
+.rag_index/
