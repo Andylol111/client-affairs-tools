@@ -1,10 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-
-// In dev, use same-origin so Vite proxy forwards /api to backend
-const API_BASE = import.meta.env.DEV
-  ? ''
-  : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
+import { getBackendOriginForOAuth } from '../api';
 
 function BackToApp() {
   const navigate = useNavigate();
@@ -57,7 +53,7 @@ export default function Login({ user, onAuthChecked, onLoginSuccess }: LoginProp
   }, [token, navigate, onLoginSuccess]);
 
   const handleGoogleLogin = () => {
-    window.location.href = `${API_BASE}/api/auth/google`;
+    window.location.href = `${getBackendOriginForOAuth()}/api/auth/google`;
   };
 
   // Already logged in: show welcome and option to go to app
@@ -67,9 +63,12 @@ export default function Login({ user, onAuthChecked, onLoginSuccess }: LoginProp
         <BackToApp />
         <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md border border-slate-200">
           <div className="flex justify-center mb-6">
-            <div className="bg-white rounded-lg p-2 border border-slate-200 shadow-sm">
-              <img src="/yucg-logo.png" alt="YUCG" className="h-12 w-auto" />
-            </div>
+            <img
+              src="/yucg-logo.png"
+              alt="YUCG"
+              className="h-12 w-auto block outline-none select-none"
+              decoding="async"
+            />
           </div>
           <h1 className="text-2xl font-bold text-center text-deep-navy mb-2">Welcome back, {user.name || user.email?.split('@')[0] || 'User'}!</h1>
           <p className="text-center text-slate-600 text-sm mb-6">You are logged in.</p>
@@ -89,16 +88,20 @@ export default function Login({ user, onAuthChecked, onLoginSuccess }: LoginProp
       <BackToApp />
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md border border-slate-200">
         <div className="flex justify-center mb-6">
-          <div className="bg-white rounded-lg p-2 border border-slate-200 shadow-sm">
-            <img src="/yucg-logo.png" alt="YUCG" className="h-12 w-auto" />
-          </div>
+          <img
+            src="/yucg-logo.png"
+            alt="YUCG"
+            className="h-12 w-auto block outline-none select-none"
+            decoding="async"
+          />
         </div>
         <h1 className="text-2xl font-bold text-center text-deep-navy mb-2">YUCG Outreach</h1>
         <p className="text-center text-slate-600 text-sm mb-8">Yale Undergraduate Consulting Group</p>
 
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-            {error === 'invalid_callback' && 'Invalid login attempt. Please try again.'}
+            {error === 'invalid_callback' &&
+              'Sign-in session expired or the server restarted during login. Try again. If this persists, ensure JWT_SECRET in backend/.env is set and GOOGLE_REDIRECT_URI matches Google Cloud Console.'}
             {error === 'token_exchange_failed' && 'Authentication failed. Please try again.'}
             {error === 'no_access_token' && 'Could not get access. Please try again.'}
             {error === 'userinfo_failed' && 'Could not load your profile. Please try again.'}

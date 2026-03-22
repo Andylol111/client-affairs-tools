@@ -12,7 +12,6 @@ const KEY_BORDER_RADIUS = 'yucg_border_radius';
 const KEY_CHECKLIST_BADGE = 'yucg_checklist_badge';
 
 const DEFAULT_ACCENT = '#1a2f5a';
-const DEFAULT_ACCENT_HOVER = '#1e3a6e';
 
 function lightenHex(hex: string, pct: number): string {
   const num = parseInt(hex.slice(1), 16);

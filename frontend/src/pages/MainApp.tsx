@@ -103,9 +103,12 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
         <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14 flex-nowrap gap-2 min-w-0">
             <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
-              <div className="bg-white rounded-lg p-1 flex items-center justify-center border border-pale-sky shadow-sm flex-shrink-0">
-                <img src="/yucg-logo.png" alt="YUCG" className="h-7 w-auto" />
-              </div>
+              <img
+                src="/yucg-logo.png"
+                alt="YUCG"
+                className="h-7 w-auto flex-shrink-0 block outline-none select-none"
+                decoding="async"
+              />
               <span className="text-lg font-bold text-deep-navy whitespace-nowrap">YUCG Outreach</span>
               <span className="text-xs text-slate-500 hidden xl:inline truncate">Yale Undergraduate Consulting Group</span>
             </div>

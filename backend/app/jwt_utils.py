@@ -1,10 +1,21 @@
 """JWT helpers - no imports from routers to avoid circular deps."""
+import logging
 import os
 import secrets
 import jwt
 from datetime import datetime, timedelta
 
-JWT_SECRET = (os.getenv("JWT_SECRET") or secrets.token_hex(32)).strip() or secrets.token_hex(32)
+logger = logging.getLogger(__name__)
+
+# Stable default for local dev only — avoids a new random secret every process start (which invalidates all tokens).
+_raw_jwt = (os.getenv("JWT_SECRET") or "").strip()
+if not _raw_jwt:
+    _raw_jwt = "dev-jwt-secret-not-for-production"
+    logger.warning(
+        "JWT_SECRET is not set; using a fixed development default. "
+        "Set JWT_SECRET in backend/.env for production and for consistent tokens across restarts."
+    )
+JWT_SECRET = _raw_jwt
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24 * 7  # 7 days
 

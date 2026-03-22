@@ -3,6 +3,19 @@ const API_BASE = import.meta.env.DEV
   ? ''
   : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
 
+/**
+ * Full-page navigations (Google OAuth) must use the real API origin. In dev, `API_BASE` is '' so
+ * `fetch` goes through the Vite proxy — but `window.location.href = '/api/auth/google'` hits :5173
+ * and can 404 or trigger Firefox OpaqueResponseBlocking on the redirect chain. Use this for OAuth URLs only.
+ */
+export function getBackendOriginForOAuth(): string {
+  const explicit = (import.meta.env.VITE_API_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  if (import.meta.env.DEV) return 'http://localhost:8000';
+  if (typeof window !== 'undefined') return window.location.origin.replace(/\/$/, '');
+  return '';
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem('yucg_token');
   return token ? { Authorization: `Bearer ${token}` } : {};

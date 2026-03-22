@@ -1,6 +1,8 @@
 """
 Auth API - Google OAuth 2.0 + JWT
 """
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -14,17 +16,45 @@ import httpx
 from datetime import datetime, timedelta
 from app.database import get_db, row_to_dict
 from app.auth_deps import get_current_user
-from app.jwt_utils import create_token, decode_token
+from app.jwt_utils import JWT_SECRET, create_token, decode_token
 
 router = APIRouter()
 
 GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
 GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
-GOOGLE_REDIRECT_URI = (os.getenv("GOOGLE_REDIRECT_URI") or "http://localhost:8000/api/auth/google/callback").strip()
+BACKEND_URL = (os.getenv("BACKEND_URL") or "http://localhost:8000").strip().rstrip("/")
+GOOGLE_REDIRECT_URI = (
+    os.getenv("GOOGLE_REDIRECT_URI") or f"{BACKEND_URL}/api/auth/google/callback"
+).strip()
 FRONTEND_URL = (os.getenv("FRONTEND_URL") or "http://localhost:5173").strip()
 
-# In-memory state for CSRF (use Redis in production)
-_oauth_states: dict[str, str] = {}
+
+def _oauth_state_signing_key() -> bytes:
+    """HMAC key for OAuth `state` — must be stable across workers/restarts (unlike in-memory state)."""
+    raw = (os.getenv("OAUTH_STATE_SECRET") or JWT_SECRET or GOOGLE_CLIENT_SECRET or "").strip()
+    if not raw:
+        raw = "dev-oauth-state-not-for-production"
+        logger.warning(
+            "OAUTH_STATE_SECRET, JWT_SECRET, and GOOGLE_CLIENT_SECRET are unset; using insecure OAuth state signing. "
+            "Set JWT_SECRET (or OAUTH_STATE_SECRET) in backend/.env."
+        )
+    return raw.encode("utf-8")
+
+
+def _generate_oauth_state() -> str:
+    nonce = secrets.token_urlsafe(24)
+    sig = hmac.new(_oauth_state_signing_key(), nonce.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{nonce}.{sig}"
+
+
+def _verify_oauth_state(state: str | None) -> bool:
+    if not state or "." not in state:
+        return False
+    nonce, sig = state.split(".", 1)
+    if len(nonce) < 8 or len(sig) < 32:
+        return False
+    expected = hmac.new(_oauth_state_signing_key(), nonce.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
 
 
 @router.get("/google")
@@ -32,8 +62,7 @@ async def google_login():
     """Redirect to Google OAuth consent screen."""
     if not GOOGLE_CLIENT_ID:
         return RedirectResponse(url=f"{FRONTEND_URL}/login?error=oauth_not_configured")
-    state = secrets.token_urlsafe(32)
-    _oauth_states[state] = "pending"
+    state = _generate_oauth_state()
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": GOOGLE_REDIRECT_URI,
@@ -52,10 +81,11 @@ async def google_callback(code: str | None = None, state: str | None = None, err
     """Handle Google OAuth callback, create/find user, return JWT."""
     if error:
         return RedirectResponse(url=f"{FRONTEND_URL}/login?error={error}")
-    if not code or not state or state not in _oauth_states:
-        logger.warning("Invalid callback: missing code/state or state not in _oauth_states (reload?)")
+    if not code or not _verify_oauth_state(state):
+        logger.warning(
+            "Invalid Google OAuth callback: bad or missing state (wrong secret, tampered URL, or very old link)."
+        )
         return RedirectResponse(url=f"{FRONTEND_URL}/login?error=invalid_callback")
-    del _oauth_states[state]
 
     try:
         return await _do_google_callback(code)
@@ -79,6 +109,15 @@ async def _do_google_callback(code: str):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if token_res.status_code != 200:
+            try:
+                err_body = token_res.text[:500]
+            except Exception:
+                err_body = ""
+            logger.warning(
+                "Google token exchange failed: status=%s body=%s",
+                token_res.status_code,
+                err_body,
+            )
             return RedirectResponse(url=f"{FRONTEND_URL}/login?error=token_exchange_failed")
 
         tokens = token_res.json()

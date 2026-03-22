@@ -244,8 +244,10 @@ export default function Settings() {
             className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800"
           />
           {signatureImageUrl && (
-            <p className="text-xs text-slate-500 mt-1">Preview:</p>
-            <img src={signatureImageUrl} alt="Signature" className="mt-1 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+            <>
+              <p className="text-xs text-slate-500 mt-1">Preview:</p>
+              <img src={signatureImageUrl} alt="Signature" className="mt-1 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+            </>
           )}
         </div>
         )}

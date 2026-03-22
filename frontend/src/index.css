@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&family=Open+Sans:wght@400;600;700&family=Roboto:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&display=swap');
 
 @import "tailwindcss";
 
@@ -89,6 +89,10 @@
 .dark .bg-slate-50 { background-color: #334155; }
 .dark code { background-color: #475569; color: #e2e8f0; }
 
+html {
+  font-family: 'Lato', system-ui, sans-serif;
+}
+
 body {
   margin: 0;
   font-family: 'Lato', system-ui, sans-serif;
@@ -97,8 +101,16 @@ body {
   min-height: 100vh;
 }
 
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
 #root {
   min-height: 100vh;
+  font-family: 'Lato', system-ui, sans-serif;
 }
 
 input, select, textarea {

@@ -46,6 +46,8 @@ export default function Admin() {
   const [opsOllamaAnswer, setOpsOllamaAnswer] = useState<string | null>(null);
   const [opsOllamaLoading, setOpsOllamaLoading] = useState(false);
 
+  const opsMatrix2d = opsHeatmap?.matrix_2d;
+
   useEffect(() => {
     if (user?.role !== 'admin') return;
     if (activeTab === 'users') api.admin.users.list().then(setUsers).catch(() => setUsers([]));
@@ -652,25 +654,25 @@ export default function Admin() {
             </div>
 
             <h3 className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] mt-6 mb-2">Usage heatmap (what’s used and when) — horizontal: time × event type</h3>
-            {opsHeatmap?.matrix_2d?.row_labels?.length > 0 && opsHeatmap.matrix_2d.col_labels?.length > 0 && Array.isArray(opsHeatmap.matrix_2d.values) ? (
+            {opsMatrix2d && opsMatrix2d.row_labels.length > 0 && opsMatrix2d.col_labels.length > 0 && Array.isArray(opsMatrix2d.values) ? (
               <div className="overflow-x-auto -mx-2">
                 <div
                   className="inline-grid gap-0.5 mb-2 min-w-full"
                   style={{
-                    gridTemplateRows: `auto repeat(${opsHeatmap.matrix_2d.row_labels.length}, minmax(20px, 1fr))`,
-                    gridTemplateColumns: `120px repeat(${opsHeatmap.matrix_2d.col_labels.length}, minmax(28px, 1fr))`,
+                    gridTemplateRows: `auto repeat(${opsMatrix2d.row_labels.length}, minmax(20px, 1fr))`,
+                    gridTemplateColumns: `120px repeat(${opsMatrix2d.col_labels.length}, minmax(28px, 1fr))`,
                   }}
                 >
                   <div className="row-start-1 col-start-1 rounded-tl bg-pale-sky/40 p-1.5 text-xs font-medium text-slate-600 dark:text-slate-400" />
-                  {opsHeatmap.matrix_2d.col_labels.map((label, c) => (
+                  {opsMatrix2d.col_labels.map((label, c) => (
                     <div key={c} className="row-start-1 p-1 text-[10px] font-medium text-slate-600 dark:text-slate-400 truncate text-center" style={{ gridColumn: c + 2 }} title={String(label)}>
                       {String(label).length > 8 ? String(label).slice(0, 7) + '…' : String(label)}
                     </div>
                   ))}
-                  {opsHeatmap.matrix_2d.row_labels.map((rowLabel, r) => {
-                    const rowValues = opsHeatmap.matrix_2d?.values?.[r];
+                  {opsMatrix2d.row_labels.map((rowLabel, r) => {
+                    const rowValues = opsMatrix2d.values[r];
                     if (!Array.isArray(rowValues)) return null;
-                    const max = Math.max(1, ...(opsHeatmap.matrix_2d?.values?.flat() ?? [0]));
+                    const max = Math.max(1, ...(opsMatrix2d.values.flat() ?? [0]));
                     return (
                       <Fragment key={r}>
                         <div className="py-1 pr-2 text-xs text-slate-600 dark:text-slate-400 text-right" style={{ gridRow: r + 2, gridColumn: 1 }}>
@@ -678,7 +680,7 @@ export default function Admin() {
                         </div>
                         {rowValues.map((val, c) => {
                           const intensity = val ? val / max : 0;
-                          const colLabel = opsHeatmap.matrix_2d?.col_labels?.[c] ?? '';
+                          const colLabel = opsMatrix2d.col_labels[c] ?? '';
                           return (
                             <div
                               key={`${r}-${c}`}

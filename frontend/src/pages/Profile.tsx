@@ -60,7 +60,7 @@ export default function Profile() {
   const [accentColor, setAccentColor] = useState(() => getStoredPreferences().accent);
   const [compactMode, setCompactMode] = useState(() => getStoredPreferences().compact);
   const [uiFontSize, setUiFontSize] = useState<UserPreferences['fontSize']>(() => getStoredPreferences().fontSize);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getStoredPreferences().sidebarCollapsed);
+  const [, setSidebarCollapsed] = useState(() => getStoredPreferences().sidebarCollapsed);
   const [reduceMotion, setReduceMotion] = useState(() => getStoredPreferences().reduceMotion);
   const [borderRadius, setBorderRadius] = useState<UserPreferences['borderRadius']>(() => getStoredPreferences().borderRadius);
   const [checklistBadge, setChecklistBadge] = useState(() => getStoredPreferences().checklistBadge);
