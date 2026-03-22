@@ -31,8 +31,8 @@ function AppContent() {
     if (window.location.pathname === '/login' && token) {
       localStorage.setItem('yucg_token', token);
       localStorage.setItem('yucg_token_time', String(Date.now()));
-      // Redirect to app root - http://localhost:5173/ (set VITE_APP_URL for custom URL)
-      const appRoot = import.meta.env.VITE_APP_URL || 'http://localhost:5173';
+      // Stay on current origin (avoids localhost vs 127.0.0.1 splitting localStorage). Override with VITE_APP_URL if needed.
+      const appRoot = import.meta.env.VITE_APP_URL || window.location.origin;
       window.location.replace(appRoot.replace(/\/$/, '') + '/');
       return;
     }

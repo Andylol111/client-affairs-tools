@@ -67,7 +67,6 @@ export default function EmailStudio() {
   const [sortBy, setSortBy] = useState('created_desc');
   const [activeTab, setActiveTab] = useState<'editor' | 'cache'>('editor');
   const [quickCompose, setQuickCompose] = useState({ name: '', company: '', title: '', email: '' });
-  const [emailFont, setEmailFont] = useState('Lato');
   const [emailFontSize, setEmailFontSize] = useState(14);
   const [drafts, setDrafts] = useState<EmailDraft[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
@@ -625,22 +624,13 @@ export default function EmailStudio() {
                   <button type="button" onClick={() => document.execCommand('formatBlock', false, 'h2')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm font-semibold" title="Heading 2">H2</button>
                   <button type="button" onClick={() => document.execCommand('formatBlock', false, 'h3')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm font-semibold" title="Heading 3">H3</button>
                   <button type="button" onClick={() => document.execCommand('formatBlock', false, 'blockquote')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm border-l-2 border-slate-400 dark:border-slate-500 pl-1" title="Blockquote">"</button>
-                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'pre')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] font-mono text-xs" title="Code block">{"</>"}</button>
+                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'pre')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-xs" title="Code block">{"</>"}</button>
                   <button type="button" onClick={() => document.execCommand('insertUnorderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm" title="Bullet list">• List</button>
                   <button type="button" onClick={() => document.execCommand('insertOrderedList')} className="px-2 py-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm" title="Numbered list">1. List</button>
                   <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
                   <input type="color" defaultValue="#000000" onInput={(e) => { document.execCommand('foreColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Text color" />
                   <input type="color" defaultValue="#ffff00" onInput={(e) => { document.execCommand('backColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Highlight" />
                   <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
-                  <select
-                    value={emailFont}
-                    onChange={(e) => { setEmailFont(e.target.value); if (bodyRef.current) { bodyRef.current.style.fontFamily = e.target.value; } }}
-                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
-                  >
-                    {['Lato', 'Open Sans', 'Roboto', 'Georgia', 'Times New Roman', 'Arial', 'Helvetica', 'Verdana', 'Courier New'].map((f) => (
-                      <option key={f} value={f}>{f}</option>
-                    ))}
-                  </select>
                   <select
                     value={emailFontSize}
                     onChange={(e) => { const s = Number(e.target.value); setEmailFontSize(s); if (bodyRef.current) bodyRef.current.style.fontSize = s + 'px'; }}
@@ -670,7 +660,7 @@ export default function EmailStudio() {
                       contentEditable
                       suppressContentEditableWarning
                       onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: (e.target as HTMLDivElement).innerHTML }))}
-                      style={{ fontFamily: emailFont, fontSize: emailFontSize }}
+                      style={{ fontFamily: "'Lato', system-ui, sans-serif", fontSize: emailFontSize }}
                       className="email-studio-body min-h-[280px] w-full px-3 py-2 rounded-lg border border-slate-300 resize-y overflow-auto focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-0 dark:border-slate-600 dark:focus:ring-offset-transparent"
                     />
                     {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
@@ -824,7 +814,7 @@ export default function EmailStudio() {
                     <div
                       className="text-slate-700 leading-relaxed prose prose-sm max-w-none"
                       style={{
-                        fontFamily: emailFont,
+                        fontFamily: "'Lato', system-ui, sans-serif",
                         fontSize: `${emailFontSize}px`,
                       }}
                     >

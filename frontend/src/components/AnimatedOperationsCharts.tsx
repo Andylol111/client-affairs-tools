@@ -7,7 +7,6 @@ import { useTheme } from '../contexts/ThemeContext';
 
 type Aggregates = { by_event_type?: { event_type: string; count: number }[]; by_resource_type?: { resource_type: string; count: number }[]; days?: number };
 
-const BAR_ANIMATION_MS = 800;
 const STAGGER_MS = 60;
 
 export function AnimatedBarChart({
