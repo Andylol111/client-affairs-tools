@@ -17,8 +17,72 @@ def _is_valid_email_format(email: str) -> bool:
     except Exception:
         return bool(re.match(r"^[^@]+@[^@]+\.[^@]+$", email or ""))
 
-# Role-based prefixes = lower confidence (generic, not personal)
-ROLE_EMAIL_PREFIXES = {"info", "contact", "hello", "hi", "sales", "support", "help", "admin", "hr", "careers", "jobs", "media", "press"}
+# Role / generic inboxes — excluded from employee outreach (domain scrape & list filters)
+ROLE_EMAIL_PREFIXES = frozenset(
+    {
+        "info",
+        "contact",
+        "hello",
+        "hi",
+        "sales",
+        "support",
+        "help",
+        "admin",
+        "hr",
+        "careers",
+        "jobs",
+        "media",
+        "press",
+        "office",
+        "team",
+        "enquiries",
+        "inquiries",
+        "billing",
+        "legal",
+        "privacy",
+        "marketing",
+        "newsletter",
+        "noreply",
+        "no-reply",
+        "donotreply",
+        "mailer",
+        "postmaster",
+        "webmaster",
+    }
+)
+
+# Pages that usually only list generic emails — skip blind regex harvest there
+CONTACT_PAGE_PATH_HINTS = ("contact", "contact-us", "contactus", "get-in-touch", "reach-us")
+TEAM_PAGE_PATH_HINTS = ("team", "about", "people", "leadership", "staff", "our-team", "management", "who-we-are", "bios", "executive")
+
+
+def is_role_based_local_part(local: str) -> bool:
+    """True if local part looks like a shared inbox, not an employee."""
+    if not local:
+        return True
+    low = local.lower().strip()
+    if low in ROLE_EMAIL_PREFIXES:
+        return True
+    return any(low == p or low.startswith(f"{p}+") or low.startswith(f"{p}.") for p in ROLE_EMAIL_PREFIXES)
+
+
+def is_employee_outreach_email(email: str) -> bool:
+    """Viable person outreach: real domain mailbox, not role-based or synthetic placeholder."""
+    if not email or "@" not in email:
+        return False
+    low = email.lower()
+    if "placeholder" in low or ".local" in low.split("@")[-1]:
+        return False
+    local = email.split("@")[0].lower()
+    return not is_role_based_local_part(local)
+
+
+def _url_is_contact_only_page(url: str) -> bool:
+    """True if URL is likely a /contact page without team roster (stricter extraction)."""
+    u = url.lower()
+    if not any(h in u for h in CONTACT_PAGE_PATH_HINTS):
+        return False
+    return not any(h in u for h in TEAM_PAGE_PATH_HINTS)
 
 
 def normalize_domain(domain_or_url: str) -> str:
@@ -115,7 +179,7 @@ def _compute_confidence(
     """
     score = 0
     local = email.split("@")[0].lower() if "@" in email else ""
-    is_role_based = any(local.startswith(p) for p in ROLE_EMAIL_PREFIXES) or local in ROLE_EMAIL_PREFIXES
+    is_role_based = is_role_based_local_part(local)
 
     if mx_valid:
         score += 2  # Domain accepts mail
@@ -200,10 +264,11 @@ async def scrape_contacts_from_domain(
                                 email = match.group().lower()
                                 if domain not in email or email in seen_emails:
                                     continue
-                                seen_emails.add(email)
                                 local = email.split("@")[0].lower()
-                                if not any(local.startswith(p) for p in ROLE_EMAIL_PREFIXES):
-                                    personal_emails_for_format.append(email)
+                                if is_role_based_local_part(local):
+                                    continue
+                                seen_emails.add(email)
+                                personal_emails_for_format.append(email)
                                 name = _extract_name_from_text(text, email) or _extract_name_near_email(resp.text, email)
                                 title = _extract_title_from_text(text) or _infer_title_from_context(resp.text, email)
                                 mx_valid = await validate_email_mx(email)
@@ -218,32 +283,36 @@ async def scrape_contacts_from_domain(
                                     "company": company_name or domain,
                                     "company_domain": domain,
                                     "confidence": confidence,
+                                    "contact_source": "domain_scrape",
                                 })
 
-                    # Then scan full page for any emails we missed
-                    for match in email_regex.finditer(resp.text):
-                        email = match.group().lower()
-                        if domain not in email or email in seen_emails:
-                            continue
-                        seen_emails.add(email)
-                        local = email.split("@")[0].lower()
-                        if not any(local.startswith(p) for p in ROLE_EMAIL_PREFIXES):
+                    # Full-page scan: skip generic /contact pages (only structured blocks above count)
+                    if not _url_is_contact_only_page(url):
+                        for match in email_regex.finditer(resp.text):
+                            email = match.group().lower()
+                            if domain not in email or email in seen_emails:
+                                continue
+                            local = email.split("@")[0].lower()
+                            if is_role_based_local_part(local):
+                                continue
+                            seen_emails.add(email)
                             personal_emails_for_format.append(email)
-                        name = _extract_name_near_email(resp.text, email)
-                        title = _infer_title_from_context(resp.text, email)
-                        mx_valid = await validate_email_mx(email)
-                        confidence = _compute_confidence(
-                            email, name, title, mx_valid, url,
-                            found_with_name=bool(name and name not in ("Unknown", "Contact")),
-                        )
-                        contacts.append({
-                            "name": name or "Unknown",
-                            "email": email,
-                            "title": title,
-                            "company": company_name or domain,
-                            "company_domain": domain,
-                            "confidence": confidence,
-                        })
+                            name = _extract_name_near_email(resp.text, email)
+                            title = _infer_title_from_context(resp.text, email)
+                            mx_valid = await validate_email_mx(email)
+                            confidence = _compute_confidence(
+                                email, name, title, mx_valid, url,
+                                found_with_name=bool(name and name not in ("Unknown", "Contact")),
+                            )
+                            contacts.append({
+                                "name": name or "Unknown",
+                                "email": email,
+                                "title": title,
+                                "company": company_name or domain,
+                                "company_domain": domain,
+                                "confidence": confidence,
+                                "contact_source": "domain_scrape",
+                            })
 
                     # Extract names from team pages for email generator fallback
                     for nd in _extract_names_from_page(soup, url):
@@ -289,27 +358,11 @@ async def scrape_contacts_from_domain(
                         "company": company_name or domain,
                         "company_domain": domain,
                         "confidence": "low",  # Always low - inferred, not found
+                        "contact_source": "inferred",
                     })
                     names_with_emails.add(name.lower())
 
-            # If still no contacts, add placeholder
-            if not contacts and company_name:
-                placeholder_emails = [
-                    f"info@{domain}",
-                    f"contact@{domain}",
-                    f"hello@{domain}",
-                ]
-                for email in placeholder_emails:
-                    if email not in seen_emails:
-                        contacts.append({
-                            "name": "Contact",
-                            "email": email,
-                            "title": "General",
-                            "company": company_name,
-                            "company_domain": domain,
-                            "confidence": "low",
-                        })
-                        break
+            # No placeholder role emails — employee outreach only; use LinkedIn/Apify + team pages for people.
 
     except Exception:
         pass
@@ -454,7 +507,7 @@ def _detect_email_format(emails: list[str], domain: str) -> list[tuple[str, call
         if domain not in email:
             continue
         local = email.split("@")[0].lower()
-        if any(local.startswith(p) for p in ROLE_EMAIL_PREFIXES):
+        if is_role_based_local_part(local):
             continue  # Skip role-based for format detection
 
         # Try to parse as first.last (e.g. john.doe)

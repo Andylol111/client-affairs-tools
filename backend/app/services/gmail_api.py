@@ -7,7 +7,7 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
-from typing import Optional
+from typing import Optional, Any
 import httpx
 
 GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
@@ -251,8 +251,12 @@ async def send_via_gmail_api_with_tracking(
     from_name: Optional[str] = None,
     signature: Optional[str] = None,
     signature_image_url: Optional[str] = None,
-) -> bool:
-    """Send HTML email with open-tracking pixel for campaigns."""
+) -> dict[str, Any]:
+    """Send HTML email with open-tracking pixel for campaigns.
+
+    Returns {"ok": True, "message_id": str|None, "thread_id": str|None} on success.
+    Raises on transport / Gmail errors.
+    """
     from app.routers.track import get_tracking_pixel_url
 
     result = await get_valid_access_token(user_id)
@@ -293,5 +297,9 @@ async def send_via_gmail_api_with_tracking(
             )
         if r.status_code >= 400:
             raise RuntimeError(f"Gmail API error: {r.status_code} - {r.text}")
-
-    return True
+        data = r.json()
+        return {
+            "ok": True,
+            "message_id": data.get("id"),
+            "thread_id": data.get("threadId"),
+        }

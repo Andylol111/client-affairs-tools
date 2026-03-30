@@ -44,32 +44,32 @@ export default function Analytics() {
         <h1 className="text-2xl font-bold text-deep-navy">Analytics Hub</h1>
         <button
           onClick={() => api.analytics.exportCsv().catch((e) => alert((e as Error)?.message))}
-          className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white text-sm font-medium hover:bg-[#1e3a6e]"
+          className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] text-sm font-medium hover:bg-[var(--btn-primary-hover)]"
         >
           Export to CSV
         </button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <div className="p-6 bg-white border border-pale-sky shadow-sm rounded-xl">
+        <div className="surface-card p-6 shadow-sm rounded-xl">
           <div className="text-slate-500 text-sm mb-1">Total Sent</div>
           <div className="text-2xl font-bold text-deep-navy">{dashboard?.total_sent ?? 0}</div>
         </div>
-        <div className="p-6 bg-white border border-pale-sky shadow-sm rounded-xl">
+        <div className="surface-card p-6 shadow-sm rounded-xl">
           <div className="text-slate-500 text-sm mb-1">Opened</div>
           <div className="text-2xl font-bold text-deep-navy">{dashboard?.opened ?? 0}</div>
         </div>
-        <div className="p-6 bg-white border border-pale-sky shadow-sm rounded-xl">
+        <div className="surface-card p-6 shadow-sm rounded-xl">
           <div className="text-slate-500 text-sm mb-1">Open Rate</div>
           <div className="text-2xl font-bold text-steel-blue">{dashboard?.open_rate ?? 0}%</div>
         </div>
-        <div className="p-6 bg-white border border-pale-sky shadow-sm rounded-xl">
+        <div className="surface-card p-6 shadow-sm rounded-xl">
           <div className="text-slate-500 text-sm mb-1">Reply Rate</div>
           <div className="text-2xl font-bold text-steel-blue">{dashboard?.reply_rate ?? 0}%</div>
         </div>
       </div>
 
       {timeSeries && timeSeries.labels?.length > 0 && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6 mb-8">
+        <div className="surface-card shadow-sm rounded-xl p-6 mb-8">
           <h2 className="text-lg font-semibold text-deep-navy mb-4">Activity (last 30 days)</h2>
           <div className="flex items-end gap-0.5 h-32">
             {timeSeries.sent.map((s, i) => (
@@ -93,7 +93,7 @@ export default function Analytics() {
       )}
 
       {campaigns.length > 0 && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6 mb-8">
+        <div className="surface-card shadow-sm rounded-xl p-6 mb-8">
           <h2 className="text-lg font-semibold text-deep-navy mb-4">Per-campaign breakdown</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -125,7 +125,7 @@ export default function Analytics() {
       )}
 
       {pipelineMetrics?.by_status?.length > 0 && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6 mb-8">
+        <div className="surface-card shadow-sm rounded-xl p-6 mb-8">
           <h2 className="text-lg font-semibold text-deep-navy mb-4">Pipeline Overview</h2>
           <div className="flex flex-wrap gap-4">
             {pipelineMetrics.by_status.map((s: any) => (
@@ -137,7 +137,7 @@ export default function Analytics() {
           </div>
         </div>
       )}
-      <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+      <div className="surface-card shadow-sm rounded-xl p-6">
         <h2 className="text-lg font-semibold text-deep-navy mb-4">AI Insights</h2>
         <ul className="space-y-2">
           {insights.map((s, i) => (

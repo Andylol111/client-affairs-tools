@@ -61,12 +61,27 @@ export const api = {
       }).catch(() => ({ ok: false, count: 0 })),
   },
   contacts: {
-    list: (opts?: { company?: string; mine_only?: boolean; q?: string; pipeline_status?: string }) => {
+    companiesSummary: () =>
+      fetchApi<{ company: string; company_domain?: string; contact_count: number }[]>(
+        '/api/contacts/companies/summary'
+      ),
+    list: (opts?: {
+      company?: string;
+      companies?: string;
+      mine_only?: boolean;
+      q?: string;
+      pipeline_status?: string;
+      employee_only?: boolean;
+      limit?: number;
+    }) => {
       const params = new URLSearchParams();
       if (opts?.company) params.set('company', opts.company);
+      if (opts?.companies) params.set('companies', opts.companies);
       if (opts?.mine_only) params.set('mine_only', 'true');
       if (opts?.q?.trim()) params.set('q', opts.q.trim());
       if (opts?.pipeline_status) params.set('pipeline_status', opts.pipeline_status);
+      if (opts?.employee_only) params.set('employee_only', 'true');
+      if (opts?.limit != null) params.set('limit', String(opts.limit));
       return fetchApi<any[]>(`/api/contacts${params.toString() ? '?' + params : ''}`);
     },
     get: (id: number) => fetchApi<any>(`/api/contacts/${id}`),
@@ -96,6 +111,11 @@ export const api = {
         '/api/contacts/search-person',
         { method: 'POST', body: JSON.stringify(data) }
       ),
+    bulkDelete: (contact_ids: number[]) =>
+      fetchApi<{ deleted: number; skipped: number }>('/api/contacts/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify({ contact_ids }),
+      }),
   },
   emails: {
     generate: (data: {
@@ -114,6 +134,8 @@ export const api = {
       fetchApi<any>('/api/emails/test-send', { method: 'POST', body: JSON.stringify(data) }),
     generated: (params?: { contact_id?: number; sort?: string }) =>
       fetchApi<any[]>(`/api/emails/generated${params && Object.keys(params).length ? '?' + new URLSearchParams(params as any) : ''}`),
+    clearGeneratedCache: () =>
+      fetchApi<{ ok: boolean; deleted: number }>('/api/emails/generated', { method: 'DELETE' }),
     generateTemplate: (data: {
       name?: string;
       company?: string;
@@ -456,6 +478,14 @@ export const api = {
     },
     markReplied: (ccId: number) =>
       fetchApi<any>(`/api/outreach/campaign-contacts/${ccId}/mark-replied`, { method: 'POST' }),
+    /** Gmail inbox scan: mark campaign replies and optionally cold → contacted. Requires gmail.readonly (re-auth if needed). */
+    syncInboxReplies: (autoSortContacted = true) =>
+      fetchApi<any>(`/api/outreach/sync-inbox-replies?auto_sort_contacted=${autoSortContacted ? 'true' : 'false'}`, {
+        method: 'POST',
+      }),
+    /** Promote cold → contacted from sent campaign rows (no Gmail). */
+    autoSortPipeline: () =>
+      fetchApi<{ ok: boolean; promoted: number }>('/api/outreach/auto-sort-pipeline', { method: 'POST' }),
     verifyEmail: (email: string) =>
       fetchApi<any>(`/api/outreach/verify-email?email=${encodeURIComponent(email)}`),
     pipelineMetrics: () => fetchApi<any>('/api/outreach/metrics/pipeline'),
