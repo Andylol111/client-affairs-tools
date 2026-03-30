@@ -1,6 +1,9 @@
 """
 Campaigns API - Campaign Manager & Mass Sender
 """
+import asyncio
+import os
+
 from fastapi import APIRouter, HTTPException, Depends
 from app.database import get_db
 from app.auth_deps import get_current_user, get_current_user_optional
@@ -131,11 +134,12 @@ async def send_campaign(campaign_id: int, user: dict = Depends(get_current_user)
         pending = await cursor.fetchall()
         signature = await get_setting("signature")
         signature_image_url = await get_setting("signature_image_url") or None
+        send_delay = float(os.getenv("CAMPAIGN_SEND_DELAY_SEC", "2.0") or 0)
         sent = 0
         errors = []
         for row in pending:
             try:
-                await send_via_gmail_api_with_tracking(
+                send_meta = await send_via_gmail_api_with_tracking(
                     user_id=user["id"],
                     to_email=row["email"],
                     subject=row["email_subject"] or "Quick question",
@@ -144,12 +148,20 @@ async def send_campaign(campaign_id: int, user: dict = Depends(get_current_user)
                     signature=signature,
                     signature_image_url=signature_image_url,
                 )
+                tid = send_meta.get("thread_id")
+                mid = send_meta.get("message_id")
                 await db.execute(
                     """UPDATE campaign_contacts SET status = 'sent', sent_at = CURRENT_TIMESTAMP,
-                       last_sequence_sent_at = CURRENT_TIMESTAMP WHERE id = ?""",
-                    (row["id"],),
+                       last_sequence_sent_at = CURRENT_TIMESTAMP,
+                       sent_by_user_id = ?,
+                       gmail_thread_id = COALESCE(?, gmail_thread_id),
+                       gmail_message_id = COALESCE(?, gmail_message_id)
+                       WHERE id = ?""",
+                    (user["id"], tid, mid, row["id"]),
                 )
                 sent += 1
+                if send_delay > 0:
+                    await asyncio.sleep(send_delay)
             except Exception as e:
                 errors.append({"contact_id": row["contact_id"], "error": str(e)})
 
@@ -193,13 +205,14 @@ async def update_campaign(
     payload: CampaignUpdate,
     user: dict = Depends(get_current_user),
 ):
-    """Update campaign (e.g. attach a follow-up sequence)."""
+    """Update campaign (e.g. attach or clear a follow-up sequence)."""
     db = await get_db()
     try:
-        if payload.sequence_id is not None:
+        data = payload.model_dump(exclude_unset=True)
+        if "sequence_id" in data:
             await db.execute(
                 "UPDATE campaigns SET sequence_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (payload.sequence_id, campaign_id),
+                (data["sequence_id"], campaign_id),
             )
             await db.commit()
         cursor = await db.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))

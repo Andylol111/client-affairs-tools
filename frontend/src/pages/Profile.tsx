@@ -10,7 +10,7 @@ import { getStoredPreferences, savePreferences, applyUserPreferences, resetPrefe
 
 export default function Profile() {
   const { user } = useOutletContext<{ user: { email: string; name?: string; picture?: string; role?: string } }>();
-  const { theme, toggleDark } = useTheme();
+  const { theme, setTheme } = useTheme();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<'profile' | 'settings'>(
@@ -180,13 +180,13 @@ export default function Profile() {
       <div className="flex gap-2 mb-6 border-b border-pale-sky">
         <button
           onClick={() => { setActiveTab('profile'); setSearchParams({}); }}
-          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'profile' ? 'bg-[#1a2f5a] text-white' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50'}`}
-        >
-          Profile
+          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'profile' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
+          >
+            Profile
         </button>
         <button
           onClick={() => { setActiveTab('settings'); setSearchParams({ tab: 'settings' }); }}
-          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'settings' ? 'bg-[#1a2f5a] text-white' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50'}`}
+          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'settings' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
         >
           Settings
         </button>
@@ -195,7 +195,7 @@ export default function Profile() {
       {activeTab === 'profile' && (
         <div className="space-y-6">
           {assignedProjects.length > 0 && (
-            <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+            <div className="surface-card shadow-sm rounded-xl p-6">
               <h2 className="font-semibold text-deep-navy mb-4">Your Project Assignments</h2>
               <p className="text-sm text-slate-600 mb-4">Projects you&apos;re assigned to this semester (managed by admins).</p>
               <ul className="space-y-2">
@@ -208,7 +208,7 @@ export default function Profile() {
               </ul>
             </div>
           )}
-          <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+          <div className="surface-card shadow-sm rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Your Profile</h2>
             <p className="text-sm text-slate-600 mb-4">Build your profile so teammates can see your projects, experience, and how to connect.</p>
             <div className="space-y-4">
@@ -263,7 +263,7 @@ export default function Profile() {
                   />
                 </div>
               </div>
-              <button onClick={saveProfile} className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">
+              <button onClick={saveProfile} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
                 {saved ? 'Saved!' : 'Save Profile'}
               </button>
             </div>
@@ -273,28 +273,28 @@ export default function Profile() {
 
       {activeTab === 'settings' && (
         <div className="space-y-8">
-          <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky dark:border-slate-600 shadow-sm rounded-xl p-6">
+          <div className="surface-card shadow-sm rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Appearance</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">Choose light or dark theme.</p>
-            <div className="inline-flex p-1 rounded-xl bg-pale-sky/60 dark:bg-slate-700/60 border border-pale-sky/50 dark:border-slate-500">
+            <div className="inline-flex p-1 rounded-xl bg-pale-sky/70 dark:bg-slate-700/80 border border-pale-sky dark:border-slate-500">
               <button
                 type="button"
-                onClick={() => theme !== 'light' && toggleDark()}
-                className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 ease-out pillbox-pill ${
+                onClick={() => setTheme('light')}
+                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                   theme === 'light'
-                    ? 'bg-[#1a2f5a] text-white shadow-md'
-                    : 'text-slate-600 dark:text-slate-400 bg-transparent hover:bg-pale-sky/40 dark:hover:bg-slate-600/50'
+                    ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+                    : 'text-deep-navy/80 dark:text-slate-300 bg-transparent hover:bg-white/70 dark:hover:bg-slate-600/60'
                 }`}
               >
                 Light
               </button>
               <button
                 type="button"
-                onClick={() => theme !== 'dark' && toggleDark()}
-                className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-all duration-300 ease-out pillbox-pill ${
+                onClick={() => setTheme('dark')}
+                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
                   theme === 'dark'
-                    ? 'bg-[#1a2f5a] text-white shadow-md'
-                    : 'text-slate-600 dark:text-slate-400 bg-transparent hover:bg-pale-sky/40 dark:hover:bg-slate-600/50'
+                    ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+                    : 'text-deep-navy/80 dark:text-slate-300 bg-transparent hover:bg-white/70 dark:hover:bg-slate-600/60'
                 }`}
               >
                 Dark
@@ -409,7 +409,7 @@ export default function Profile() {
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Restore Original Appearance Settings.</p>
             </div>
           </div>
-          <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+          <div className="surface-card shadow-sm rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Notification Preferences</h2>
             <label className="flex items-center gap-2 mb-2">
               <input type="checkbox" checked={notifPrefs.admin_digest} onChange={(e) => setNotifPrefs((p) => ({ ...p, admin_digest: e.target.checked }))} />
@@ -419,11 +419,11 @@ export default function Profile() {
               <input type="checkbox" checked={notifPrefs.campaign_summary} onChange={(e) => setNotifPrefs((p) => ({ ...p, campaign_summary: e.target.checked }))} />
               <span className="text-sm">Campaign summary</span>
             </label>
-            <button onClick={saveNotifPrefs} className="mt-4 px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">Save Preferences</button>
+            <button onClick={saveNotifPrefs} className="mt-4 px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">Save Preferences</button>
           </div>
           {isAdmin && (
             <>
-              <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+              <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Login Log</h2>
                 {loginLog.length === 0 ? <p className="text-slate-500 text-sm">No logins yet.</p> : (
                   <ul className="space-y-2 max-h-48 overflow-y-auto">
@@ -437,7 +437,7 @@ export default function Profile() {
                   </ul>
                 )}
               </div>
-              <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+              <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Email Attachments</h2>
                 <label className="flex items-center gap-2 mb-4">
                   <input type="checkbox" checked={attachmentsEnabled} onChange={(e) => setAttachmentsEnabled(e.target.checked)} />
@@ -469,7 +469,7 @@ export default function Profile() {
                   </div>
                 )}
               </div>
-              <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+              <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Email Signature</h2>
                 <p className="text-sm text-slate-600 mb-2">This signature is appended to all outgoing emails. Type text and paste or insert images (e.g. logo) directly in the box below.</p>
                 <SignatureEditor value={signature} onChange={setSignature} placeholder="Best regards,&#10;Your Name&#10;YUCG" minHeight="140px" />
@@ -477,12 +477,12 @@ export default function Profile() {
                 <input type="url" value={signatureImageUrl} onChange={(e) => setSignatureImageUrl(e.target.value)} placeholder="https://example.com/logo.png" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800" />
                 {signatureImageUrl && <img src={signatureImageUrl} alt="Signature" className="mt-2 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />}
               </div>
-              <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+              <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Custom Email Formats</h2>
                 <div className="flex gap-2 mb-4">
                   <input value={newFormatName} onChange={(e) => setNewFormatName(e.target.value)} placeholder="Name" className="flex-1 px-3 py-2 rounded-lg border" />
                   <input value={newFormatPattern} onChange={(e) => setNewFormatPattern(e.target.value)} placeholder="Pattern" className="flex-1 px-3 py-2 rounded-lg border" />
-                  <button onClick={addFormat} disabled={!newFormatName.trim() || !newFormatPattern.trim()} className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white disabled:opacity-50">{formatAdded ? 'Added!' : 'Add'}</button>
+                  <button onClick={addFormat} disabled={!newFormatName.trim() || !newFormatPattern.trim()} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] disabled:hover:bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] disabled:opacity-50">{formatAdded ? 'Added!' : 'Add'}</button>
                 </div>
                 <ul className="space-y-2">
                   {customFormats.map((f) => (
@@ -493,7 +493,7 @@ export default function Profile() {
                   ))}
                 </ul>
               </div>
-              <button onClick={saveSettings} className="px-6 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">{saved ? 'Saved!' : 'Save Settings'}</button>
+              <button onClick={saveSettings} className="px-6 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">{saved ? 'Saved!' : 'Save Settings'}</button>
             </>
           )}
         </div>

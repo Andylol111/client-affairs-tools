@@ -71,7 +71,7 @@ export default function Dashboard() {
       </div>
 
       {/* Usage Guide */}
-      <div className="bg-white border border-pale-sky rounded-xl p-6 mb-8 shadow-sm">
+      <div className="surface-card rounded-xl p-6 mb-8 shadow-sm">
         <h2 className="text-lg font-semibold text-deep-navy mb-4">How to Use YUCG Outreach</h2>
         <ol className="space-y-4 text-slate-600 list-decimal list-inside">
           <li>
@@ -98,7 +98,7 @@ export default function Dashboard() {
           <Link
             key={c.label}
             to={c.link || '#'}
-            className={`block p-4 rounded-xl bg-white border border-pale-sky shadow-sm hover:border-steel-blue/50 hover:shadow transition-colors ${
+            className={`block p-4 rounded-xl surface-card shadow-sm hover:border-steel-blue/50 hover:shadow transition-colors ${
               !c.link ? 'cursor-default' : ''
             }`}
           >
@@ -107,7 +107,7 @@ export default function Dashboard() {
           </Link>
         ))}
       </div>
-      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+      <div className="surface-card rounded-xl p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-deep-navy mb-4">AI Insights</h2>
         <ul className="space-y-2">
           {insights.length === 0 ? (

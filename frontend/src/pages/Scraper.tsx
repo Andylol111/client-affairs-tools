@@ -104,7 +104,10 @@ export default function Scraper() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 pb-12">
-      <h1 className="text-2xl font-semibold text-deep-navy mb-8 pt-2">Contact Scraper</h1>
+      <h1 className="text-2xl font-semibold text-deep-navy mb-4 pt-2">Contact Scraper</h1>
+      <p className="text-sm text-slate-600 mb-6 max-w-3xl leading-relaxed">
+        Saves <strong>employee-style</strong> emails only (no info@, sales@, etc.). Website crawl skips generic contact pages for raw harvesting; use a <strong>LinkedIn company URL</strong> with an Apify token for reliable people + titles, then we infer addresses from your company domain when needed. Tavily “Find contact” remains a free-form web hint, not verified email.
+      </p>
 
       {/* Segmented control (pill box) */}
       <div className="inline-flex p-1 rounded-xl bg-pale-sky/60 mb-8">
@@ -112,8 +115,8 @@ export default function Scraper() {
           onClick={() => { setActiveTab('scrape'); setError(''); setFindResult(null); }}
           className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
             activeTab === 'scrape'
-              ? 'bg-[#1a2f5a] text-white shadow-sm'
-              : 'text-[#3d5c82] hover:bg-[#1e3a6e] hover:text-white'
+              ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+              : 'text-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:text-[var(--btn-primary-text)]'
           }`}
         >
           Scrape Website
@@ -122,8 +125,8 @@ export default function Scraper() {
           onClick={() => { setActiveTab('find'); setError(''); }}
           className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
             activeTab === 'find'
-              ? 'bg-[#1a2f5a] text-white shadow-sm'
-              : 'text-[#3d5c82] hover:bg-[#1e3a6e] hover:text-white'
+              ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+              : 'text-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:text-[var(--btn-primary-text)]'
           }`}
         >
           Find Contact
@@ -132,8 +135,8 @@ export default function Scraper() {
           onClick={() => { setActiveTab('import'); setError(''); setFindResult(null); }}
           className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
             activeTab === 'import'
-              ? 'bg-[#1a2f5a] text-white shadow-sm'
-              : 'text-[#3d5c82] hover:bg-[#1e3a6e] hover:text-white'
+              ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+              : 'text-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:text-[var(--btn-primary-text)]'
           }`}
         >
           Import Spreadsheet
@@ -142,7 +145,7 @@ export default function Scraper() {
 
       {activeTab === 'scrape' && (
         <div className="space-y-6">
-          <div className="bg-white rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-pale-sky">
+          <div className="bg-white rounded-2xl overflow-hidden shadow-sm border border-pale-sky">
             <div className="px-5 py-4 border-b border-pale-sky">
               <h2 className="text-[15px] font-semibold text-deep-navy">Scrape from Web</h2>
               <p className="text-[13px] text-slate-500 mt-0.5">
@@ -192,7 +195,7 @@ export default function Scraper() {
               <button
                 onClick={handleScrape}
                 disabled={loading || (!companyName && !domain && !linkedinUrl)}
-                className="w-full py-3.5 rounded-xl bg-[#1a2f5a] hover:bg-[#1e3a6e] active:scale-[0.99] text-white text-[15px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 transition-all"
+                className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.99] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 transition-all"
               >
                 {loading ? 'Scraping...' : 'Start Scraping'}
               </button>
@@ -205,7 +208,7 @@ export default function Scraper() {
 
       {activeTab === 'find' && (
         <div className="space-y-6">
-          <div className="bg-white dark:bg-[var(--bg-card)] rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-pale-sky">
+          <div className="surface-card rounded-2xl overflow-hidden shadow-sm">
             <div className="px-5 py-4 border-b border-pale-sky">
               <h2 className="text-[15px] font-semibold text-deep-navy">Find A Contact</h2>
               <p className="text-[13px] text-slate-500 mt-0.5">
@@ -232,14 +235,14 @@ export default function Scraper() {
               <button
                 onClick={handleFindContact}
                 disabled={findLoading || !findName.trim()}
-                className="w-full py-3.5 rounded-xl bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white text-[15px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
                 {findLoading ? 'Searching...' : 'Search for Contact'}
               </button>
             </div>
           </div>
           {findResult && (
-            <div className="bg-white dark:bg-[var(--bg-card)] rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-pale-sky p-5">
+            <div className="surface-card rounded-2xl overflow-hidden shadow-sm p-5">
               <h3 className="text-[15px] font-semibold text-deep-navy mb-3">Results for “{findResult.query}”</h3>
               {findResult.message && !findResult.results?.length && (
                 <p className="text-[13px] text-slate-500 mb-3">{findResult.message}</p>
@@ -274,7 +277,7 @@ export default function Scraper() {
 
       {activeTab === 'import' && (
         <div className="space-y-6">
-          <div className="bg-white rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-pale-sky">
+          <div className="bg-white rounded-2xl overflow-hidden shadow-sm border border-pale-sky">
             <div className="px-5 py-4 border-b border-pale-sky">
               <h2 className="text-[15px] font-semibold text-deep-navy">Import from Spreadsheet</h2>
               <p className="text-[13px] text-slate-500 mt-0.5">
@@ -292,7 +295,7 @@ export default function Scraper() {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={importing}
-                className="w-full py-3.5 rounded-xl bg-[#1a2f5a] hover:bg-[#1e3a6e] active:scale-[0.99] text-white text-[15px] font-semibold disabled:opacity-50 transition-all"
+                className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.99] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-50 transition-all"
               >
                 {importing ? 'Importing...' : 'Import File'}
               </button>
@@ -304,7 +307,7 @@ export default function Scraper() {
       )}
 
       {contacts.length > 0 && (
-        <div className="mt-8 bg-white rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-pale-sky">
+        <div className="mt-8 bg-white rounded-2xl overflow-hidden shadow-sm border border-pale-sky">
           <div className="px-5 py-4 border-b border-pale-sky">
             <h2 className="text-[15px] font-semibold text-deep-navy">Discovered ({contacts.length})</h2>
           </div>

@@ -234,8 +234,13 @@ async def init_db():
         """)
         await db.commit()
 
-        # Migration: add pipeline_status, owner_id, email_verified to contacts
-        for col, col_type in [("pipeline_status", "TEXT DEFAULT 'cold'"), ("owner_id", "INTEGER REFERENCES users(id)"), ("email_verified", "INTEGER DEFAULT 0")]:
+        # Migration: add pipeline_status, owner_id, email_verified, contact_source to contacts
+        for col, col_type in [
+            ("pipeline_status", "TEXT DEFAULT 'cold'"),
+            ("owner_id", "INTEGER REFERENCES users(id)"),
+            ("email_verified", "INTEGER DEFAULT 0"),
+            ("contact_source", "TEXT"),
+        ]:
             try:
                 await db.execute(f"ALTER TABLE contacts ADD COLUMN {col} {col_type}")
                 await db.commit()
@@ -249,6 +254,17 @@ async def init_db():
         except Exception:
             pass
         for col, col_type in [("sequence_step_sent", "INTEGER DEFAULT 0"), ("last_sequence_sent_at", "TIMESTAMP")]:
+            try:
+                await db.execute(f"ALTER TABLE campaign_contacts ADD COLUMN {col} {col_type}")
+                await db.commit()
+            except Exception:
+                pass
+
+        for col, col_type in [
+            ("gmail_thread_id", "TEXT"),
+            ("gmail_message_id", "TEXT"),
+            ("sent_by_user_id", "INTEGER REFERENCES users(id)"),
+        ]:
             try:
                 await db.execute(f"ALTER TABLE campaign_contacts ADD COLUMN {col} {col_type}")
                 await db.commit()

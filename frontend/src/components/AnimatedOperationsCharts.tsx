@@ -45,12 +45,12 @@ export function AnimatedBarChart({
         borderColor: isDark ? '#475569' : '#e2e8f0',
       }}
     >
-      <h4 className="text-sm font-semibold mb-4" style={{ color: isDark ? 'var(--text-primary)' : '#1e293b' }}>
+      <h4 className="text-sm font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
         {title}
       </h4>
       <div className="space-y-3">
         {sorted.length === 0 && (
-          <p className="text-sm" style={{ color: isDark ? '#94a3b8' : '#64748b' }}>No data yet.</p>
+          <p className="text-sm" style={{ color: 'var(--text-primary)' }}>No data yet.</p>
         )}
         {sorted.map((row, i) => {
           const value = Number(row[valueKey]);
@@ -58,10 +58,10 @@ export function AnimatedBarChart({
           return (
             <div key={String(row[labelKey] || i)} className="space-y-1">
               <div className="flex justify-between text-xs">
-                <span className="truncate pr-2" style={{ color: isDark ? '#e2e8f0' : '#334155' }}>
+                <span className="truncate pr-2" style={{ color: 'var(--text-primary)' }}>
                   {String(row[labelKey] || '—')}
                 </span>
-                <span className="font-medium tabular-nums shrink-0" style={{ color: isDark ? '#94a3b8' : '#64748b' }}>
+                <span className="font-medium tabular-nums shrink-0" style={{ color: 'var(--text-primary)' }}>
                   {value}
                 </span>
               </div>
@@ -75,7 +75,7 @@ export function AnimatedBarChart({
                   className="h-full rounded transition-all duration-500 ease-out flex items-center"
                   style={{
                     width: mounted ? `${pct}%` : '0%',
-                    background: isDark ? 'linear-gradient(90deg, #3d5c82, #5b7fa6)' : 'linear-gradient(90deg, #1a2f5a, #3d5c82)',
+                    background: isDark ? 'linear-gradient(90deg, #3d5c82, #5b7fa6)' : 'linear-gradient(90deg, #3d5c82, #5b7fa6)',
                     transitionDelay: `${i * STAGGER_MS}ms`,
                   }}
                 />

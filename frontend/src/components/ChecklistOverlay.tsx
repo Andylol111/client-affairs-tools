@@ -67,7 +67,7 @@ export default function ChecklistOverlay() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="fixed bottom-6 right-6 z-40 w-12 h-12 rounded-full shadow-lg bg-[#1a2f5a] dark:bg-[var(--bg-card)] text-white dark:text-[var(--text-primary)] border border-pale-sky dark:border-slate-600 flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
+        className="fixed bottom-6 right-6 z-40 w-12 h-12 rounded-full bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] border border-pale-sky dark:border-slate-600 flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
         title="Checklist (Ctrl+Shift+L)"
         aria-label="Toggle checklist"
       >
@@ -85,7 +85,7 @@ export default function ChecklistOverlay() {
             aria-hidden
             onClick={() => setOpen(false)}
           />
-          <div className="relative w-full max-w-md rounded-xl shadow-2xl border border-pale-sky dark:border-slate-600 bg-white dark:bg-[var(--bg-card)] overflow-hidden animate-[fadeIn_0.2s_ease-out]">
+          <div className="relative w-full max-w-md rounded-xl shadow-2xl surface-card overflow-hidden animate-[fadeIn_0.2s_ease-out]">
             <div className="px-4 py-3 border-b border-pale-sky dark:border-slate-600 flex items-center justify-between">
               <h3 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Checklist</h3>
               <button
@@ -110,7 +110,7 @@ export default function ChecklistOverlay() {
                 <button
                   type="button"
                   onClick={addItem}
-                  className="px-4 py-2 rounded-lg bg-[#1a2f5a] dark:bg-steel-blue text-white font-medium shrink-0"
+                  className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium shrink-0"
                 >
                   Add
                 </button>
