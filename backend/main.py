@@ -1,7 +1,4 @@
-"""
-ClientReach AI - Intelligent Client Outreach Platform
-Backend API - FastAPI
-"""
+
 import os
 import asyncio
 from pathlib import Path
