@@ -40,7 +40,7 @@ export default function CommunitySidebar() {
   };
 
   return (
-    <aside className="w-64 flex-shrink-0 border-l border-pale-sky dark:border-slate-600 bg-white/50 dark:bg-[var(--bg-card)] flex flex-col min-h-full">
+    <aside className="w-64 flex-shrink-0 border-l border-[var(--border)] bg-[var(--bg-card)] flex flex-col min-h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
         <div>
           <h3 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-3">Team</h3>

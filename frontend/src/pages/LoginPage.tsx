@@ -29,7 +29,7 @@ export default function LoginPage() {
   // Still processing OAuth callback (token in URL, about to redirect)
   if (token) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100">
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)]">
         <div className="text-center">
           <div className="animate-spin w-10 h-10 border-2 border-deep-navy border-t-transparent rounded-full mx-auto mb-4" />
           <p className="text-slate-600">Signing you in...</p>
@@ -39,8 +39,8 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
-      <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md border border-pale-sky">
+    <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)] p-4">
+      <div className="surface-card rounded-2xl shadow-xl p-8 w-full max-w-md">
         <div className="flex justify-center mb-6">
           <img
             src="/yucg-logo.png"

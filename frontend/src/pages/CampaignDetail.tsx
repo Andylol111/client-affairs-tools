@@ -134,7 +134,7 @@ export default function CampaignDetail() {
         </button>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-pale-sky rounded-xl p-6 shadow-sm">
+        <div className="surface-card rounded-xl p-6 shadow-sm">
           <h2 className="font-semibold text-deep-navy mb-4">Add Contacts</h2>
           <p className="text-slate-500 text-sm mb-4">Select contacts to add. Generate emails in Email Studio first, then add them here.</p>
           <input
@@ -175,13 +175,13 @@ export default function CampaignDetail() {
             <button
               onClick={() => addSelected(true)}
               disabled={selectedIds.size === 0 || generating}
-              className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white font-medium disabled:opacity-50"
+              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
             >
               {generating ? 'Generating With Ollama...' : 'Generate & Add'}
             </button>
           </div>
         </div>
-        <div className="bg-white border border-pale-sky rounded-xl overflow-hidden shadow-sm">
+        <div className="surface-card rounded-xl overflow-hidden shadow-sm">
           <div className="px-6 py-4 border-b border-pale-sky">
             <h2 className="font-semibold text-deep-navy">Campaign Contacts ({campaign.contacts?.length ?? 0})</h2>
           </div>

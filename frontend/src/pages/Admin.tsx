@@ -209,7 +209,7 @@ export default function Admin() {
         <h1 className="text-2xl font-bold text-deep-navy dark:text-[var(--text-primary)]">Admin Panel</h1>
         <button
           onClick={() => api.admin.exportAllZip().then(() => toast.addToast('Export all (ZIP) downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-          className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+          className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
         >
           Export all (ZIP)
         </button>
@@ -221,7 +221,7 @@ export default function Admin() {
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`px-4 py-2 rounded-t-lg font-medium capitalize ${
-              activeTab === tab ? 'bg-[#1a2f5a] text-white' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50'
+              activeTab === tab ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'
             }`}
           >
             {tab === '2fa' ? '2FA' : tab === 'operations' ? 'Operations' : tab}
@@ -233,7 +233,7 @@ export default function Admin() {
 
       {activeTab === 'users' && (
         <div className="space-y-6">
-          <div className="bg-white border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Invite User</h2>
             <p className="text-sm text-slate-600 mb-4">Add a @yale.edu email. They will be able to sign in with Google.</p>
             <div className="flex gap-2">
@@ -244,12 +244,12 @@ export default function Admin() {
                 placeholder="email@yale.edu"
                 className="flex-1 px-3 py-2 rounded-lg border border-pale-sky"
               />
-              <button onClick={handleInvite} className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">
+              <button onClick={handleInvite} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
                 Invite
               </button>
             </div>
           </div>
-          <div className="bg-white border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
               <h2 className="font-semibold text-deep-navy">Users</h2>
               <button
@@ -262,7 +262,7 @@ export default function Admin() {
                     toast.addToast((e as Error)?.message || 'Export failed', 'error');
                   }
                 }}
-                className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white font-medium"
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-white font-medium"
               >
                 Export to Excel
               </button>
@@ -330,7 +330,7 @@ export default function Admin() {
 
       {activeTab === 'projects' && (
         <div className="space-y-6">
-          <div className="bg-white border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Create Project</h2>
             <p className="text-sm text-slate-600 mb-4">Add semester + client projects (e.g. Spring 2026 - Project Lego). Assign team members to each project.</p>
             <div className="flex flex-wrap gap-2 mb-4">
@@ -368,13 +368,13 @@ export default function Admin() {
                     setError((e as Error)?.message || 'Failed');
                   }
                 }}
-                className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
               >
                 Add Project
               </button>
             </div>
           </div>
-          <div className="bg-white border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Projects & Assignments</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -440,7 +440,7 @@ export default function Admin() {
           </div>
           {assignUserModal && (
             <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setAssignUserModal(null)}>
-              <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="surface-card rounded-xl p-6 max-w-md w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
                 <h3 className="font-semibold text-deep-navy mb-4">Assign to {assignUserModal.projectName}</h3>
                 <input
                   value={assignRole}
@@ -479,12 +479,12 @@ export default function Admin() {
       )}
 
       {activeTab === 'audit' && (
-        <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky rounded-xl p-6">
+        <div className="surface-card rounded-xl p-6">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Audit Log</h2>
             <button
               onClick={() => api.admin.exportAuditLogExcel().then(() => toast.addToast('Audit log export downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-              className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
             >
               Export to Excel
             </button>
@@ -506,7 +506,7 @@ export default function Admin() {
 
       {activeTab === 'apikeys' && (
         <div className="space-y-6">
-          <div className="bg-white border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Create API Key</h2>
             <p className="text-sm text-slate-600 mb-4">For integrations (SharePoint, Zapier, etc.). Store securely.</p>
             <div className="flex gap-2 mb-4">
@@ -516,7 +516,7 @@ export default function Admin() {
                 placeholder="Key name (e.g. SharePoint)"
                 className="flex-1 px-3 py-2 rounded-lg border border-pale-sky"
               />
-              <button onClick={handleCreateKey} className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">
+              <button onClick={handleCreateKey} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
                 Create
               </button>
             </div>
@@ -527,7 +527,7 @@ export default function Admin() {
               </div>
             )}
           </div>
-          <div className="bg-white border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Your API Keys</h2>
             <ul className="space-y-2">
               {apiKeys.map((k) => (
@@ -557,7 +557,7 @@ export default function Admin() {
       )}
 
       {activeTab === '2fa' && (
-        <div className="bg-white border border-pale-sky rounded-xl p-6">
+        <div className="surface-card rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Two-Factor Authentication</h2>
           <p className="text-sm text-slate-600 mb-4">Add an extra layer of security for your admin account.</p>
           {twoFactorStatus === 'enabled' && (
@@ -566,7 +566,7 @@ export default function Admin() {
           <div className="space-y-4">
             {(twoFactorStatus === 'not_setup' || twoFactorStatus === 'pending' || twoFactorStatus === null) && (
               <div className="flex gap-2 flex-wrap">
-                <button onClick={handle2FASetup} className="btn-press px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">
+                <button onClick={handle2FASetup} className="btn-press px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
                   {twoFactorStatus === 'pending' && !qrDataUrl ? 'Regenerate QR Code' : twoFactorStatus === 'pending' ? 'Regenerate QR Code' : 'Setup 2FA'}
                 </button>
               </div>
@@ -593,7 +593,7 @@ export default function Admin() {
                 maxLength={6}
               />
               {(twoFactorStatus === 'pending' || twoFactorStatus === null) && (
-                <button onClick={handle2FAVerify} className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium">
+                <button onClick={handle2FAVerify} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
                   Verify
                 </button>
               )}
@@ -614,7 +614,7 @@ export default function Admin() {
 
       {activeTab === 'operations' && (
         <div className="space-y-8 max-w-6xl">
-          <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Operations Intelligence</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
               Private, internal-only. Usage data and YUCG resources train the AI to learn how the club operates. Ollama runs locally; data never leaves your environment.
@@ -635,19 +635,19 @@ export default function Admin() {
               </label>
               <button
                 onClick={() => api.admin.operations.exportInsightsExcel(opsDays).then(() => toast.addToast('Export downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-                className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
               >
                 Export to Excel
               </button>
               <button
                 onClick={() => api.admin.operations.exportChartsZip(opsDays).then(() => toast.addToast('Charts ZIP downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-                className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
               >
                 Download charts (ZIP)
               </button>
               <button
                 onClick={() => api.admin.operations.exportFullZip(opsDays).then(() => toast.addToast('Full export (ZIP with cache) downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-                className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
               >
                 Download full export (ZIP + cache)
               </button>
@@ -813,7 +813,7 @@ export default function Admin() {
             {opsEvents.length === 0 && <p className="text-sm text-slate-500 mt-2">No events in this period.</p>}
           </div>
 
-          <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">YUCG resources (for Ollama)</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Upload or paste internal docs so the AI can learn from past workstreams and how the club operates.</p>
             <div className="flex flex-wrap gap-2 mb-4 items-center">
@@ -853,7 +853,7 @@ export default function Admin() {
                 } catch (err) { toast.addToast((err as Error).message, 'error'); }
               }}
               disabled={!opsResourceName.trim() || !opsResourceText.trim()}
-              className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
+              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
             >
               Add Resource
             </button>
@@ -867,7 +867,7 @@ export default function Admin() {
             </ul>
           </div>
 
-          <div className="bg-white dark:bg-[var(--bg-card)] border border-pale-sky rounded-xl p-6">
+          <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Ask Ollama (operations analyst)</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Uses ingested YUCG resources and usage events. Runs locally; no data leaves your environment.</p>
             <textarea value={opsOllamaQuery} onChange={(e) => setOpsOllamaQuery(e.target.value)} placeholder="e.g. What types of campaigns do we run most? What email tones are popular?" rows={3} className="w-full px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700 mb-2" />
@@ -883,7 +883,7 @@ export default function Admin() {
                 setOpsOllamaLoading(false);
               }}
               disabled={opsOllamaLoading || !opsOllamaQuery.trim()}
-              className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
+              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
             >
               {opsOllamaLoading ? 'Asking...' : 'Ask'}
             </button>

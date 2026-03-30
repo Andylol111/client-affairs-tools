@@ -158,6 +158,21 @@ async def list_generated_emails(
         await db.close()
 
 
+@router.delete("/generated")
+async def clear_generated_emails_cache(user: dict = Depends(get_current_user)):
+    """Remove all AI-generated email records for the current user (studio cache only — does not delete contacts)."""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM generated_emails WHERE user_id = ?", (user["id"],))
+        cur = await db.execute("SELECT changes() AS n")
+        row = await cur.fetchone()
+        n = int(row["n"]) if row and row["n"] is not None else 0
+        await db.commit()
+        return {"ok": True, "deleted": n}
+    finally:
+        await db.close()
+
+
 @router.post("/generate-batch")
 async def generate_emails_batch(requests: list[EmailGenerateRequest], user: dict = Depends(get_current_user)):
     """Generate emails for multiple contacts (batch)."""

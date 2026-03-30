@@ -1,6 +1,10 @@
 """
 Follow-up sequence job: send due follow-up emails for campaigns that have a sequence attached.
 Run daily (e.g. via APScheduler or cron). Uses the sequence owner's Gmail to send.
+
+Skips contacts who have already replied (replied_at set or status = 'replied'), so follow-ups
+only go to recipients who have not responded. Replies can be recorded via the mark-replied API
+(Campaign detail / outreach); automatic Gmail thread detection is not implemented yet.
 """
 from datetime import datetime, timezone
 from app.database import get_db
@@ -54,14 +58,15 @@ async def run_follow_up_sequences() -> dict:
             signature = await get_setting("signature") or ""
             signature_image_url = await get_setting("signature_image_url") or None
 
-            # Campaign contacts that are sent and have a next step due
+            # Campaign contacts: initial send done, sequence not finished, no reply yet
             cursor = await db.execute(
                 """SELECT cc.id, cc.contact_id, cc.sequence_step_sent, cc.last_sequence_sent_at
                    FROM campaign_contacts cc
                    JOIN contacts c ON c.id = cc.contact_id
                    WHERE cc.campaign_id = ? AND cc.status = 'sent'
                      AND cc.sequence_step_sent < ?
-                     AND cc.last_sequence_sent_at IS NOT NULL""",
+                     AND cc.last_sequence_sent_at IS NOT NULL
+                     AND cc.replied_at IS NULL""",
                 (cid, len(steps)),
             )
             contacts = await cursor.fetchall()
@@ -98,7 +103,7 @@ async def run_follow_up_sequences() -> dict:
                 body = step["body"] or ""
 
                 try:
-                    await send_via_gmail_api_with_tracking(
+                    send_meta = await send_via_gmail_api_with_tracking(
                         user_id=sender_user_id,
                         to_email=to_email,
                         subject=subject,
@@ -107,10 +112,15 @@ async def run_follow_up_sequences() -> dict:
                         signature=signature,
                         signature_image_url=signature_image_url,
                     )
+                    tid = send_meta.get("thread_id")
+                    mid = send_meta.get("message_id")
                     await db.execute(
-                        """UPDATE campaign_contacts SET sequence_step_sent = ?, last_sequence_sent_at = CURRENT_TIMESTAMP
+                        """UPDATE campaign_contacts SET sequence_step_sent = ?, last_sequence_sent_at = CURRENT_TIMESTAMP,
+                           sent_by_user_id = COALESCE(?, sent_by_user_id),
+                           gmail_thread_id = COALESCE(?, gmail_thread_id),
+                           gmail_message_id = ?
                            WHERE id = ?""",
-                        (step_idx + 1, cc["id"]),
+                        (step_idx + 1, sender_user_id, tid, mid, cc["id"]),
                     )
                     await db.commit()
                     sent += 1

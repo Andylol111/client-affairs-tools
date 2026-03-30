@@ -337,11 +337,44 @@ async def mark_campaign_contact_replied(cc_id: int, user: dict = Depends(get_cur
         row = await cursor.fetchone()
         if row and row["contact_id"]:
             await db.execute(
-                "UPDATE contacts SET pipeline_status = 'replied' WHERE id = ?",
+                """UPDATE contacts SET pipeline_status = 'replied' WHERE id = ?
+                   AND (pipeline_status IS NULL OR pipeline_status NOT IN ('meeting', 'closed'))""",
                 (row["contact_id"],),
             )
             await db.commit()
         return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.post("/sync-inbox-replies")
+async def sync_inbox_replies(
+    auto_sort_contacted: bool = True,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Scan your Gmail for replies in threads sent from mass campaigns / follow-ups.
+    Updates campaign_contacts and moves contacts to **replied** in the pipeline (unless meeting/closed).
+    When auto_sort_contacted is true, also promotes **cold** → **contacted** for sent-but-not-replied rows.
+    Requires Google sign-in with gmail.readonly (re-auth if you signed in before this feature).
+    """
+    from app.services.gmail_reply_sync import sync_replies_for_user
+
+    return await sync_replies_for_user(user["id"], auto_sort_contacted=auto_sort_contacted)
+
+
+@router.post("/auto-sort-pipeline")
+async def auto_sort_pipeline(user: dict = Depends(get_current_user)):
+    """
+    Promote contacts from **cold** → **contacted** when you have outbound campaign sends
+    with no reply yet (same rules as after inbox sync). Does not call Gmail.
+    """
+    from app.services.gmail_reply_sync import apply_contacted_auto_sort
+
+    db = await get_db()
+    try:
+        n = await apply_contacted_auto_sort(db, user["id"])
+        return {"ok": True, "promoted": n}
     finally:
         await db.close()
 
