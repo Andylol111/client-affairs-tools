@@ -6,9 +6,10 @@ import io
 import os
 import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models import ContactCreate, ScrapeRequest, SearchPersonRequest
-from app.auth_deps import get_current_user_optional
+from app.auth_deps import get_current_user_optional, get_current_user
 from app.services.audit_service import log_audit
 from app.services.usage_service import log_event
 from app.services.contact_scraper import (
@@ -17,6 +18,7 @@ from app.services.contact_scraper import (
     infer_email_from_name,
     normalize_domain,
     sanitize_email,
+    is_employee_outreach_email,
 )
 from app.services.linkedin_scraper import scrape_linkedin_company
 
@@ -42,12 +44,17 @@ def _merge_contacts(
 
     for c in domain_contacts:
         email = c.get("email")
-        if email and email not in seen_emails:
+        if not email or not is_employee_outreach_email(email):
+            continue
+        if email not in seen_emails:
             seen_emails.add(email)
-            merged.append(dict(c))
+            dc = dict(c)
+            dc.setdefault("contact_source", "domain_scrape")
+            merged.append(dc)
             if c.get("name"):
                 by_name[_normalize_name(c["name"])] = merged[-1]
 
+    dom = normalize_domain(domain or "") if domain else ""
     for li in linkedin_contacts:
         name = li.get("name")
         if not name:
@@ -57,10 +64,14 @@ def _merge_contacts(
         if matched:
             matched["linkedin_url"] = li.get("linkedin_url") or matched.get("linkedin_url")
             matched["title"] = matched.get("title") or li.get("title")
+            matched["contact_source"] = matched.get("contact_source") or "domain_scrape"
             continue
-        email = li.get("email") or (infer_email_from_name(name, domain, custom_patterns) if domain else None)
-        if not email:
-            email = f"linkedin-{name.replace(' ', '.').lower()}@{domain or 'placeholder.local'}"
+        email = (li.get("email") or "").strip() or None
+        if not email and dom:
+            email = infer_email_from_name(name, dom, custom_patterns)
+        if not email or not is_employee_outreach_email(email):
+            # Employee outreach only: require real company domain + inferred pattern (no placeholders)
+            continue
         if email in seen_emails:
             continue
         seen_emails.add(email)
@@ -69,9 +80,10 @@ def _merge_contacts(
             "email": email,
             "title": li.get("title"),
             "company": company or li.get("company"),
-            "company_domain": domain,
+            "company_domain": dom,
             "linkedin_url": li.get("linkedin_url"),
-            "confidence": "low" if not li.get("email") else "medium",
+            "confidence": "medium" if li.get("email") else "low",
+            "contact_source": "linkedin_apify" if li.get("email") else "linkedin_inferred",
         })
     return merged
 
@@ -347,8 +359,8 @@ async def scrape_contacts(req: ScrapeRequest):
                     duplicates_skipped += 1
                     continue
                 cursor = await db.execute(
-                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, contact_source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         c.get("name"),
                         email_clean,
@@ -358,6 +370,7 @@ async def scrape_contacts(req: ScrapeRequest):
                         c.get("linkedin_url"),
                         c.get("confidence", "medium"),
                         c.get("department"),
+                        c.get("contact_source"),
                     ),
                 )
                 row_id = cursor.lastrowid
@@ -371,22 +384,117 @@ async def scrape_contacts(req: ScrapeRequest):
     return {"contacts": created, "count": len(created), "duplicates_skipped": duplicates_skipped}
 
 
+@router.get("/companies/summary")
+async def companies_summary(user: dict | None = Depends(get_current_user_optional)):
+    """Distinct companies in the DB with contact counts (for campaign / studio targeting)."""
+    db = await get_db()
+    try:
+        conditions, params = [], []
+        if user and user.get("role") != "admin":
+            conditions.append("(owner_id = ? OR owner_id IS NULL)")
+            params.append(user["id"])
+        visibility = (" AND ".join(conditions)) if conditions else "1=1"
+        cursor = await db.execute(
+            f"""SELECT TRIM(company) AS company, company_domain, COUNT(*) AS contact_count
+                FROM contacts
+                WHERE ({visibility})
+                  AND company IS NOT NULL AND TRIM(company) != ''
+                GROUP BY LOWER(TRIM(company)), IFNULL(company_domain, '')
+                ORDER BY company ASC""",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "company": r["company"],
+                "company_domain": r["company_domain"],
+                "contact_count": r["contact_count"],
+            }
+            for r in rows
+        ]
+    finally:
+        await db.close()
+
+
+class BulkDeleteContactsRequest(BaseModel):
+    contact_ids: list[int] = Field(default_factory=list)
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_contacts(payload: BulkDeleteContactsRequest, user: dict = Depends(get_current_user)):
+    """
+    Delete multiple contacts and dependent rows (campaign_contacts, notes, generated_emails cache, etc.).
+    Respects same visibility as list: non-admins may only delete their own or unassigned contacts.
+    """
+    raw_ids = [i for i in payload.contact_ids if isinstance(i, int) and i > 0]
+    ids = list(dict.fromkeys(raw_ids))
+    if not ids:
+        return {"deleted": 0, "skipped": 0}
+
+    db = await get_db()
+    try:
+        ph = ",".join(["?" for _ in ids])
+        params: list = list(ids)
+        visibility = f"id IN ({ph})"
+        if user.get("role") != "admin":
+            visibility += " AND (owner_id = ? OR owner_id IS NULL)"
+            params.append(user["id"])
+        cursor = await db.execute(f"SELECT id FROM contacts WHERE {visibility}", params)
+        allowed = [r["id"] for r in await cursor.fetchall()]
+        if not allowed:
+            return {"deleted": 0, "skipped": len(ids)}
+
+        ph2 = ",".join(["?" for _ in allowed])
+        await db.execute(
+            f"""DELETE FROM email_events WHERE campaign_contact_id IN (
+                   SELECT id FROM campaign_contacts WHERE contact_id IN ({ph2}))""",
+            allowed,
+        )
+        await db.execute(f"DELETE FROM campaign_contacts WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM generated_emails WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM contact_notes WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM contact_activities WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM contact_profiles WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM email_sentiment_analyses WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM outreach_campaign_contacts WHERE contact_id IN ({ph2})", allowed)
+        await db.execute(f"DELETE FROM contacts WHERE id IN ({ph2})", allowed)
+        await db.commit()
+        await log_audit(
+            user["id"],
+            "contacts_bulk_delete",
+            "contact",
+            ",".join(str(i) for i in allowed[:50]) + ("..." if len(allowed) > 50 else ""),
+            f"Deleted {len(allowed)} contact(s)",
+        )
+        return {"deleted": len(allowed), "skipped": len(ids) - len(allowed)}
+    finally:
+        await db.close()
+
+
 @router.get("")
 async def list_contacts(
     company: str | None = None,
+    companies: str | None = None,
     q: str | None = None,
     pipeline_status: str | None = None,
+    employee_only: bool = False,
     limit: int = 500,
     mine_only: bool = False,
     user: dict | None = Depends(get_current_user_optional),
 ):
-    """List contacts. Optional q (search name/email/company), pipeline_status filter. Standard users see only their contacts + unassigned. Admins see all."""
+    """List contacts. Optional q (search name/email/company), pipeline_status filter. `companies` = comma-separated exact company names. `employee_only` excludes role-based inboxes. Standard users see only their contacts + unassigned."""
     db = await get_db()
     try:
         conditions, params = [], []
         if company:
             conditions.append("company LIKE ?")
             params.append(f"%{company}%")
+        if companies and companies.strip():
+            parts = [p.strip() for p in companies.split(",") if p.strip()]
+            if parts:
+                placeholders = ",".join(["?" for _ in parts])
+                conditions.append(f"TRIM(company) IN ({placeholders})")
+                params.extend(parts)
         if q and q.strip():
             q_term = f"%{q.strip()}%"
             conditions.append("(name LIKE ? OR email LIKE ? OR company LIKE ? OR title LIKE ?)")
@@ -414,6 +522,8 @@ async def list_contacts(
                 r["email"] = sanitize_email(r["email"])
             if r.get("company_domain"):
                 r["company_domain"] = normalize_domain(r["company_domain"])
+        if employee_only:
+            result = [r for r in result if is_employee_outreach_email(r.get("email") or "")]
         return result
     finally:
         await db.close()

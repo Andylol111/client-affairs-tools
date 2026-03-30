@@ -2,6 +2,7 @@
  * Theme (light/dark) - persists to localStorage, applies class to document
  */
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { applyStoredPreferences } from '../lib/userPreferences';
 
 const STORAGE_KEY = 'yucg_theme';
 
@@ -31,6 +32,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     try {
       localStorage.setItem(STORAGE_KEY, theme);
     } catch {}
+    // Re-derive --btn-primary-* for light vs dark (accent-based)
+    applyStoredPreferences();
   }, [theme]);
 
   const setTheme = useCallback((t: Theme) => setThemeState(t), []);

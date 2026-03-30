@@ -24,6 +24,7 @@ from app.database import init_db
 from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
+from app.services.gmail_reply_sync import sync_replies_all_senders
 
 # CORS: use CORS_ORIGINS env (comma-separated) when going public; default localhost for dev
 _default_origins = [
@@ -72,6 +73,12 @@ async def lifespan(app: FastAPI):
         hour=8,
         minute=5,
         id="notification_digests",
+    )
+    scheduler.add_job(
+        _run_gmail_reply_sync,
+        "cron",
+        minute="*/30",
+        id="gmail_reply_sync",
     )
     scheduler.start()
     yield

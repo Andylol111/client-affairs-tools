@@ -25,12 +25,23 @@
   --bg-secondary: #ffffff;
   --bg-card: #ffffff;
   --text-primary: #1a2f5a;
-  --text-muted: #3d5c82;
+  /* Single foreground for labels, helper copy, and body (same as primary) */
+  --text-muted: var(--text-primary);
   --accent: #1a2f5a;
   --accent-hover: #1e3a6e;
   --border: #c8dced;
   --success: #059669;
   --warning: #d97706;
+  /* Primary CTAs: same hue family as headings and links (--accent from :root or user prefs) */
+  --btn-primary-bg: var(--accent);
+  --btn-primary-hover: var(--accent-hover);
+  --btn-primary-text: #ffffff;
+  /* Elevation: bright highlight + pale-sky tint — no heavy black drop shadow */
+  --shadow-sm: 0 1px 2px rgba(255, 255, 255, 0.92), 0 2px 8px rgba(200, 220, 237, 0.42);
+  --shadow-md: 0 2px 4px rgba(255, 255, 255, 0.88), 0 6px 16px rgba(200, 220, 237, 0.36);
+  --shadow-lg: 0 4px 8px rgba(255, 255, 255, 0.82), 0 10px 28px rgba(200, 220, 237, 0.32);
+  --shadow-xl: 0 8px 16px rgba(255, 255, 255, 0.78), 0 14px 40px rgba(200, 220, 237, 0.28);
+  --shadow-2xl: 0 12px 24px rgba(255, 255, 255, 0.72), 0 22px 56px rgba(200, 220, 237, 0.22);
 }
 
 /* Dark mode (YUCG palette adapted) */
@@ -39,10 +50,19 @@
   --bg-secondary: #1e293b;
   --bg-card: #1e293b;
   --text-primary: #e2e8f0;
-  --text-muted: #94a3b8;
+  --text-muted: var(--text-primary);
   --accent: #5b7fa6;
   --accent-hover: #8aaabf;
   --border: #334155;
+  --btn-primary-bg: var(--accent);
+  --btn-primary-hover: var(--accent-hover);
+  --btn-primary-text: #ffffff;
+  /* Dark: soft white rim + airy lift (not black blobs) */
+  --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 2px 10px rgba(255, 255, 255, 0.05);
+  --shadow-md: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 4px 16px rgba(255, 255, 255, 0.06);
+  --shadow-lg: 0 0 0 1px rgba(255, 255, 255, 0.11), 0 8px 28px rgba(255, 255, 255, 0.07);
+  --shadow-xl: 0 0 0 1px rgba(255, 255, 255, 0.13), 0 12px 36px rgba(255, 255, 255, 0.08);
+  --shadow-2xl: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 20px 50px rgba(255, 255, 255, 0.09);
 }
 
 .dark body {
@@ -50,11 +70,13 @@
   color: var(--text-primary);
 }
 
-.dark input,
+/* Dark: field text matches --text-primary (same as rest of UI) */
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
 .dark select,
 .dark textarea {
   background-color: #334155;
-  color: #e2e8f0;
+  color: var(--text-primary);
+  caret-color: var(--text-primary);
   border-color: #475569;
 }
 
@@ -63,26 +85,13 @@
 .dark .bg-pale-sky\/50 { background-color: rgba(91, 127, 166, 0.2); }
 .dark .bg-pale-sky\/20 { background-color: rgba(91, 127, 166, 0.15); }
 .dark .bg-pale-sky\/30 { background-color: rgba(91, 127, 166, 0.2); }
-.dark .text-slate-600,
-.dark .text-slate-700,
-.dark .text-slate-800 { color: #e2e8f0; }
-.dark .text-slate-500,
-.dark .text-slate-400 { color: #94a3b8; }
 .dark .border-pale-sky,
 .dark .border-slate-200,
 .dark .border-slate-300 { border-color: #475569; }
-.dark .text-deep-navy { color: #e2e8f0; }
+.dark .text-deep-navy { color: var(--text-primary); }
 .dark nav.border-b { border-color: #334155; }
-/* Primary buttons and pillbox: lighter in dark mode so they stand out (was too dark) */
-.dark .bg-\[#1a2f5a\] { background-color: #6b8fba; }
-.dark .bg-\[#1e3a6e\] { background-color: #7aa3c9; }
-.dark .hover\:bg-\[#1e3a6e\]:hover { background-color: #7aa3c9; }
-.dark .hover\:bg-\[#1a2f5a\]:hover { background-color: #6b8fba; }
-.dark button.bg-\[#1a2f5a\],
-.dark button.bg-\[#1e3a6e\] { color: #fff; }
 .dark .hover\:bg-slate-50:hover { background-color: #334155; }
 .dark .hover\:bg-pale-sky\/30:hover { background-color: rgba(91, 127, 166, 0.2); }
-.dark .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
 .dark .bg-red-50 { background-color: rgba(185, 28, 28, 0.15); }
 .dark .bg-green-50 { background-color: rgba(5, 150, 105, 0.15); }
 .dark .bg-amber-50 { background-color: rgba(180, 83, 9, 0.15); }
@@ -113,27 +122,47 @@ textarea {
   font-family: 'Lato', system-ui, sans-serif;
 }
 
-input, select, textarea {
-  background-color: white;
+/*
+ * Light mode fields: same ink as body; background from theme.
+ * Excludes checkbox/radio/color/file/etc. so native controls stay usable.
+ */
+html:not(.dark) input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
+html:not(.dark) select,
+html:not(.dark) textarea {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  caret-color: var(--text-primary);
 }
 
-/* Email Studio: white background + Lato + YUCG navy text in light mode */
 .email-studio-input,
 .email-studio-body {
   background-color: #ffffff;
-  color: #1a2f5a;
+  color: var(--text-primary);
   font-family: 'Lato', system-ui, sans-serif;
-}
-.email-studio-input::placeholder {
-  color: #64748b;
 }
 .dark .email-studio-input,
 .dark .email-studio-body {
   background-color: #334155;
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
-.dark .email-studio-input::placeholder {
-  color: #94a3b8;
+
+/* Plain contenteditable (e.g. rich text): default typing uses theme ink */
+[contenteditable="true"] {
+  color: var(--text-primary);
+  caret-color: var(--text-primary);
+}
+
+/* Autofill should keep readable ink in both themes */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+select:-webkit-autofill,
+select:-webkit-autofill:hover,
+select:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text-primary);
 }
 
 /* Email Studio: attachments + editor blocks white in light mode */
@@ -152,15 +181,143 @@ input, select, textarea {
   background-color: #ffffff;
 }
 .dark .email-generator-header {
-  background-color: rgba(51, 65, 85, 0.5);
+  background-color: var(--bg-card);
 }
 
-/* Email Studio: editor column white in light mode */
+/* Email Studio: editor column matches theme surfaces */
 .email-studio-editor-column {
+  background-color: var(--bg-card);
+}
+
+/* Email Studio page: Lato everywhere (native <select> often defaults to system font) */
+.email-studio,
+.email-studio input,
+.email-studio select,
+.email-studio textarea,
+.email-studio button {
+  font-family: 'Lato', system-ui, sans-serif;
+}
+.email-studio option {
+  font-family: 'Lato', system-ui, sans-serif;
+}
+
+/* Theme-aware panels: white in light, grey card in dark */
+.surface-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+/*
+ * Email Studio — Gmail preview: explicit colors so .dark .bg-slate-* hacks don't flatten contrast.
+ */
+.email-studio-gmail-rail {
+  background-color: #cbd5e1; /* slate-300: clearly grey vs white card */
+}
+.dark .email-studio-gmail-rail {
+  background-color: #3f4f63; /* between slate-700–800, lighter than page #0f172a */
+}
+.email-studio-gmail-card {
+  background-color: #ffffff;
+  border: 1px solid #94a3b8;
+  box-shadow: var(--shadow-md);
+}
+.dark .email-studio-gmail-card {
+  background-color: #f8fafc;
+  border-color: #64748b;
+  box-shadow: var(--shadow-lg);
+}
+.email-studio-gmail-body {
   background-color: #ffffff;
 }
-.dark .email-studio-editor-column {
-  background-color: var(--bg-card);
+.dark .email-studio-gmail-body {
+  background-color: #f8fafc;
+}
+.email-studio-gmail-toolbar {
+  background-color: #e2e8f0; /* slate-200 */
+  border-bottom: 1px solid #cbd5e1;
+}
+.dark .email-studio-gmail-toolbar {
+  background-color: #4b556a;
+  border-bottom-color: #64748b;
+}
+.email-studio-gmail-toolbar button,
+.email-studio-gmail-toolbar span {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+.dark .email-studio-gmail-toolbar span {
+  color: var(--text-primary);
+}
+
+/* Destructive actions — solid fill, never washed out by theme utilities */
+.btn-danger-solid {
+  background-color: #991b1b;
+  color: #ffffff;
+  font-weight: 600;
+  border: 1px solid #7f1d1d;
+  border-radius: 0.375rem;
+}
+.btn-danger-solid:hover:not(:disabled) {
+  background-color: #7f1d1d;
+  color: #ffffff;
+}
+.btn-danger-solid:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.dark .btn-danger-solid {
+  background-color: #dc2626;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+.dark .btn-danger-solid:hover:not(:disabled) {
+  background-color: #b91c1c;
+  color: #ffffff;
+}
+
+/* Primary CTA: use with padding/radius utilities (bg/hover from CSS vars) */
+.btn-primary {
+  background-color: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--btn-primary-hover);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/*
+ * Site-wide primary button — solid fill, no drop shadow (elevation only on cards).
+ * Pair with text-xs / text-sm and px/py via utility classes as needed.
+ */
+.btn-primary-solid {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  border-radius: 0.5rem;
+  border: none;
+  background-color: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
+}
+.btn-primary-solid:hover:not(:disabled) {
+  background-color: var(--btn-primary-hover);
+}
+.btn-primary-solid:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn-primary-solid:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Standardized button press animation site-wide */
@@ -220,6 +377,148 @@ body[data-border-radius="sharp"] .rounded-lg { border-radius: 0.25rem; }
 body[data-border-radius="sharp"] .rounded-xl { border-radius: 0.375rem; }
 body[data-border-radius="round"] .rounded-lg { border-radius: 0.75rem; }
 body[data-border-radius="round"] .rounded-xl { border-radius: 1rem; }
+
+/*
+ * Unified foreground: neutral Tailwind text-* utilities map to --text-primary.
+ * Semantic colors (red/green/amber/blue links, text-white on buttons, etc.) unchanged.
+ */
+html:not(.dark) .text-slate-50,
+html:not(.dark) .text-slate-100,
+html:not(.dark) .text-slate-200,
+html:not(.dark) .text-slate-300,
+html:not(.dark) .text-slate-400,
+html:not(.dark) .text-slate-500,
+html:not(.dark) .text-slate-600,
+html:not(.dark) .text-slate-700,
+html:not(.dark) .text-slate-800,
+html:not(.dark) .text-slate-900,
+html:not(.dark) .text-slate-950,
+html:not(.dark) .text-gray-50,
+html:not(.dark) .text-gray-100,
+html:not(.dark) .text-gray-200,
+html:not(.dark) .text-gray-300,
+html:not(.dark) .text-gray-400,
+html:not(.dark) .text-gray-500,
+html:not(.dark) .text-gray-600,
+html:not(.dark) .text-gray-700,
+html:not(.dark) .text-gray-800,
+html:not(.dark) .text-gray-900,
+html:not(.dark) .text-gray-950,
+html:not(.dark) .text-zinc-500,
+html:not(.dark) .text-zinc-600,
+html:not(.dark) .text-zinc-700,
+html:not(.dark) .text-zinc-800,
+html:not(.dark) .text-zinc-900,
+html:not(.dark) .text-steel-blue,
+html:not(.dark) .text-slate-blue,
+html:not(.dark) .text-mid-navy,
+html:not(.dark) .text-light-steel {
+  color: var(--text-primary);
+}
+
+html.dark .text-slate-50,
+html.dark .text-slate-100,
+html.dark .text-slate-200,
+html.dark .text-slate-300,
+html.dark .text-slate-400,
+html.dark .text-slate-500,
+html.dark .text-slate-600,
+html.dark .text-slate-700,
+html.dark .text-slate-800,
+html.dark .text-slate-900,
+html.dark .text-slate-950,
+html.dark .text-gray-50,
+html.dark .text-gray-100,
+html.dark .text-gray-200,
+html.dark .text-gray-300,
+html.dark .text-gray-400,
+html.dark .text-gray-500,
+html.dark .text-gray-600,
+html.dark .text-gray-700,
+html.dark .text-gray-800,
+html.dark .text-gray-900,
+html.dark .text-gray-950,
+html.dark .text-zinc-400,
+html.dark .text-zinc-500,
+html.dark .text-zinc-600,
+html.dark .text-zinc-700,
+html.dark .text-zinc-800,
+html.dark .text-zinc-900,
+html.dark .text-steel-blue,
+html.dark .text-slate-blue,
+html.dark .text-mid-navy,
+html.dark .text-light-steel {
+  color: var(--text-primary);
+}
+
+/* dark:* text utilities (same specificity as Tailwind; !important wins tie) */
+html.dark .dark\:text-slate-100,
+html.dark .dark\:text-slate-200,
+html.dark .dark\:text-slate-300,
+html.dark .dark\:text-slate-400,
+html.dark .dark\:text-slate-500,
+html.dark .dark\:text-slate-600,
+html.dark .dark\:text-slate-700,
+html.dark .dark\:text-slate-800,
+html.dark .dark\:text-gray-100,
+html.dark .dark\:text-gray-200,
+html.dark .dark\:text-gray-300,
+html.dark .dark\:text-gray-400,
+html.dark .dark\:text-gray-500,
+html.dark .dark\:text-gray-600,
+html.dark .dark\:text-gray-700,
+html.dark .dark\:text-zinc-100,
+html.dark .dark\:text-zinc-200,
+html.dark .dark\:text-zinc-300,
+html.dark .dark\:text-zinc-400,
+html.dark .dark\:text-zinc-500 {
+  color: var(--text-primary) !important;
+}
+
+/*
+ * Fields: placeholders same ink family as typed text (lighter via mix; beats Tailwind placeholder:*).
+ */
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--text-primary) 58%, transparent) !important;
+  opacity: 1 !important;
+}
+
+/* Native select menus (best-effort; OS may still theme the dropdown) */
+select option,
+select optgroup {
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+}
+
+html.dark select option,
+html.dark select optgroup {
+  color: var(--text-primary);
+  background-color: #334155;
+}
+
+/*
+ * Elevation: map Tailwind shadow-* to theme tokens site-wide (light + dark).
+ * Unlayered so these win over default Tailwind shadows.
+ */
+.shadow-sm {
+  box-shadow: var(--shadow-sm);
+}
+.shadow {
+  box-shadow: var(--shadow-md);
+}
+.shadow-md {
+  box-shadow: var(--shadow-md);
+}
+.shadow-lg {
+  box-shadow: var(--shadow-lg);
+}
+.shadow-xl {
+  box-shadow: var(--shadow-xl);
+}
+.shadow-2xl {
+  box-shadow: var(--shadow-2xl);
+}
 
 /* User preferences: reduce motion */
 body.yucg-reduce-motion *,

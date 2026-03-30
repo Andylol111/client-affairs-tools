@@ -99,7 +99,7 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <nav className="bg-white border-b border-pale-sky sticky top-0 z-50 shadow-sm">
+      <nav className="bg-[var(--bg-card)] border-b border-[var(--border)] sticky top-0 z-50 shadow-sm">
         <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14 flex-nowrap gap-2 min-w-0">
             <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
@@ -152,7 +152,7 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
                     onLogout();
                     navigate('/login');
                   }}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800 whitespace-nowrap"
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-800 dark:hover:text-slate-100 whitespace-nowrap"
                 >
                   Log out
                 </button>

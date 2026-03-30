@@ -63,13 +63,13 @@ export default function Campaigns() {
             }
           }}
           disabled={loading}
-          className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] active:scale-[0.98] text-white font-medium whitespace-nowrap transition-all disabled:opacity-50"
+          className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-medium whitespace-nowrap transition-all disabled:opacity-50"
         >
           + Create Campaign
         </button>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Create Campaign</h2>
           <div className="flex gap-1">
             <input
@@ -83,7 +83,7 @@ export default function Campaigns() {
             <button
               onClick={createCampaign}
               disabled={loading}
-              className="px-6 py-3 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] active:scale-[0.98] text-white font-medium disabled:opacity-50 transition-all"
+              className="px-6 py-3 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-medium disabled:opacity-50 transition-all"
             >
               Create
             </button>
@@ -107,7 +107,7 @@ export default function Campaigns() {
               campaigns.map((c) => (
                 <div
                   key={c.id}
-                  className="flex items-center justify-between p-4 bg-white border border-pale-sky shadow-sm rounded-xl"
+                  className="flex items-center justify-between p-4 surface-card shadow-sm rounded-xl"
                 >
                   <div>
                     <div className="font-medium text-deep-navy">{c.name}</div>
@@ -125,7 +125,7 @@ export default function Campaigns() {
                     {c.status === 'draft' && (
                       <button
                         onClick={() => sendCampaign(c.id)}
-                        className="px-4 py-2 rounded-lg text-sm bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white"
+                        className="px-4 py-2 rounded-lg text-sm bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)]"
                       >
                         Send
                       </button>

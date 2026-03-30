@@ -25,8 +25,8 @@ function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect
       onClick={() => onSelect(c)}
       className={`p-3 rounded-lg cursor-pointer border transition-colors ${
         selectedContact?.id === c.id
-          ? 'border-[#1a2f5a] bg-[#1a2f5a]/5 ring-1 ring-[#1a2f5a]'
-          : 'border-pale-sky hover:border-[#1e3a6e] hover:bg-pale-sky/10'
+          ? 'border-[var(--btn-primary-bg)] bg-[var(--btn-primary-bg)]/5 ring-1 ring-[var(--btn-primary-bg)]'
+          : 'border-pale-sky hover:border-[var(--btn-primary-hover)] hover:bg-pale-sky/10'
       } ${selectedIds.has(c.id) ? 'ring-2 ring-amber-500' : ''}`}
     >
       <div className="flex items-center gap-2">
@@ -104,6 +104,26 @@ export default function Outreach() {
   const [contactSearch, setContactSearch] = useState('');
   const [contactPipelineFilter, setContactPipelineFilter] = useState<string>('');
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
+  const [inboxSyncBusy, setInboxSyncBusy] = useState(false);
+  const [pipelineSortBusy, setPipelineSortBusy] = useState(false);
+  const [inboxSyncBanner, setInboxSyncBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  const refreshContactsAndMetrics = async () => {
+    const params: { q?: string; pipeline_status?: string } = {};
+    if (contactSearch.trim()) params.q = contactSearch.trim();
+    if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
+    try {
+      const [list, metrics] = await Promise.all([
+        api.contacts.list(params),
+        api.outreach.pipelineMetrics(),
+      ]);
+      setContacts(list);
+      setPipelineMetrics(metrics);
+    } catch {
+      setContacts([]);
+      setPipelineMetrics(null);
+    }
+  };
 
   useEffect(() => {
     const params: { q?: string; pipeline_status?: string } = {};
@@ -178,18 +198,89 @@ export default function Outreach() {
     setSelectedContactIds(new Set());
   };
 
+  const handleSyncInboxReplies = async () => {
+    setInboxSyncBusy(true);
+    setInboxSyncBanner(null);
+    try {
+      const r = await api.outreach.syncInboxReplies(true);
+      if (!r.ok) {
+        const msg =
+          r.error === 'no_gmail_token'
+            ? 'Sign in with Google. If you signed in before inbox sync existed, sign out and sign in again so the app can request inbox read access.'
+            : r.message || 'Sync failed.';
+        setInboxSyncBanner({ type: 'err', text: msg });
+        return;
+      }
+      await refreshContactsAndMetrics();
+      const errNote =
+        Array.isArray(r.errors) && r.errors.length > 0
+          ? ` Some threads could not be checked (${r.errors.length}); try re-authenticating if you see permission errors.`
+          : '';
+      setInboxSyncBanner({
+        type: 'ok',
+        text: `Inbox sync: ${r.marked_replied ?? 0} contact(s) marked replied, ${r.pipeline_promoted_contacted ?? 0} moved cold → contacted.${errNote}`,
+      });
+    } catch (e) {
+      setInboxSyncBanner({ type: 'err', text: (e as Error)?.message || 'Sync failed.' });
+    } finally {
+      setInboxSyncBusy(false);
+    }
+  };
+
+  const handleAutoSortPipeline = async () => {
+    setPipelineSortBusy(true);
+    setInboxSyncBanner(null);
+    try {
+      const r = await api.outreach.autoSortPipeline();
+      await refreshContactsAndMetrics();
+      setInboxSyncBanner({
+        type: 'ok',
+        text: `Pipeline sort: promoted ${r.promoted ?? 0} contact(s) from cold to contacted (sent, no reply yet, sent by you).`,
+      });
+    } catch (e) {
+      setInboxSyncBanner({ type: 'err', text: (e as Error)?.message || 'Could not auto-sort pipeline.' });
+    } finally {
+      setPipelineSortBusy(false);
+    }
+  };
+
   const handleBulkAddToCampaign = async (campaignId: number) => {
     if (selectedContactIds.size === 0) return;
+    const n = selectedContactIds.size;
+    const ids = Array.from(selectedContactIds);
     try {
-      await api.outreach.campaigns.addContacts(campaignId, Array.from(selectedContactIds));
+      await api.outreach.campaigns.addContacts(campaignId, ids);
       setSelectedContactIds(new Set());
       api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => {});
       if (selectedCampaign?.id === campaignId) {
         api.outreach.campaigns.get(campaignId).then((c) => setCampaignContacts(c.contacts || [])).catch(() => {});
       }
-      alert(`Added ${selectedContactIds.size} contact(s) to campaign.`);
+      alert(`Added ${n} contact(s) to campaign.`);
     } catch (e) {
       alert((e as Error)?.message || 'Failed');
+    }
+  };
+
+  const handleBulkDeleteContacts = async () => {
+    if (selectedContactIds.size === 0) return;
+    const ids = Array.from(selectedContactIds);
+    const n = ids.length;
+    if (!window.confirm(`Are you sure? Permanently delete ${n} contact(s)? This removes them from campaigns, notes, and the database.`)) return;
+    try {
+      const res = await api.contacts.bulkDelete(ids);
+      setSelectedContactIds(new Set());
+      if (selectedContact?.id && ids.includes(selectedContact.id)) setSelectedContact(null);
+      const params: { q?: string; pipeline_status?: string } = {};
+      if (contactSearch.trim()) params.q = contactSearch.trim();
+      if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
+      api.contacts.list(params).then(setContacts).catch(() => setContacts([]));
+      if (res.skipped > 0) {
+        alert(`Deleted ${res.deleted}. ${res.skipped} skipped (not allowed or missing).`);
+      } else {
+        alert(`Deleted ${res.deleted} contact(s).`);
+      }
+    } catch (e) {
+      alert((e as Error)?.message || 'Bulk delete failed');
     }
   };
 
@@ -279,18 +370,32 @@ export default function Outreach() {
     <div className="w-full max-w-[1920px] mx-auto">
       <h1 className="text-2xl font-bold text-deep-navy mb-6">Outreach Hub</h1>
 
-      <div className="flex gap-2 mb-6 border-b border-pale-sky flex-wrap">
-        {(['pipeline', 'campaigns', 'priorities', 'templates', 'sequences'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 rounded-t-lg font-medium ${
-              activeTab === tab ? 'bg-[#1a2f5a] text-white' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50'
-            }`}
-          >
-            {tab === 'priorities' ? 'Club Priorities' : tab.charAt(0).toUpperCase() + tab.slice(1)}
-          </button>
-        ))}
+      <div className="mb-6 border-b border-pale-sky">
+        <div className="flex gap-2 flex-wrap">
+          {(['pipeline', 'campaigns', 'priorities', 'templates', 'sequences'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-2 rounded-t-lg font-medium ${
+                activeTab === tab ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'
+              }`}
+            >
+              {tab === 'priorities' ? 'Club Priorities' : tab === 'sequences' ? 'Sequences (follow-ups)' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
+        {activeTab === 'templates' && (
+          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-pale-sky/80 bg-pale-sky/10 dark:bg-slate-800/40 rounded-b-lg mt-0">
+            <strong className="text-deep-navy dark:text-slate-200">Templates</strong> store reusable subject and body snippets you can paste or adapt in Email Studio and campaigns.
+            Prioritize a small set of sharp, role-specific templates over dozens of generic ones; keep subjects under ~60 characters and lead with one clear ask.
+          </p>
+        )}
+        {activeTab === 'sequences' && (
+          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-pale-sky/80 bg-pale-sky/10 dark:bg-slate-800/40 rounded-b-lg mt-0">
+            <strong className="text-deep-navy dark:text-slate-200">Sequences (follow-ups)</strong> are timed steps after the first send: each step waits <em>days after the previous message</em> and only goes to contacts who have not replied.
+            Priority is to stay polite and spaced out—use sequences to nudge, not to spam; pair them with inbox sync so replied contacts drop out automatically.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -328,13 +433,43 @@ export default function Outreach() {
                   Group by company
                 </label>
                 <span className="text-xs text-slate-500 hidden sm:inline">Merge contacts into company folders</span>
+                <span className="w-px h-6 bg-pale-sky hidden sm:block" aria-hidden />
+                <button
+                  type="button"
+                  onClick={() => void handleSyncInboxReplies()}
+                  disabled={inboxSyncBusy}
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-white border border-pale-sky hover:bg-pale-sky/20 disabled:opacity-60 text-deep-navy"
+                  title="Scan Gmail for replies on campaign threads you sent, then refresh this board"
+                >
+                  {inboxSyncBusy ? 'Syncing inbox…' : 'Sync inbox (Gmail)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAutoSortPipeline()}
+                  disabled={pipelineSortBusy}
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-white border border-pale-sky hover:bg-pale-sky/20 disabled:opacity-60 text-deep-navy"
+                  title="Move cold → contacted when you already sent from a campaign but they have not replied yet (no Gmail call)"
+                >
+                  {pipelineSortBusy ? 'Sorting…' : 'Auto-sort pipeline'}
+                </button>
               </div>
+              {inboxSyncBanner && (
+                <p
+                  className={`text-sm rounded-lg px-3 py-2 border ${
+                    inboxSyncBanner.type === 'ok'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-100'
+                      : 'bg-amber-50 border-amber-200 text-amber-950 dark:bg-amber-950/50 dark:border-amber-800 dark:text-amber-100'
+                  }`}
+                >
+                  {inboxSyncBanner.text}
+                </p>
+              )}
               {selectedContactIds.size > 0 && (
-                <div className="flex flex-wrap items-center gap-2 p-2 rounded-lg bg-amber-50 border border-amber-200">
-                  <span className="text-sm font-medium text-amber-800">{selectedContactIds.size} selected</span>
+                <div className="flex flex-wrap items-center gap-2 p-3 rounded-xl surface-card border border-[var(--border)] shadow-sm">
+                  <span className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">{selectedContactIds.size} selected</span>
                   <select
                     onChange={(e) => { const v = e.target.value; if (v) handleBulkMove(v); e.target.value = ''; }}
-                    className="text-sm px-2 py-1.5 rounded border border-amber-300 bg-white"
+                    className="text-sm px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white dark:bg-slate-700 text-deep-navy dark:text-slate-100"
                   >
                     <option value="">Move To...</option>
                     {PIPELINE_STATUSES.map((s) => (
@@ -343,14 +478,23 @@ export default function Outreach() {
                   </select>
                   <select
                     onChange={(e) => { const v = e.target.value; if (v) handleBulkAddToCampaign(parseInt(v, 10)); e.target.value = ''; }}
-                    className="text-sm px-2 py-1.5 rounded border border-amber-300 bg-white"
+                    className="text-sm px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white dark:bg-slate-700 text-deep-navy dark:text-slate-100"
                   >
                     <option value="">Add To Campaign...</option>
                     {outreachCampaigns.map((oc) => (
                       <option key={oc.id} value={oc.id}>{oc.name}</option>
                     ))}
                   </select>
-                  <button type="button" onClick={() => setSelectedContactIds(new Set())} className="text-sm text-amber-700 hover:underline">Clear</button>
+                  <button type="button" onClick={() => setSelectedContactIds(new Set())} className="text-sm font-medium text-[var(--accent)] hover:text-[var(--accent-hover)] hover:underline">
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteContacts}
+                    className="btn-danger-solid text-sm px-3 py-1.5"
+                  >
+                    Delete contacts
+                  </button>
                 </div>
               )}
               {/* Full-width Kanban-style pipeline board */}
@@ -361,7 +505,7 @@ export default function Outreach() {
                   return (
                     <div
                       key={status}
-                      className="bg-white border border-pale-sky rounded-xl flex flex-col overflow-hidden shadow-sm"
+                      className="surface-card rounded-xl flex flex-col overflow-hidden shadow-sm"
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={handleColumnDrop(status)}
                     >
@@ -411,7 +555,7 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'campaigns' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4 w-full">
+            <div className="surface-card rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4 w-full">
               <h3 className="font-semibold text-deep-navy">Outreach Campaigns</h3>
               <p className="text-sm text-slate-600">
                 Community = institution priorities. Individual = your outreach. Track what each person is working on.
@@ -447,7 +591,7 @@ export default function Outreach() {
                     }
                   }}
                   disabled={!campaignForm.name.trim()}
-                  className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white text-sm font-medium disabled:opacity-50"
+                  className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50"
                 >
                   Create
                 </button>
@@ -458,7 +602,7 @@ export default function Outreach() {
                     key={oc.id}
                     onClick={() => setSelectedCampaign(oc)}
                     className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                      selectedCampaign?.id === oc.id ? 'border-[#1a2f5a] bg-[#1a2f5a]/5' : 'border-pale-sky hover:bg-pale-sky/10'
+                      selectedCampaign?.id === oc.id ? 'border-[var(--btn-primary-bg)] bg-[var(--btn-primary-bg)]/5' : 'border-pale-sky hover:bg-pale-sky/10'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -482,7 +626,7 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'priorities' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-6 shadow-sm">
+            <div className="surface-card rounded-xl p-6 shadow-sm">
               <h2 className="text-xl font-semibold text-deep-navy mb-2">Club Priorities & Communities</h2>
               <p className="text-sm text-slate-600 mb-6">
                 What everyone is working on. Author = Google account. Community = institution focus; Individual = member outreach.
@@ -523,7 +667,7 @@ export default function Outreach() {
                         <td className="py-3 px-3">
                           <button
                             onClick={() => { setSelectedCampaign(oc); setActiveTab('campaigns'); }}
-                            className="text-xs text-[#1a2f5a] hover:underline font-medium"
+                            className="text-xs text-[var(--accent)] hover:underline font-medium"
                           >
                             View →
                           </button>
@@ -539,8 +683,11 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'templates' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-4 max-h-96 overflow-y-auto">
-              <h3 className="font-semibold text-deep-navy mb-3">Templates</h3>
+            <div className="surface-card rounded-xl p-4 max-h-96 overflow-y-auto">
+              <h3 className="font-semibold text-deep-navy mb-1">Templates</h3>
+              <p className="text-xs text-slate-600 mb-3 leading-relaxed">
+                Reusable copy for first touches and follow-ups. Prefer a few strong templates per industry or use case; refine based on reply rate, not volume.
+              </p>
               {templates.map((t) => (
                 <div key={t.id} className="p-3 border-b border-pale-sky last:border-0 flex justify-between items-center">
                   <div>
@@ -567,8 +714,11 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'sequences' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-4 max-h-96 overflow-y-auto">
-              <h3 className="font-semibold text-deep-navy mb-3">Sequences</h3>
+            <div className="surface-card rounded-xl p-4 max-h-96 overflow-y-auto">
+              <h3 className="font-semibold text-deep-navy mb-1">Sequences (follow-ups)</h3>
+              <p className="text-xs text-slate-600 mb-3 leading-relaxed">
+                Automated follow-up timing after the initial campaign send. Steps run only for contacts still marked as not replied; use <strong className="font-medium text-slate-700">Sync inbox</strong> on the Pipeline tab so Gmail replies update the board.
+              </p>
               {sequences.map((s) => (
                 <div key={s.id} className="p-3 border-b border-pale-sky last:border-0">
                   <div className="font-medium text-slate-800">{s.name}</div>
@@ -582,7 +732,7 @@ export default function Outreach() {
         {/* Right: Detail / Form */}
         <div className={`${activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : activeTab === 'campaigns' ? 'lg:col-span-1' : 'lg:col-span-2'} space-y-6`}>
           {activeTab === 'campaigns' && selectedCampaign && (
-            <div className="bg-white border border-pale-sky rounded-xl p-6">
+            <div className="surface-card rounded-xl p-6">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-semibold text-deep-navy">{selectedCampaign.name}</h3>
@@ -667,14 +817,14 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'campaigns' && !selectedCampaign && (
-            <div className="bg-white border border-pale-sky rounded-xl p-12 text-center">
+            <div className="surface-card rounded-xl p-12 text-center">
               <p className="text-slate-500">Select a campaign to view contacts and add more.</p>
             </div>
           )}
           {activeTab === 'pipeline' && (
             selectedContact ? (
             <>
-              <div className="bg-white border border-pale-sky rounded-xl p-6">
+              <div className="surface-card rounded-xl p-6">
                 <div className="flex justify-between items-start">
                   <h3 className="font-semibold text-deep-navy">Contact: {selectedContact.name || selectedContact.email}</h3>
                   <button
@@ -720,7 +870,7 @@ export default function Outreach() {
                 </div>
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              <div className="bg-white border border-pale-sky rounded-xl p-6">
+              <div className="surface-card rounded-xl p-6">
                 <h3 className="font-semibold text-deep-navy mb-4">Profile Analysis</h3>
                 {profile ? (
                   <div className="space-y-3 text-sm">
@@ -753,7 +903,7 @@ export default function Outreach() {
                 )}
               </div>
               <div className="space-y-6">
-              <div className="bg-white border border-pale-sky rounded-xl p-6">
+              <div className="surface-card rounded-xl p-6">
                 <h3 className="font-semibold text-deep-navy mb-4">Notes</h3>
                 <div className="flex gap-2 mb-4">
                   <textarea
@@ -766,7 +916,7 @@ export default function Outreach() {
                   <button
                     onClick={addNote}
                     disabled={!newNote.trim()}
-                    className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white text-sm font-medium disabled:opacity-50"
+                    className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -782,7 +932,7 @@ export default function Outreach() {
                   ))}
                 </ul>
               </div>
-              <div className="bg-white border border-pale-sky rounded-xl p-6">
+              <div className="surface-card rounded-xl p-6">
                 <h3 className="font-semibold text-deep-navy mb-4">Activity Log</h3>
                 <div className="flex gap-2 mb-4 flex-wrap">
                   <select
@@ -804,7 +954,7 @@ export default function Outreach() {
                   />
                   <button
                     onClick={addActivity}
-                    className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white text-sm font-medium"
+                    className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium"
                   >
                     Log
                   </button>
@@ -825,13 +975,13 @@ export default function Outreach() {
               </div>
             </>
             ) : (
-              <div className="bg-white border border-pale-sky rounded-xl p-12 text-center">
+              <div className="surface-card rounded-xl p-12 text-center">
                 <p className="text-slate-500">Select a contact from the pipeline board above to view profile, notes, and activity.</p>
               </div>
             )
           )}
           {activeTab === 'templates' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-6">
+            <div className="surface-card rounded-xl p-6">
               <h3 className="font-semibold text-deep-navy mb-4">New Template</h3>
               <p className="text-sm text-slate-600 mb-4">
                 Use {'{first}'}, {'{last}'}, {'{company}'}, {'{title}'} for merge fields.
@@ -865,7 +1015,7 @@ export default function Outreach() {
                 <button
                   onClick={saveTemplate}
                   disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
-                  className="px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
+                  className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
                 >
                   {loading ? 'Saving...' : 'Save Template'}
                 </button>
@@ -873,7 +1023,7 @@ export default function Outreach() {
             </div>
           )}
           {activeTab === 'sequences' && (
-            <div className="bg-white border border-pale-sky rounded-xl p-6">
+            <div className="surface-card rounded-xl p-6">
               <h3 className="font-semibold text-deep-navy mb-4">New Follow-up Sequence</h3>
               <p className="text-sm text-slate-600 mb-4">
                 Define automated follow-ups (e.g. Day 3, Day 7). Use with campaigns.
@@ -935,14 +1085,14 @@ export default function Outreach() {
                       steps: [...p.steps, { days_after: 7, subject: '', body: '' }],
                     }))
                   }
-                  className="text-sm text-[#1a2f5a] hover:underline"
+                  className="text-sm text-[var(--accent)] hover:underline"
                 >
                   + Add Step
                 </button>
                 <button
                   onClick={saveSequence}
                   disabled={loading || !sequenceForm.name}
-                  className="block px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium disabled:opacity-50"
+                  className="block px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
                 >
                   {loading ? 'Saving...' : 'Save Sequence'}
                 </button>

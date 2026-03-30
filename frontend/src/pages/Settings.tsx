@@ -95,7 +95,7 @@ export default function Settings() {
       <h1 className="text-2xl font-bold text-deep-navy mb-6">Settings</h1>
 
       <div className="space-y-8">
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Notification Preferences</h2>
           <p className="text-sm text-slate-600 mb-4">Choose which emails you receive.</p>
           <label className="flex items-center gap-2 mb-2">
@@ -116,14 +116,14 @@ export default function Settings() {
           </label>
           <button
             onClick={saveNotifPrefs}
-            className="mt-4 px-4 py-2 rounded-lg bg-[#1a2f5a] text-white font-medium"
+            className="mt-4 px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
           >
             Save Preferences
           </button>
         </div>
 
         {isAdmin && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Login Log</h2>
           <p className="text-sm text-slate-600 mb-4">Recent sign-ins (who logged in and when)</p>
           {loginLog.length === 0 ? (
@@ -143,7 +143,7 @@ export default function Settings() {
         )}
 
         {isAdmin && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Email Attachments</h2>
           <p className="text-sm text-slate-600 mb-4">
             Enable a shared attachment library for emails. Upload PDFs, intro decks, past workstreams—then select them in Email Studio when composing.
@@ -224,7 +224,7 @@ export default function Settings() {
         )}
 
         {isAdmin && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Email Signature</h2>
           <p className="text-sm text-slate-600 mb-4">
             This signature is appended to all outgoing emails. You can type text and paste or insert images (e.g. logo) directly here.
@@ -253,7 +253,7 @@ export default function Settings() {
         )}
 
         {isAdmin && (
-        <div className="bg-white border border-pale-sky shadow-sm rounded-xl p-6">
+        <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Custom Email Formats</h2>
           <p className="text-sm text-slate-600 mb-4">
             Import custom patterns for inferring emails. Use placeholders: {'{first}'}, {'{last}'}, {'{first_initial}'}.
@@ -277,7 +277,7 @@ export default function Settings() {
             <button
               onClick={addFormat}
               disabled={!newFormatName.trim() || !newFormatPattern.trim()}
-              className="px-4 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] active:scale-[0.98] text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 whitespace-nowrap transition-all"
+              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 whitespace-nowrap transition-all"
             >
               {formatAdded ? 'Added!' : 'Add Format'}
             </button>
@@ -302,7 +302,7 @@ export default function Settings() {
         {isAdmin && (
         <button
           onClick={saveSettings}
-          className="px-6 py-2 rounded-lg bg-[#1a2f5a] hover:bg-[#1e3a6e] text-white font-medium"
+          className="px-6 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
         >
           {saved ? 'Saved!' : 'Save Settings'}
         </button>
