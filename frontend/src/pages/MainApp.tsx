@@ -128,7 +128,9 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
                     to={to}
                     className={({ isActive }) =>
                       `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                        isActive ? 'bg-pale-sky/50 text-deep-navy' : 'text-slate-600 hover:text-deep-navy hover:bg-pale-sky/30'
+                        isActive
+                          ? 'bg-white border border-[var(--border)] text-deep-navy shadow-sm dark:bg-slate-700/60 dark:border-slate-600'
+                          : 'text-slate-600 hover:text-deep-navy hover:bg-pale-sky/15 dark:hover:bg-slate-700/40'
                       }`
                     }
                   >

@@ -221,7 +221,9 @@ export default function Admin() {
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`px-4 py-2 rounded-t-lg font-medium capitalize ${
-              activeTab === tab ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'
+              activeTab === tab
+                ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+                : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'
             }`}
           >
             {tab === '2fa' ? '2FA' : tab === 'operations' ? 'Operations' : tab}

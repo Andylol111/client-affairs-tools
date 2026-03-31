@@ -44,7 +44,7 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
 
   return (
     <div className="rounded-lg border border-pale-sky dark:border-slate-600 overflow-hidden">
-      <div className="flex items-stretch gap-0 bg-white dark:bg-slate-700/40 border-b border-[var(--border)]">
+      <div className="flex items-stretch gap-0 bg-white border-b border-[var(--border)] dark:bg-slate-700/40">
         {numericIds.length > 0 ? (
           <label
             className="flex items-center pl-2 pr-1 shrink-0 cursor-pointer self-center"

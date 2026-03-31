@@ -377,7 +377,9 @@ export default function Outreach() {
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 rounded-t-lg font-medium ${
-                activeTab === tab ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'
+                activeTab === tab
+                  ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
+                  : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'
               }`}
             >
               {tab === 'priorities' ? 'Club Priorities' : tab === 'sequences' ? 'Sequences (follow-ups)' : tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -385,13 +387,13 @@ export default function Outreach() {
           ))}
         </div>
         {activeTab === 'templates' && (
-          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-pale-sky/80 bg-pale-sky/10 dark:bg-slate-800/40 rounded-b-lg mt-0">
+          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-[var(--border)] bg-white dark:bg-slate-800/40 rounded-b-lg mt-0">
             <strong className="text-deep-navy dark:text-slate-200">Templates</strong> store reusable subject and body snippets you can paste or adapt in Email Studio and campaigns.
             Prioritize a small set of sharp, role-specific templates over dozens of generic ones; keep subjects under ~60 characters and lead with one clear ask.
           </p>
         )}
         {activeTab === 'sequences' && (
-          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-pale-sky/80 bg-pale-sky/10 dark:bg-slate-800/40 rounded-b-lg mt-0">
+          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-[var(--border)] bg-white dark:bg-slate-800/40 rounded-b-lg mt-0">
             <strong className="text-deep-navy dark:text-slate-200">Sequences (follow-ups)</strong> are timed steps after the first send: each step waits <em>days after the previous message</em> and only goes to contacts who have not replied.
             Priority is to stay polite and spaced out—use sequences to nudge, not to spam; pair them with inbox sync so replied contacts drop out automatically.
           </p>

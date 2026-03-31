@@ -2,6 +2,9 @@
 
 @import "tailwindcss";
 
+/* Only treat as dark when <html class="dark"> — not OS prefers-color-scheme (fixes grey tabs/cards in app light mode). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-deep-navy: #1a2f5a;
   --color-mid-navy: #1e3a6e;
@@ -201,8 +204,12 @@ select:-webkit-autofill:focus {
   font-family: 'Lato', system-ui, sans-serif;
 }
 
-/* Theme-aware panels: white in light, grey card in dark */
-.surface-card {
+/* Theme-aware panels: solid white in light, themed card in dark */
+html:not(.dark) .surface-card {
+  background-color: #ffffff;
+  border: 1px solid var(--border);
+}
+.dark .surface-card {
   background-color: var(--bg-card);
   border: 1px solid var(--border);
 }
