@@ -21,6 +21,10 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+function isParseFailure(e: unknown): boolean {
+  return e instanceof SyntaxError || (e instanceof Error && e.name === 'SyntaxError');
+}
+
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -30,18 +34,40 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
       ...options?.headers,
     },
   });
+  const text = await res.text();
+
   if (!res.ok) {
-    const text = await res.text();
+    if (!text.trim()) {
+      throw new Error(`Request failed: ${res.status} ${res.statusText || ''}`.trim());
+    }
     try {
-      const j = JSON.parse(text);
-      const msg = typeof j.detail === 'string' ? j.detail : Array.isArray(j.detail) ? j.detail[0]?.msg : text;
+      const j = JSON.parse(text) as { detail?: string | { msg?: string }[] };
+      const d = j.detail;
+      const msg =
+        typeof d === 'string'
+          ? d
+          : Array.isArray(d)
+            ? String(d[0]?.msg ?? '')
+            : '';
       throw new Error(msg || text);
     } catch (e) {
-      if (e instanceof Error && e.message && e.message !== text) throw e;
-      throw new Error(text);
+      if (e instanceof Error && !isParseFailure(e)) throw e;
+      const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 320);
+      throw new Error(
+        snippet || `Request failed (${res.status}). The server did not return JSON. Is the API running?`
+      );
     }
   }
-  return res.json();
+
+  if (!text.trim()) {
+    throw new Error('Empty response from server (expected JSON).');
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 240);
+    throw new Error(`Invalid JSON from server: ${snippet || '(empty)'}`);
+  }
 }
 
 /** Per-page cursor heatmap grid. Separate type avoids OXC parse issues with nested generics. */
