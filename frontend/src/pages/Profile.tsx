@@ -180,13 +180,13 @@ export default function Profile() {
       <div className="flex gap-2 mb-6 border-b border-pale-sky">
         <button
           onClick={() => { setActiveTab('profile'); setSearchParams({}); }}
-          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'profile' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
+          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'profile' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
           >
             Profile
         </button>
         <button
           onClick={() => { setActiveTab('settings'); setSearchParams({ tab: 'settings' }); }}
-          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'settings' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-pale-sky/30 text-slate-600 hover:bg-pale-sky/50 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
+          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'settings' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
         >
           Settings
         </button>
@@ -276,7 +276,7 @@ export default function Profile() {
           <div className="surface-card shadow-sm rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Appearance</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">Choose light or dark theme.</p>
-            <div className="inline-flex p-1 rounded-xl bg-pale-sky/70 dark:bg-slate-700/80 border border-pale-sky dark:border-slate-500">
+            <div className="inline-flex p-1 rounded-xl bg-white dark:bg-slate-700/80 border border-[var(--border)] dark:border-slate-500 shadow-sm">
               <button
                 type="button"
                 onClick={() => setTheme('light')}

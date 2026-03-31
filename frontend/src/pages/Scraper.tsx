@@ -1,7 +1,179 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { api } from '../api';
 
 type ScraperTab = 'import' | 'scrape' | 'find';
+
+type ScrapeProgressState = {
+  phase: string;
+  pct: number;
+  message: string;
+  detail: string | null;
+};
+
+const PHASE_TYPICAL: Record<string, string> = {
+  init: 'Startup is usually a few seconds.',
+  domain: 'Site crawl: often 30 seconds–2 minutes depending on pages and latency.',
+  linkedin: 'LinkedIn step: Apify runs about 1–3 minutes; public page fallback is faster but yields fewer people.',
+  prepare: 'Merge and pattern load: typically under 15 seconds.',
+  save: 'Database save: quick unless you are upserting hundreds of rows.',
+};
+
+function formatEtaSeconds(sec: number | null): string {
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return 'calculating…';
+  if (sec < 90) return `~${Math.max(1, Math.round(sec))} seconds`;
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `~${m} min ${s} sec`;
+}
+
+/** `tick` bumps on an interval so elapsed/ETA refresh while backend progress is sparse (e.g. Apify). */
+function elapsedSecondsSince(startedAt: number | null, tick: number): number {
+  if (!startedAt) return 0;
+  void tick;
+  return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+}
+
+function ScrapeProgressPanel({
+  progress,
+  startedAt,
+  tick,
+}: {
+  progress: ScrapeProgressState | null;
+  startedAt: number | null;
+  tick: number;
+}) {
+  const pct = progress?.pct ?? 0;
+  let etaSec: number | null = null;
+  if (startedAt && pct >= 4 && pct < 98) {
+    const el = (Date.now() - startedAt) / 1000;
+    if (el >= 1.2) {
+      etaSec = el * (100 / pct - 1);
+    }
+  }
+  const phaseKey = progress?.phase ?? 'init';
+  const typical = PHASE_TYPICAL[phaseKey] ?? PHASE_TYPICAL.init;
+  const detailLine = progress?.detail;
+  const tooltipTitle = [
+    progress?.message,
+    detailLine || '',
+    `Typical: ${typical}`,
+    etaSec != null ? `ETA: ${formatEtaSeconds(etaSec)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <div className="mt-5 space-y-2">
+      <div className="rounded-xl border border-pale-sky bg-white/90 px-4 py-3 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between mb-2">
+          <p className="text-[13px] font-medium text-deep-navy">{progress?.message || 'Working…'}</p>
+          <span className="text-[12px] tabular-nums text-slate-600">{Math.round(pct)}%</span>
+        </div>
+        <div className="relative group">
+          <div
+            className="relative h-2.5 rounded-full bg-pale-sky/70 overflow-hidden outline-none cursor-help"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(pct)}
+            aria-valuetext={tooltipTitle}
+            title={tooltipTitle}
+          >
+            <div
+              className="h-full rounded-full bg-[var(--btn-primary-bg)] transition-[width] duration-300 ease-out"
+              style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+            />
+          </div>
+          <div
+            className="pointer-events-none absolute left-0 right-0 bottom-full mb-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-150 z-20"
+            role="tooltip"
+          >
+            <div className="rounded-lg border border-pale-sky bg-white shadow-lg px-3 py-2.5 text-[12px] text-slate-700 leading-snug space-y-1.5">
+              <p>
+                <span className="font-semibold text-deep-navy">ETA (trend): </span>
+                {etaSec != null
+                  ? formatEtaSeconds(etaSec)
+                  : 'Not enough progress yet—estimate appears after ~4% and a couple of seconds.'}
+              </p>
+              <p>
+                <span className="font-semibold text-deep-navy">Typical for this phase: </span>
+                {typical}
+              </p>
+              {detailLine && (
+                <p className="text-slate-600 border-t border-pale-sky/60 pt-1.5 mt-1">
+                  <span className="font-medium text-deep-navy">Detail: </span>
+                  {detailLine}
+                </p>
+              )}
+              <p className="text-[11px] text-slate-500">
+                Elapsed {startedAt ? `${elapsedSecondsSince(startedAt, tick)} s` : '—'} · Estimates assume current pace;
+                LinkedIn/Apify steps can stall then finish quickly.
+              </p>
+            </div>
+          </div>
+        </div>
+        {detailLine && (
+          <p className="mt-2 text-[11px] text-slate-500 truncate" title={detailLine}>
+            {detailLine}
+          </p>
+        )}
+      </div>
+      <p className="text-[11px] text-slate-500 px-1">
+        Hover the progress bar for ETA and phase notes. The table preview below matches the columns of your results.
+      </p>
+    </div>
+  );
+}
+
+function ScrapeResultsSkeleton() {
+  const rows = 8;
+  return (
+    <div className="mt-6 bg-white rounded-2xl overflow-hidden shadow-sm border border-pale-sky" aria-busy="true" aria-label="Loading contacts preview">
+      <div className="px-5 py-4 border-b border-pale-sky flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div className="h-4 w-44 rounded-md bg-slate-200/90 animate-pulse" />
+        <span className="text-xs text-slate-500">Rows below mirror the table that will fill in when scraping completes</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="text-left text-[12px] text-slate-blue font-medium bg-pale-sky/40">
+              <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3">Email</th>
+              <th className="px-4 py-3">Title</th>
+              <th className="px-4 py-3">Company</th>
+              <th className="px-4 py-3">LinkedIn</th>
+              <th className="px-4 py-3">Confidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: rows }).map((_, i) => (
+              <tr key={i} className="border-t border-pale-sky/50">
+                <td className="px-4 py-3">
+                  <div className="h-3.5 rounded bg-slate-200/80 animate-pulse w-[72%] max-w-[12rem]" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="h-3.5 rounded bg-slate-200/70 animate-pulse w-[85%] max-w-[14rem]" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="h-3.5 rounded bg-slate-200/70 animate-pulse w-[55%] max-w-[10rem]" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="h-3.5 rounded bg-slate-200/70 animate-pulse w-[60%] max-w-[9rem]" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="h-3.5 rounded bg-slate-200/65 animate-pulse w-16" />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="h-5 rounded-md bg-slate-200/75 animate-pulse w-14" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 export default function Scraper() {
   const [activeTab, setActiveTab] = useState<ScraperTab>('scrape');
@@ -25,23 +197,104 @@ export default function Scraper() {
     summary: string | null;
     message: string | null;
   } | null>(null);
+  const [scrapeProgress, setScrapeProgress] = useState<ScrapeProgressState | null>(null);
+  const [scrapeTick, setScrapeTick] = useState(0);
+  const scrapeStartedAtRef = useRef<number | null>(null);
+  const scrapeAbortRef = useRef<AbortController | null>(null);
+  const [scrapeCancelArmed, setScrapeCancelArmed] = useState(false);
+  const scrapeCancelArmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!loading || activeTab !== 'scrape') return;
+    const id = window.setInterval(() => setScrapeTick((t) => t + 1), 450);
+    return () => clearInterval(id);
+  }, [loading, activeTab]);
+
+  useEffect(() => {
+    return () => {
+      if (scrapeCancelArmTimeoutRef.current) clearTimeout(scrapeCancelArmTimeoutRef.current);
+    };
+  }, []);
+
+  const disarmScrapeCancel = () => {
+    setScrapeCancelArmed(false);
+    if (scrapeCancelArmTimeoutRef.current) {
+      clearTimeout(scrapeCancelArmTimeoutRef.current);
+      scrapeCancelArmTimeoutRef.current = null;
+    }
+  };
+
+  const handleScrapeCancelClick = () => {
+    if (!loading) return;
+    if (!scrapeCancelArmed) {
+      setScrapeCancelArmed(true);
+      if (scrapeCancelArmTimeoutRef.current) clearTimeout(scrapeCancelArmTimeoutRef.current);
+      scrapeCancelArmTimeoutRef.current = setTimeout(() => {
+        setScrapeCancelArmed(false);
+        scrapeCancelArmTimeoutRef.current = null;
+      }, 6000);
+      return;
+    }
+    if (
+      !window.confirm(
+        'Stop this scrape?\n\nThe request will disconnect. Any Apify actor run will be aborted when possible, and no further contacts will be saved. Rows already written stay in the database.'
+      )
+    ) {
+      disarmScrapeCancel();
+      return;
+    }
+    scrapeAbortRef.current?.abort();
+    disarmScrapeCancel();
+  };
 
   const handleScrape = async () => {
     if (!companyName && !domain && !linkedinUrl) {
       setError('Enter company name, domain, or LinkedIn URL');
       return;
     }
+    disarmScrapeCancel();
     setLoading(true);
     setError('');
     setInfoMessage('');
     setContacts([]);
+    scrapeStartedAtRef.current = Date.now();
+    setScrapeProgress({
+      phase: 'init',
+      pct: 0,
+      message: 'Connecting to scraper…',
+      detail: null,
+    });
+    const ac = new AbortController();
+    scrapeAbortRef.current = ac;
     try {
-      const res = await api.contacts.scrape({
-        company_name: companyName || undefined,
-        domain: domain || undefined,
-        linkedin_url: linkedinUrl || undefined,
-        linkedin_max_employees: linkedinUrl ? linkedinMaxEmployees : undefined,
-      });
+      const res = await api.contacts.scrapeStream(
+        {
+          company_name: companyName || undefined,
+          domain: domain || undefined,
+          linkedin_url: linkedinUrl || undefined,
+          linkedin_max_employees: linkedinUrl ? linkedinMaxEmployees : undefined,
+        },
+        (ev) => {
+          if (ev.type === 'progress') {
+            setScrapeProgress({
+              phase: String(ev.phase ?? ''),
+              pct: typeof ev.pct === 'number' ? ev.pct : Number(ev.pct) || 0,
+              message: String(ev.message ?? ''),
+              detail: ev.detail != null ? String(ev.detail) : null,
+            });
+          }
+        },
+        { signal: ac.signal }
+      );
+      if (res.cancelled) {
+        setContacts(res.contacts || []);
+        if ((res.count || 0) > 0) {
+          setInfoMessage(`Scrape stopped. ${res.count} contact(s) were saved before cancel.${res.duplicates_skipped ? ` ${res.duplicates_skipped} duplicate(s) skipped.` : ''}`);
+        } else {
+          setInfoMessage('Scrape stopped. Any in-flight Apify run was aborted when possible.');
+        }
+        return;
+      }
       setContacts(res.contacts);
       if (res.duplicates_skipped && res.duplicates_skipped > 0) {
         setInfoMessage(`Found ${res.count} new contacts. ${res.duplicates_skipped} duplicate(s) skipped (existing email).`);
@@ -53,7 +306,11 @@ export default function Scraper() {
     } catch (e: any) {
       setError(e.message || 'Scrape failed');
     } finally {
+      scrapeAbortRef.current = null;
       setLoading(false);
+      setScrapeProgress(null);
+      scrapeStartedAtRef.current = null;
+      disarmScrapeCancel();
     }
   };
 
@@ -110,7 +367,7 @@ export default function Scraper() {
       </p>
 
       {/* Segmented control (pill box) */}
-      <div className="inline-flex p-1 rounded-xl bg-pale-sky/60 mb-8">
+      <div className="inline-flex p-1 rounded-xl bg-white border border-[var(--border)] mb-8 shadow-sm">
         <button
           onClick={() => { setActiveTab('scrape'); setError(''); setFindResult(null); }}
           className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
@@ -192,15 +449,53 @@ export default function Scraper() {
               </div>
             </div>
             <div className="p-4 pt-0">
-              <button
-                onClick={handleScrape}
-                disabled={loading || (!companyName && !domain && !linkedinUrl)}
-                className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.99] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 transition-all"
-              >
-                {loading ? 'Scraping...' : 'Start Scraping'}
-              </button>
+              <div className="flex gap-2 w-full items-stretch">
+                <button
+                  type="button"
+                  onClick={handleScrape}
+                  disabled={loading || (!companyName && !domain && !linkedinUrl)}
+                  className="flex-1 min-w-0 py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.99] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 transition-all"
+                >
+                  {loading ? 'Scraping…' : 'Start Scraping'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleScrapeCancelClick}
+                  disabled={!loading}
+                  title={
+                    loading
+                      ? scrapeCancelArmed
+                        ? 'Click again to confirm stop'
+                        : 'First click arms stop; click again, then confirm'
+                      : undefined
+                  }
+                  className={`shrink-0 rounded-xl text-[14px] font-semibold transition-all duration-300 ease-out border-2 whitespace-nowrap ${
+                    loading
+                      ? 'max-w-[min(100%,13rem)] opacity-100 px-3 sm:px-4 py-3 border-red-300 bg-red-50 text-red-800 hover:bg-red-100 shadow-sm translate-x-0'
+                      : 'max-w-0 min-w-0 opacity-0 px-0 py-3 border-transparent bg-transparent text-transparent pointer-events-none overflow-hidden -translate-x-1'
+                  } ${scrapeCancelArmed ? 'ring-2 ring-amber-400 ring-offset-1' : ''} disabled:pointer-events-none`}
+                >
+                  {scrapeCancelArmed ? 'Confirm stop' : 'Stop scrape'}
+                </button>
+              </div>
+              {loading && (
+                <p className="text-[11px] text-slate-500 mt-2 px-0.5">
+                  <strong className="text-slate-600">Stop scrape</strong> slides out next to Start. Tap it once to arm, again—then confirm—to disconnect and abort Apify.
+                </p>
+              )}
             </div>
           </div>
+
+          {(loading || scrapeProgress) && (
+            <ScrapeProgressPanel
+              progress={scrapeProgress}
+              startedAt={scrapeStartedAtRef.current}
+              tick={scrapeTick}
+            />
+          )}
+
+          {loading && activeTab === 'scrape' && <ScrapeResultsSkeleton />}
+
           {error && <p className="text-[#ff3b30] text-[13px] px-1 mt-2">{error}</p>}
           {infoMessage && <p className="text-emerald-600 text-[13px] px-1 mt-2">{infoMessage}</p>}
         </div>
