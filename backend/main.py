@@ -57,6 +57,14 @@ def _run_digests_sync():
         )
 
 
+def _run_gmail_reply_sync():
+    """Bridge for APScheduler: schedule Gmail inbox reply sync on main loop."""
+    if _loop_for_jobs:
+        _loop_for_jobs.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(sync_replies_all_senders(), loop=_loop_for_jobs)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _loop_for_jobs

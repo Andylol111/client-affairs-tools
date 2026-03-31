@@ -1,11 +1,15 @@
 """
 Contacts API - Contact Scraper & Discovery Engine
 """
+import asyncio
 import csv
 import io
 import os
 import json
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from typing import Awaitable, Callable, Optional
+
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models import ContactCreate, ScrapeRequest, SearchPersonRequest
@@ -23,6 +27,15 @@ from app.services.contact_scraper import (
 from app.services.linkedin_scraper import scrape_linkedin_company
 
 router = APIRouter()
+
+ProgressCallback = Optional[Callable[[dict], Awaitable[None]]]
+
+
+class ScrapeCancelled(Exception):
+    """Client disconnected or user aborted; optional partial DB snapshot."""
+
+    def __init__(self, snapshot: dict | None = None):
+        self.snapshot = snapshot or {"contacts": [], "count": 0, "duplicates_skipped": 0}
 
 
 def _normalize_name(name: str) -> str:
@@ -86,6 +99,178 @@ def _merge_contacts(
             "contact_source": "linkedin_apify" if li.get("email") else "linkedin_inferred",
         })
     return merged
+
+
+async def _execute_scrape(
+    req: ScrapeRequest,
+    on_progress: ProgressCallback = None,
+    cancel_event: asyncio.Event | None = None,
+) -> dict:
+    """
+    Core scrape pipeline. Optional on_progress receives {"type":"progress", "phase", "pct", "message", "detail?"}.
+    cancel_event: when set, stops work and raises ScrapeCancelled (stream disconnect / user abort).
+    """
+    async def emit(phase: str, pct: float, message: str, detail: str | None = None) -> None:
+        if on_progress:
+            await on_progress(
+                {
+                    "type": "progress",
+                    "phase": phase,
+                    "pct": round(min(100.0, max(0.0, pct)), 1),
+                    "message": message,
+                    "detail": detail,
+                }
+            )
+
+    async def _check_cancel() -> None:
+        if cancel_event and cancel_event.is_set():
+            raise ScrapeCancelled()
+
+    domain = req.domain
+    if not domain and req.company_name:
+        domain = extract_domain_from_company(req.company_name)
+    if not domain and not req.linkedin_url:
+        raise HTTPException(400, "Provide domain, company_name, or linkedin_url")
+
+    scrape_domain = bool(domain and normalize_domain(domain))
+    has_li = bool(req.linkedin_url and str(req.linkedin_url).strip())
+    main_lo, main_hi = 5.0, 82.0
+    if scrape_domain and has_li:
+        domain_lo, domain_hi = main_lo, main_lo + (main_hi - main_lo) * 0.52
+        li_lo, li_hi = domain_hi, main_hi
+    elif scrape_domain:
+        domain_lo, domain_hi = main_lo, main_hi
+        li_lo, li_hi = None, None
+    else:
+        domain_lo, domain_hi = None, None
+        li_lo, li_hi = main_lo, main_hi
+
+    await emit("init", 2.0, "Starting scrape", "Resolving company and sources")
+    await _check_cancel()
+
+    domain_contacts = []
+    if domain and scrape_domain:
+        norm_dom = normalize_domain(domain)
+
+        async def on_domain_page(i: int, n: int, url: str) -> None:
+            await _check_cancel()
+            frac = (i - 1) / max(n, 1)
+            pct = domain_lo + (domain_hi - domain_lo) * frac if domain_lo is not None else main_lo
+            await emit(
+                "domain",
+                pct,
+                "Crawling company website",
+                f"Page {i}/{n}: {url}",
+            )
+
+        domain_contacts = await scrape_contacts_from_domain(
+            domain=norm_dom,
+            company_name=req.company_name,
+            on_page=on_domain_page if domain_lo is not None else None,
+            cancel_event=cancel_event,
+        )
+        await emit("domain", domain_hi if domain_hi is not None else main_hi, "Website crawl finished", None)
+        await _check_cancel()
+
+    linkedin_contacts = []
+    company_name = req.company_name
+    if req.linkedin_url:
+        if li_lo is not None:
+            await emit(
+                "linkedin",
+                li_lo,
+                "LinkedIn employee fetch",
+                "Running Apify or public company page (can take 1–3 minutes)",
+            )
+        li_data = await scrape_linkedin_company(
+            req.linkedin_url,
+            max_employees=req.linkedin_max_employees or 50,
+            cancel_event=cancel_event,
+        )
+        if li_data.get("aborted"):
+            raise ScrapeCancelled()
+        if (li_data.get("error") or "") == "Cancelled":
+            raise ScrapeCancelled()
+        company_name = company_name or li_data.get("company_name")
+        if li_data.get("contacts"):
+            linkedin_contacts = li_data["contacts"]
+        if li_hi is not None:
+            detail = None
+            if li_data.get("error"):
+                detail = str(li_data["error"])
+            await emit("linkedin", li_hi, "LinkedIn step finished", detail)
+        await _check_cancel()
+
+    if not domain and company_name:
+        domain = extract_domain_from_company(company_name)
+    domain = normalize_domain(domain or "")
+
+    await emit("prepare", 85.0, "Merging contacts and loading email patterns", None)
+    await _check_cancel()
+
+    custom_patterns = []
+    db_prep = await get_db()
+    try:
+        cursor = await db_prep.execute("SELECT pattern FROM custom_email_formats ORDER BY priority DESC")
+        rows = await cursor.fetchall()
+        custom_patterns = [r["pattern"] for r in rows if r.get("pattern")]
+    except Exception:
+        pass
+    finally:
+        await db_prep.close()
+
+    contacts_data = _merge_contacts(
+        domain_contacts, linkedin_contacts, company_name or "", domain or "", custom_patterns
+    )
+
+    await emit("prepare", 89.0, f"Merged {len(contacts_data)} candidate contact(s)", "Saving to database…")
+
+    db = await get_db()
+    created = []
+    duplicates_skipped = 0
+    total_save = max(len(contacts_data), 1)
+    try:
+        for idx, c in enumerate(contacts_data):
+            save_pct = 90.0 + (idx / total_save) * 9.5
+            if on_progress and idx % max(1, len(contacts_data) // 20) == 0:
+                await emit(
+                    "save",
+                    save_pct,
+                    "Saving contacts",
+                    f"Row {idx + 1} of {len(contacts_data)}",
+                )
+            try:
+                email_clean = sanitize_email(c.get("email") or "")
+                domain_clean = normalize_domain(c.get("company_domain") or "")
+                cursor = await db.execute("SELECT id FROM contacts WHERE email = ?", (email_clean,))
+                if await cursor.fetchone():
+                    duplicates_skipped += 1
+                    continue
+                cursor = await db.execute(
+                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, contact_source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        c.get("name"),
+                        email_clean,
+                        c.get("title"),
+                        c.get("company"),
+                        domain_clean,
+                        c.get("linkedin_url"),
+                        c.get("confidence", "medium"),
+                        c.get("department"),
+                        c.get("contact_source"),
+                    ),
+                )
+                row_id = cursor.lastrowid
+                await db.commit()
+                created.append({"id": row_id, **c, "email": email_clean, "company_domain": domain_clean})
+            except Exception:
+                await db.rollback()
+                pass
+        await emit("save", 100.0, "Done", None)
+    finally:
+        await db.close()
+    return {"contacts": created, "count": len(created), "duplicates_skipped": duplicates_skipped}
 
 
 def _parse_csv(content: bytes) -> list[dict]:
@@ -303,85 +488,88 @@ Respond in clear bullet points and one short paragraph. If no contact info is fo
 @router.post("/scrape")
 async def scrape_contacts(req: ScrapeRequest):
     """Scrape contacts from domain, company name, and/or LinkedIn company URL."""
-    domain = req.domain
-    if not domain and req.company_name:
-        domain = extract_domain_from_company(req.company_name)
-    if not domain and not req.linkedin_url:
-        raise HTTPException(400, "Provide domain, company_name, or linkedin_url")
+    return await _execute_scrape(req, None)
 
-    domain_contacts = []
-    if domain:
-        domain_contacts = await scrape_contacts_from_domain(
-            domain=domain,
-            company_name=req.company_name,
-        )
 
-    linkedin_contacts = []
-    company_name = req.company_name
-    if req.linkedin_url:
-        li_data = await scrape_linkedin_company(
-            req.linkedin_url,
-            max_employees=req.linkedin_max_employees or 50,
-        )
-        company_name = company_name or li_data.get("company_name")
-        if li_data.get("contacts"):
-            linkedin_contacts = li_data["contacts"]
+@router.post("/scrape-stream")
+async def scrape_contacts_stream(req: ScrapeRequest, request: Request):
+    """Same pipeline as /scrape but streams NDJSON progress events for live UI feedback."""
 
-    if not domain and company_name:
-        domain = extract_domain_from_company(company_name)
-    domain = normalize_domain(domain or "")
+    async def event_generator():
+        cancel = asyncio.Event()
+        queue: asyncio.Queue = asyncio.Queue()
+        outcome: dict = {}
 
-    custom_patterns = []
-    db_prep = await get_db()
-    try:
-        cursor = await db_prep.execute("SELECT pattern FROM custom_email_formats ORDER BY priority DESC")
-        rows = await cursor.fetchall()
-        custom_patterns = [r["pattern"] for r in rows if r.get("pattern")]
-    except Exception:
-        pass
-    finally:
-        await db_prep.close()
-
-    contacts_data = _merge_contacts(
-        domain_contacts, linkedin_contacts, company_name or "", domain or "", custom_patterns
-    )
-
-    db = await get_db()
-    created = []
-    duplicates_skipped = 0
-    try:
-        for c in contacts_data:
+        async def watch_disconnect() -> None:
             try:
-                email_clean = sanitize_email(c.get("email") or "")
-                domain_clean = normalize_domain(c.get("company_domain") or "")
-                cursor = await db.execute("SELECT id FROM contacts WHERE email = ?", (email_clean,))
-                if await cursor.fetchone():
-                    duplicates_skipped += 1
-                    continue
-                cursor = await db.execute(
-                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, contact_source)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        c.get("name"),
-                        email_clean,
-                        c.get("title"),
-                        c.get("company"),
-                        domain_clean,
-                        c.get("linkedin_url"),
-                        c.get("confidence", "medium"),
-                        c.get("department"),
-                        c.get("contact_source"),
-                    ),
-                )
-                row_id = cursor.lastrowid
-                await db.commit()
-                created.append({"id": row_id, **c, "email": email_clean, "company_domain": domain_clean})
-            except Exception:
-                await db.rollback()
+                while True:
+                    if await request.is_disconnected():
+                        cancel.set()
+                        return
+                    await asyncio.sleep(0.35)
+            except asyncio.CancelledError:
+                raise
+
+        disconnect_watcher = asyncio.create_task(watch_disconnect())
+
+        async def push(ev: dict) -> None:
+            await queue.put(ev)
+
+        async def run() -> None:
+            try:
+                outcome["result"] = await _execute_scrape(req, push, cancel_event=cancel)
+            except ScrapeCancelled as sc:
+                outcome["cancelled"] = True
+                outcome["partial"] = sc.snapshot
+            except HTTPException as e:
+                d = e.detail
+                outcome["error"] = d if isinstance(d, str) else str(d)
+            except Exception as e:
+                outcome["error"] = str(e)
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield json.dumps(item, default=str) + "\n"
+            if outcome.get("cancelled"):
+                partial = outcome.get("partial") or {}
+                yield json.dumps(
+                    {
+                        "type": "cancelled",
+                        "message": "Scrape stopped.",
+                        "contacts": partial.get("contacts", []),
+                        "count": partial.get("count", 0),
+                        "duplicates_skipped": partial.get("duplicates_skipped", 0),
+                    },
+                    default=str,
+                ) + "\n"
+            elif outcome.get("error"):
+                yield json.dumps({"type": "error", "message": outcome["error"]}, default=str) + "\n"
+            elif outcome.get("result") is not None:
+                r = outcome["result"]
+                yield json.dumps(
+                    {
+                        "type": "complete",
+                        "contacts": r["contacts"],
+                        "count": r["count"],
+                        "duplicates_skipped": r.get("duplicates_skipped", 0),
+                    },
+                    default=str,
+                ) + "\n"
+        finally:
+            disconnect_watcher.cancel()
+            try:
+                await disconnect_watcher
+            except asyncio.CancelledError:
                 pass
-    finally:
-        await db.close()
-    return {"contacts": created, "count": len(created), "duplicates_skipped": duplicates_skipped}
+            await task
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 
 @router.get("/companies/summary")
