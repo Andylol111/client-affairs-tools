@@ -106,6 +106,92 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+    /**
+     * NDJSON stream: progress events, then complete | cancelled | error.
+     */
+    scrapeStream: async (
+      data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number },
+      onEvent: (ev: Record<string, unknown>) => void,
+      opts?: { signal?: AbortSignal }
+    ): Promise<{ contacts: any[]; count: number; duplicates_skipped?: number; cancelled?: boolean }> => {
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE}/api/contacts/scrape-stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify(data),
+          signal: opts?.signal,
+        });
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          return { contacts: [], count: 0, duplicates_skipped: 0, cancelled: true };
+        }
+        throw e;
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        try {
+          const j = JSON.parse(text);
+          const d = j.detail;
+          throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+        } catch (e) {
+          if (e instanceof Error && e.message !== text) throw e;
+          throw new Error(text);
+        }
+      }
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('No response body');
+      const dec = new TextDecoder();
+      let buffer = '';
+      let result: { contacts: any[]; count: number; duplicates_skipped?: number; cancelled?: boolean } | null = null;
+
+      const handleLine = (line: string) => {
+        if (!line.trim()) return;
+        const ev = JSON.parse(line) as Record<string, unknown>;
+        onEvent(ev);
+        if (ev.type === 'complete') {
+          result = {
+            contacts: (ev.contacts as any[]) || [],
+            count: Number(ev.count) || 0,
+            duplicates_skipped: Number(ev.duplicates_skipped) || 0,
+          };
+        }
+        if (ev.type === 'cancelled') {
+          result = {
+            contacts: (ev.contacts as any[]) || [],
+            count: Number(ev.count) || 0,
+            duplicates_skipped: Number(ev.duplicates_skipped) || 0,
+            cancelled: true,
+          };
+        }
+        if (ev.type === 'error') throw new Error(String(ev.message || 'Scrape failed'));
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, nl);
+            buffer = buffer.slice(nl + 1);
+            handleLine(line);
+          }
+        }
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+          return result ?? { contacts: [], count: 0, duplicates_skipped: 0, cancelled: true };
+        }
+        throw e;
+      }
+      buffer += dec.decode();
+      const tail = buffer.trim();
+      if (tail) handleLine(tail);
+
+      if (!result) throw new Error('Stream ended without a complete result');
+      return result;
+    },
     searchPerson: (data: { name: string; company?: string }) =>
       fetchApi<{ query: string; results: { title?: string; url?: string; content?: string }[]; summary: string | null; message: string | null }>(
         '/api/contacts/search-person',

@@ -3,12 +3,15 @@ Contact Scraper & Discovery Engine
 Domain crawling, email inference, validation
 """
 import re
-import httpx
-from bs4 import BeautifulSoup
-from typing import Optional
-from urllib.parse import urljoin, urlparse
-import dns.resolver
 import asyncio
+import httpx
+import dns.resolver
+from bs4 import BeautifulSoup
+from typing import Awaitable, Callable, Optional
+from urllib.parse import urljoin, urlparse
+
+# Optional (1-based page index, total pages, url) progress hook for UI streaming
+PageProgressHook = Optional[Callable[[int, int, str], Awaitable[None]]]
 
 def _is_valid_email_format(email: str) -> bool:
     try:
@@ -207,6 +210,8 @@ async def scrape_contacts_from_domain(
     domain: str,
     company_name: Optional[str] = None,
     max_pages: int = 10,
+    on_page: PageProgressHook = None,
+    cancel_event: Optional[asyncio.Event] = None,
 ) -> list[dict]:
     """
     Scrape a company domain for contact information.
@@ -245,7 +250,12 @@ async def scrape_contacts_from_domain(
                 f"{base_url.rstrip('/')}/contact-us",
             ]
 
-            for url in urls_to_check[:max_pages]:
+            total_pages = min(len(urls_to_check), max_pages)
+            for page_idx, url in enumerate(urls_to_check[:max_pages]):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                if on_page:
+                    await on_page(page_idx + 1, total_pages, url)
                 try:
                     resp = await client.get(url)
                     if resp.status_code != 200:
