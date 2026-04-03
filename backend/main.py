@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.database import init_db
-from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations
+from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
 from app.services.gmail_reply_sync import sync_replies_all_senders
@@ -121,6 +121,7 @@ app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(attachments.router, prefix="/api/attachments", tags=["attachments"])
 app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"])
 app.include_router(operations.router, prefix="/api/admin/operations", tags=["operations"])
+app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgoutreach"])
 
 
 @app.get("/api/health")
