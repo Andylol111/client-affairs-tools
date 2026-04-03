@@ -18,6 +18,7 @@ def row_to_dict(row):
 async def get_db():
     """Get database connection."""
     db = await aiosqlite.connect(str(DB_PATH))
+    await db.execute("PRAGMA foreign_keys = ON")
     db.row_factory = aiosqlite.Row
     return db
 
@@ -449,5 +450,97 @@ async def init_db():
                 await db.commit()
         except Exception:
             pass
+
+        # YUCGoutreach company discovery (legacy tables were apollo_* — renamed below)
+        try:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='apollo_discovery_runs'"
+            )
+            has_legacy_runs = await cur.fetchone()
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='yucgoutreach_discovery_runs'"
+            )
+            has_new_runs = await cur.fetchone()
+            if has_legacy_runs and not has_new_runs:
+                await db.execute("ALTER TABLE apollo_discovery_runs RENAME TO yucgoutreach_discovery_runs")
+                await db.commit()
+        except Exception:
+            pass
+        try:
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='apollo_prospects'"
+            )
+            has_legacy_p = await cur.fetchone()
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='yucgoutreach_prospects'"
+            )
+            has_new_p = await cur.fetchone()
+            if has_legacy_p and not has_new_p:
+                await db.execute("ALTER TABLE apollo_prospects RENAME TO yucgoutreach_prospects")
+                await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "ALTER TABLE yucgoutreach_prospects RENAME COLUMN apollo_score TO yucgoutreach_score"
+            )
+            await db.commit()
+        except Exception:
+            pass
+
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS yucgoutreach_discovery_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER REFERENCES users(id),
+                company_name TEXT NOT NULL,
+                company_domain TEXT,
+                linkedin_company_url TEXT,
+                max_prospects INTEGER NOT NULL DEFAULT 25,
+                worker_concurrency INTEGER NOT NULL DEFAULT 4,
+                status TEXT NOT NULL DEFAULT 'queued',
+                progress_pct REAL DEFAULT 0,
+                progress_message TEXT,
+                prospects_count INTEGER DEFAULT 0,
+                research_json TEXT,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_yucgoutreach_runs_user ON yucgoutreach_discovery_runs(user_id);
+            CREATE INDEX IF NOT EXISTS idx_yucgoutreach_runs_status ON yucgoutreach_discovery_runs(status);
+
+            CREATE TABLE IF NOT EXISTS yucgoutreach_prospects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL REFERENCES yucgoutreach_discovery_runs(id) ON DELETE CASCADE,
+                first_name TEXT,
+                last_name TEXT,
+                email TEXT,
+                company TEXT,
+                contact_url TEXT,
+                title TEXT,
+                account_url TEXT,
+                photo_url TEXT,
+                account_link TEXT,
+                phone TEXT,
+                phone_code TEXT,
+                verified INTEGER DEFAULT 0,
+                qualification_notes TEXT,
+                contact_profile_url TEXT,
+                linkedin_url TEXT,
+                fit_status TEXT,
+                score REAL,
+                country TEXT,
+                employees TEXT,
+                industry TEXT,
+                keywords_1 TEXT,
+                keywords_2 TEXT,
+                yucgoutreach_score REAL,
+                evidence_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_yucgoutreach_prospects_run ON yucgoutreach_prospects(run_id);
+        """)
+        await db.commit()
     finally:
         await db.close()
