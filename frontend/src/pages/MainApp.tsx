@@ -121,6 +121,7 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
                   { to: '/campaigns', label: 'Campaigns', icon: '📤' },
                   { to: '/analytics', label: 'Analytics', icon: '📈' },
                   { to: '/outreach', label: 'Outreach', icon: '🎯' },
+                  { to: '/yucgoutreach', label: 'YUCGoutreach', icon: '🧭' },
                   ...(user.role === 'admin' ? [{ to: '/admin', label: 'Admin', icon: '🔐' }] : []),
                 ].map(({ to, label, icon }) => (
                   <NavLink
