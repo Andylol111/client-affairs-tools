@@ -638,6 +638,50 @@ export const api = {
       fetchApi<any>(`/api/attachments/${id}`, { method: 'DELETE' }),
     downloadUrl: (id: number) => `${API_BASE}/api/attachments/${id}/download`,
   },
+  yucgoutreach: {
+    createRun: (data: {
+      company_name: string;
+      company_domain?: string;
+      linkedin_company_url?: string;
+      max_prospects?: number;
+      worker_concurrency?: number;
+    }) =>
+      fetchApi<{ id: number; status: string }>('/api/yucgoutreach/runs', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    listRuns: (limit?: number) =>
+      fetchApi<any[]>(`/api/yucgoutreach/runs?limit=${limit ?? 50}`),
+    getRun: (id: number) => fetchApi<any>(`/api/yucgoutreach/runs/${id}`),
+    listProspects: (runId: number, limit?: number) =>
+      fetchApi<any[]>(`/api/yucgoutreach/runs/${runId}/prospects?limit=${limit ?? 500}`),
+    deleteRun: (id: number) =>
+      fetchApi<{ ok: boolean; deleted: number }>(`/api/yucgoutreach/runs/${id}`, { method: 'DELETE' }),
+    exportExcel: async (runId: number) => {
+      const res = await fetch(`${API_BASE}/api/yucgoutreach/runs/${runId}/export.xlsx`, { headers: getAuthHeaders() });
+      if (!res.ok) {
+        const text = await res.text();
+        try {
+          const j = JSON.parse(text);
+          const d = j.detail;
+          throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+        } catch (e) {
+          if (e instanceof Error && e.message !== text) throw e;
+          throw new Error(text);
+        }
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition');
+      const match = cd?.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `YUCGoutreach_export_${runId}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  },
   settings: {
     get: () => fetchApi<any>('/api/settings'),
     update: (data: { signature?: string; signature_image_url?: string; attachments_enabled?: boolean }) =>

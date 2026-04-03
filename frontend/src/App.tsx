@@ -7,6 +7,7 @@ import Campaigns from './pages/Campaigns';
 import CampaignDetail from './pages/CampaignDetail';
 import Analytics from './pages/Analytics';
 import Outreach from './pages/Outreach';
+import YucgOutreach from './pages/YucgOutreach';
 import Admin from './pages/Admin';
 import Profile from './pages/Profile';
 import LoginPage from './pages/LoginPage';
@@ -172,6 +173,8 @@ function AppContent() {
         <Route path="campaigns/:id" element={<CampaignDetail />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="outreach" element={<Outreach />} />
+        <Route path="discovery" element={<Navigate to="/yucgoutreach" replace />} />
+        <Route path="yucgoutreach" element={<YucgOutreach />} />
         <Route path="admin" element={<Admin />} />
         <Route path="profile" element={<Profile />} />
         <Route path="settings" element={<Navigate to="/profile?tab=settings" replace />} />
