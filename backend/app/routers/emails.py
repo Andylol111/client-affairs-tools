@@ -179,7 +179,7 @@ async def generate_emails_batch(requests: list[EmailGenerateRequest], user: dict
     results = []
     for req in requests:
         try:
-            resp = await generate_email_for_contact(req)
+            resp = await generate_email_for_contact(req, user)
             results.append(resp.model_dump())
         except Exception as e:
             results.append({

@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent.parent / "clientreach.db"
+# P2 will switch get_db() to this URL. Until then SQLite file above is the store.
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip() or f"sqlite:///{DB_PATH}"
 
 
 def row_to_dict(row):
@@ -540,7 +542,86 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_yucgoutreach_prospects_run ON yucgoutreach_prospects(run_id);
+
+            CREATE TABLE IF NOT EXISTS yucg_prospect_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company TEXT NOT NULL UNIQUE,
+                sector TEXT,
+                why_attractive TEXT,
+                suggested_engagement_theme TEXT,
+                yale_yucg_hook TEXT,
+                source_row INTEGER,
+                extra_json TEXT,
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_yucg_prospect_targets_sector ON yucg_prospect_targets(sector);
         """)
         await db.commit()
+
+        for col, col_type in [
+            ("email_verification_status", "TEXT"),
+            ("ai_verdict", "TEXT"),
+            ("ai_reason", "TEXT"),
+            ("contact_source", "TEXT"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE yucgoutreach_prospects ADD COLUMN {col} {col_type}")
+                await db.commit()
+            except Exception:
+                pass
+
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS company_email_patterns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_domain TEXT NOT NULL,
+                company_name TEXT,
+                pattern_key TEXT NOT NULL,
+                pattern_template TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                sample_count INTEGER DEFAULT 0,
+                verified_samples INTEGER DEFAULT 0,
+                sources_json TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(company_domain, pattern_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_company_email_patterns_domain ON company_email_patterns(company_domain);
+
+            CREATE TABLE IF NOT EXISTS contact_discovery_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scrape_run_id TEXT NOT NULL,
+                email TEXT,
+                name TEXT,
+                title TEXT,
+                company TEXT,
+                contact_source TEXT,
+                source_url TEXT,
+                linkedin_url TEXT,
+                discovery_context TEXT,
+                ai_verdict TEXT,
+                ai_reason TEXT,
+                ai_source_note TEXT,
+                ai_model TEXT,
+                email_verification_status TEXT,
+                confidence TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_contact_discovery_logs_run ON contact_discovery_logs(scrape_run_id);
+        """)
+        await db.commit()
+
+        for col, col_type in [
+            ("email_verification_status", "TEXT"),
+            ("email_pattern", "TEXT"),
+            ("ai_verdict", "TEXT"),
+            ("ai_reason", "TEXT"),
+            ("ai_source_note", "TEXT"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE contacts ADD COLUMN {col} {col_type}")
+                await db.commit()
+            except Exception:
+                pass
     finally:
         await db.close()
