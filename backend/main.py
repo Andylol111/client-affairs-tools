@@ -16,12 +16,14 @@ else:
     print(f"[env] No backend/.env found at {_env_path}")
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.auth_deps import get_current_user
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.database import init_db
-from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach
+from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach, yucg_prospects
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
 from app.services.gmail_reply_sync import sync_replies_all_senders
@@ -109,19 +111,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"])
-app.include_router(emails.router, prefix="/api/emails", tags=["emails"])
-app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"])
-app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
+_require_user = [Depends(get_current_user)]
+app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"], dependencies=_require_user)
+app.include_router(emails.router, prefix="/api/emails", tags=["emails"], dependencies=_require_user)
+app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"], dependencies=_require_user)
+app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"], dependencies=_require_user)
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"])
+app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"], dependencies=_require_user)
 app.include_router(track.router, prefix="/api/track", tags=["track"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(attachments.router, prefix="/api/attachments", tags=["attachments"])
 app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"])
 app.include_router(operations.router, prefix="/api/admin/operations", tags=["operations"])
 app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgoutreach"])
+app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
 
 
 @app.get("/api/health")

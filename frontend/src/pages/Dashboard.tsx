@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-
-const API_BASE = typeof window !== 'undefined' && window.location.protocol === 'https:'
-  ? 'https://localhost:8000'
-  : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
+import { api } from '../api';
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -14,13 +11,6 @@ const DEFAULT_DATA = {
   reply_rate: 0,
 };
 
-function fetchWithTimeout(url: string, ms = 5000) {
-  return Promise.race([
-    fetch(url),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
-  ]);
-}
-
 export default function Dashboard() {
   const [data, setData] = useState<any>(DEFAULT_DATA);
   const [insights, setInsights] = useState<string[]>([]);
@@ -28,9 +18,9 @@ export default function Dashboard() {
   const [apiError, setApiError] = useState(false);
 
   useEffect(() => {
-    fetchWithTimeout(`${API_BASE}/api/analytics/dashboard`)
-      .then((r: unknown) => (r as Response).json())
-      .then((d: unknown) => setData({ ...DEFAULT_DATA, ...(d as object || {}) }))
+    api.analytics
+      .dashboard()
+      .then((d) => setData({ ...DEFAULT_DATA, ...d }))
       .catch(() => {
         setData(DEFAULT_DATA);
         setApiError(true);
@@ -38,16 +28,16 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    fetchWithTimeout(`${API_BASE}/api/analytics/insights`)
-      .then((r: unknown) => (r as Response).json())
-      .then((i: { insights?: string[] }) => setInsights(i?.insights || []))
+    api.analytics
+      .insights()
+      .then((i) => setInsights(i?.insights || []))
       .catch(() => setInsights([]));
   }, []);
 
   useEffect(() => {
-    fetchWithTimeout(`${API_BASE}/api/analytics/due-follow-ups`)
-      .then((r: unknown) => (r as Response).json())
-      .then((d: { count?: number }) => setDueFollowUps(d?.count ?? 0))
+    api.analytics
+      .dueFollowUps()
+      .then((d) => setDueFollowUps(d?.count ?? 0))
       .catch(() => setDueFollowUps(0));
   }, []);
 

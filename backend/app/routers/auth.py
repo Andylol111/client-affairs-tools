@@ -15,8 +15,8 @@ from pydantic import BaseModel
 import httpx
 from datetime import datetime, timedelta
 from app.database import get_db, row_to_dict
-from app.auth_deps import get_current_user
-from app.jwt_utils import JWT_SECRET, create_token, decode_token
+from app.auth_deps import get_current_user, get_current_user_optional
+from app.jwt_utils import JWT_SECRET, create_token
 
 router = APIRouter()
 
@@ -192,26 +192,19 @@ async def _do_google_callback(code: str):
 
 
 @router.get("/me")
-async def get_me(authorization: str | None = None):
-    """Get current user from JWT. Pass Authorization: Bearer <token>."""
-    token = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization[7:]
-    if not token:
-        return {"authenticated": False, "user": None}
-    payload = decode_token(token)
-    if not payload:
+async def get_me(user: dict | None = Depends(get_current_user_optional)):
+    """Current user from Authorization: Bearer or X-API-Key."""
+    if not user:
         return {"authenticated": False, "user": None}
     return {
         "authenticated": True,
         "user": {
-            "id": int(payload["sub"]),
-            "email": payload.get("email"),
-            "name": payload.get("name"),
-            "picture": payload.get("picture"),
-            "role": payload.get("role") or "standard",
+            "id": user["id"],
+            "email": user.get("email"),
+            "name": user.get("name"),
+            "picture": user.get("picture"),
+            "role": user.get("role") or "standard",
         },
-        "token": token,
     }
 
 

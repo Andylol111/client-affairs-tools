@@ -69,22 +69,9 @@ function AppContent() {
         if (data.authenticated && data.user) {
           setUser({ ...data.user, role: data.user.role || 'standard' });
         } else {
-          // API said not authenticated - fallback: trust JWT if valid (handles backend restart / JWT_SECRET change)
-          const payload = (() => {
-            try {
-              const p = JSON.parse(atob(token.split('.')[1]));
-              return p?.email && p?.exp && p.exp * 1000 > Date.now() ? p : null;
-            } catch {
-              return null;
-            }
-          })();
-          if (payload) {
-            setUser({ email: payload.email, name: payload.name, picture: payload.picture, role: payload.role || 'standard' });
-          } else {
-            localStorage.removeItem('yucg_token');
-            localStorage.removeItem('yucg_token_time');
-            setUser(null);
-          }
+          localStorage.removeItem('yucg_token');
+          localStorage.removeItem('yucg_token_time');
+          setUser(null);
         }
       })
       .catch(() => {
