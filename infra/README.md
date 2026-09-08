@@ -9,7 +9,7 @@ Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite
 | Mode | What AWS does | Rough host $ |
 |------|----------------|--------------|
 | **On** (always-on template) | Instance running, drain/reply jobs in-process | ~$24–28/mo + Bedrock |
-| **Off** | `stop-instances` (keep EBS + EIP). AppUrl HTML may fail until start. Mail does not drain. | ~$6–8/mo (disk + EIP) |
+| **Off** | `stop-instances` (keep EBS). AppUrl HTML may fail until start. Mail does not drain. | ~$6–8/mo (disk) |
 
 Do **not** put the web app on Lambda + API Gateway: Find and Studio can exceed the 29s API Gateway timeout. Do **not** use Aurora as the always-on DB: 0.5 ACU 24/7 is ~$44/mo, more than this box. Aurora min-0 is a later “off ≈ $0 DB” option after Postgres cutover (`db_compat.py`), not the default.
 
@@ -42,7 +42,7 @@ Preferred — HostControl Lambda (output `HostControlFunctionName`):
 FN=$(aws cloudformation describe-stacks --stack-name YucgOutreach-dev \
   --query "Stacks[0].Outputs[?OutputKey=='HostControlFunctionName'].OutputValue" --output text)
 aws lambda invoke --function-name "$FN" --payload '{"action":"start"}' /tmp/hc.json && cat /tmp/hc.json
-# {"action":"stop"}  — off, keeps EBS + EIP
+# {"action":"stop"}  — off, keeps EBS
 # {"action":"status"}
 ```
 

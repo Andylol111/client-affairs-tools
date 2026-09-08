@@ -15,7 +15,10 @@ new YucgOutreachStack(app, `YucgOutreach-${envName}`, {
   env: awsEnv,
 });
 
-const connectionArn = (app.node.tryGetContext("githubConnectionArn") as string | undefined) || "";
+const connectionArn =
+  String(app.node.tryGetContext("githubConnectionArn") || "").match(
+    /arn:aws[a-zA-Z0-9-]*:code(?:connections|star-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]+/i,
+  )?.[0] || "";
 if (connectionArn) {
   new YucgPipelineStack(app, `YucgPipeline-${envName}`, {
     envName,
