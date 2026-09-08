@@ -48,6 +48,7 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
             angle=req.angle,
             custom_instructions=req.custom_instructions,
             value_proposition=req.value_proposition,
+            model=req.model,
         )
         signature = await get_setting("signature") or ""
         await db.execute(
@@ -70,10 +71,50 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
         await db.close()
 
 
+async def _upsert_contact_by_email(
+    db,
+    *,
+    email: str,
+    name: str | None,
+    title: str | None,
+    company: str | None,
+) -> int:
+    from app.services.contact_scraper import normalize_domain, sanitize_email
+
+    em = sanitize_email(email).strip().lower()
+    if not em or "@" not in em:
+        raise HTTPException(400, "Valid email required to save a catalog contact")
+    domain = normalize_domain(company or "") if company else ""
+    cur = await db.execute("SELECT id FROM contacts WHERE lower(email) = ?", (em,))
+    row = await cur.fetchone()
+    if row:
+        cid = int(row["id"])
+        await db.execute(
+            """UPDATE contacts SET
+                   name = COALESCE(NULLIF(?, ''), name),
+                   title = COALESCE(NULLIF(?, ''), title),
+                   company = COALESCE(NULLIF(?, ''), company),
+                   company_domain = COALESCE(NULLIF(?, ''), company_domain)
+               WHERE id = ?""",
+            ((name or "").strip(), (title or "").strip(), (company or "").strip(), domain, cid),
+        )
+        return cid
+    cur = await db.execute(
+        """INSERT INTO contacts (name, email, title, company, company_domain, contact_source)
+           VALUES (?, ?, ?, ?, ?, 'studio')""",
+        (name, em, title, company, domain or None),
+    )
+    return int(cur.lastrowid)
+
+
 @router.post("/generate-template", response_model=EmailGenerateResponse)
-async def generate_email_template(req: EmailGenerateTemplateRequest):
-    """Generate an email without a contact - use manual name, company, title."""
-    from app.services.contact_scraper import normalize_domain
+async def generate_email_template(
+    req: EmailGenerateTemplateRequest,
+    user: dict | None = Depends(get_current_user_optional),
+):
+    """Generate an email. If the user is signed in and gave an email, upsert the catalog row and cache the draft."""
+    from app.services.contact_scraper import normalize_domain, sanitize_email
+
     company_domain = normalize_domain(req.company or "") if req.company else ""
     subject, body = generate_email(
         contact_name=req.name,
@@ -85,11 +126,29 @@ async def generate_email_template(req: EmailGenerateTemplateRequest):
         angle=req.angle,
         custom_instructions=req.custom_instructions,
         value_proposition=req.value_proposition,
+        model=req.model,
     )
+    contact_id = None
+    em = sanitize_email(req.email or "").strip()
+    if user and em:
+        db = await get_db()
+        try:
+            contact_id = await _upsert_contact_by_email(
+                db, email=em, name=req.name, title=req.title, company=req.company
+            )
+            signature = await get_setting("signature") or ""
+            await db.execute(
+                """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (user["id"], contact_id, subject, body, signature),
+            )
+            await db.commit()
+        finally:
+            await db.close()
     return EmailGenerateResponse(
         subject=subject,
         body=body,
-        contact_id=None,
+        contact_id=contact_id,
     )
 
 

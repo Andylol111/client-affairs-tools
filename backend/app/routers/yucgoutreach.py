@@ -11,7 +11,12 @@ from pydantic import BaseModel, Field
 
 from app.auth_deps import get_current_user
 from app.database import get_db, row_to_dict
-from app.services.yucgoutreach_discovery import _yucgoutreach_run_guard, build_yucgoutreach_excel_bytes
+from app.services.contact_scraper import sanitize_email, normalize_domain, is_valid_person_contact
+from app.services.yucgoutreach_discovery import (
+    YUCG_MAX_PROSPECTS,
+    _yucgoutreach_run_guard,
+    build_yucgoutreach_excel_bytes,
+)
 
 router = APIRouter()
 
@@ -20,7 +25,7 @@ class YucgOutreachRunCreate(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=500)
     company_domain: str | None = Field(None, max_length=255)
     linkedin_company_url: str | None = Field(None, max_length=2048)
-    max_prospects: int = Field(25, ge=1, le=200)
+    max_prospects: int = Field(100, ge=1, le=500)
     worker_concurrency: int = Field(4, ge=1, le=16)
 
 
@@ -59,6 +64,7 @@ async def _get_run_for_user(run_id: int, user_id: int) -> dict | None:
 
 @router.post("/runs")
 async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_current_user)):
+    cap = min(body.max_prospects, YUCG_MAX_PROSPECTS)
     db = await get_db()
     try:
         cur = await db.execute(
@@ -71,7 +77,7 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
                 body.company_name.strip(),
                 (body.company_domain or "").strip() or None,
                 (body.linkedin_company_url or "").strip() or None,
-                body.max_prospects,
+                cap,
                 body.worker_concurrency,
             ),
         )
@@ -81,7 +87,7 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
         await db.close()
 
     asyncio.create_task(_yucgoutreach_run_guard(run_id))
-    return {"id": run_id, "status": "queued"}
+    return {"id": run_id, "status": "queued", "max_prospects": cap}
 
 
 @router.get("/runs")
@@ -116,11 +122,92 @@ async def list_prospects(run_id: int, user: dict = Depends(get_current_user), li
     db = await get_db()
     try:
         cur = await db.execute(
-            "SELECT * FROM yucgoutreach_prospects WHERE run_id = ? ORDER BY id LIMIT ?",
+            "SELECT * FROM yucgoutreach_prospects WHERE run_id = ? ORDER BY score DESC, id LIMIT ?",
             (run_id, limit),
         )
         rows = await cur.fetchall()
         return [row_to_dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+@router.post("/runs/{run_id}/import-contacts")
+async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_user)):
+    """Copy verified YUCG prospects into the main contacts table."""
+    run = await _get_run_for_user(run_id, user["id"])
+    if not run:
+        raise HTTPException(404, "Run not found")
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT * FROM yucgoutreach_prospects
+               WHERE run_id = ? AND email IS NOT NULL AND email != ''
+               AND (ai_verdict IS NULL OR ai_verdict != 'junk')
+               ORDER BY score DESC""",
+            (run_id,),
+        )
+        rows = [row_to_dict(r) for r in await cur.fetchall()]
+        created = updated = skipped = 0
+        company = run.get("company_name") or ""
+        domain = normalize_domain(run.get("company_domain") or "")
+        for pr in rows:
+            email = sanitize_email(pr.get("email") or "")
+            name = " ".join(p for p in [pr.get("first_name"), pr.get("last_name")] if p).strip()
+            row = {
+                "name": name,
+                "email": email,
+                "title": pr.get("title"),
+                "company": pr.get("company") or company,
+                "company_domain": domain,
+                "linkedin_url": pr.get("linkedin_url"),
+                "contact_source": pr.get("contact_source") or "yucgoutreach",
+            }
+            if not email or not is_valid_person_contact(row, company_name=company, domain=domain):
+                skipped += 1
+                continue
+            existing = await db.execute("SELECT id FROM contacts WHERE email = ?", (email,))
+            ex = await existing.fetchone()
+            if ex:
+                await db.execute(
+                    """UPDATE contacts SET name = COALESCE(?, name), title = COALESCE(?, title),
+                       linkedin_url = COALESCE(?, linkedin_url), contact_source = COALESCE(?, contact_source),
+                       email_verification_status = COALESCE(?, email_verification_status),
+                       ai_verdict = COALESCE(?, ai_verdict), ai_reason = COALESCE(?, ai_reason)
+                       WHERE id = ?""",
+                    (
+                        name or None,
+                        pr.get("title"),
+                        pr.get("linkedin_url"),
+                        pr.get("contact_source") or "yucgoutreach",
+                        pr.get("email_verification_status"),
+                        pr.get("ai_verdict"),
+                        pr.get("ai_reason"),
+                        ex["id"],
+                    ),
+                )
+                updated += 1
+            else:
+                await db.execute(
+                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url,
+                       contact_source, email_verification_status, ai_verdict, ai_reason, confidence)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        name,
+                        email,
+                        pr.get("title"),
+                        pr.get("company") or company,
+                        domain or None,
+                        pr.get("linkedin_url"),
+                        pr.get("contact_source") or "yucgoutreach",
+                        pr.get("email_verification_status"),
+                        pr.get("ai_verdict"),
+                        pr.get("ai_reason"),
+                        "medium",
+                    ),
+                )
+                created += 1
+        await db.commit()
+        return {"created": created, "updated": updated, "skipped": skipped}
     finally:
         await db.close()
 

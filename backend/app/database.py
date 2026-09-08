@@ -4,22 +4,64 @@ Database setup for ClientReach AI
 import aiosqlite
 import os
 from pathlib import Path
+from urllib.parse import quote_plus
 
 DB_PATH = Path(__file__).parent.parent / "clientreach.db"
-# P2 will switch get_db() to this URL. Until then SQLite file above is the store.
-DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip() or f"sqlite:///{DB_PATH}"
+
+
+def _build_database_url() -> str:
+    explicit = (os.getenv("DATABASE_URL") or "").strip()
+    if explicit:
+        return explicit
+    host = (os.getenv("DB_HOST") or "").strip()
+    if host:
+        user = quote_plus(os.getenv("DB_USER") or "clientreach")
+        password = quote_plus(os.getenv("DB_PASSWORD") or "")
+        port = (os.getenv("DB_PORT") or "5432").strip()
+        name = (os.getenv("DB_NAME") or "clientreach").strip()
+        return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+    return f"sqlite:///{DB_PATH}"
+
+
+def database_url() -> str:
+    """Live URL so tests can point at a temp file after import."""
+    return _build_database_url()
+
+
+DATABASE_URL = database_url()
+
+
+def is_postgres() -> bool:
+    return database_url().startswith("postgres")
+
+
+def sqlite_file_path() -> Path:
+    url = database_url()
+    if url.startswith("sqlite:///"):
+        return Path(url[len("sqlite:///") :])
+    return DB_PATH
 
 
 def row_to_dict(row):
     """Convert sqlite3.Row to dict (Row has no .get() method)."""
     if row is None:
         return None
+    if isinstance(row, dict):
+        return dict(row)
     return dict(zip(row.keys(), row))
 
 
 async def get_db():
-    """Get database connection."""
-    db = await aiosqlite.connect(str(DB_PATH))
+    """Get database connection (SQLite locally, Postgres when DATABASE_URL/DB_HOST is set)."""
+    if is_postgres():
+        from app.db_compat import connect_postgres
+
+        return await connect_postgres(database_url())
+    db = await aiosqlite.connect(str(sqlite_file_path()))
+    # ponytail: one-file SQLite. WAL + timeout is the club ceiling; two API boxes need Postgres.
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA busy_timeout=5000")
+    await db.execute("PRAGMA synchronous=NORMAL")
     await db.execute("PRAGMA foreign_keys = ON")
     db.row_factory = aiosqlite.Row
     return db
@@ -77,6 +119,7 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company);
             CREATE INDEX IF NOT EXISTS idx_campaign_contacts_campaign ON campaign_contacts(campaign_id);
             CREATE INDEX IF NOT EXISTS idx_campaign_contacts_status ON campaign_contacts(status);
+            CREATE INDEX IF NOT EXISTS idx_campaign_contacts_contact ON campaign_contacts(contact_id);
 
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,6 +183,20 @@ async def init_db():
             pass  # Column already exists
         try:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_generated_emails_user ON generated_emails(user_id)")
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "ALTER TABLE generated_emails ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_campaign_contacts_contact ON campaign_contacts(contact_id)"
+            )
             await db.commit()
         except Exception:
             pass
@@ -572,6 +629,12 @@ async def init_db():
             except Exception:
                 pass
 
+        try:
+            await db.execute("ALTER TABLE campaigns ADD COLUMN released_by INTEGER")
+            await db.commit()
+        except Exception:
+            pass
+
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS company_email_patterns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -623,5 +686,64 @@ async def init_db():
                 await db.commit()
             except Exception:
                 pass
+
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS stored_objects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                s3_key TEXT NOT NULL UNIQUE,
+                sha256 TEXT,
+                byte_size INTEGER,
+                content_type TEXT,
+                owner_user_id INTEGER,
+                source TEXT NOT NULL DEFAULT 'upload',
+                graph_item_id TEXT,
+                version INTEGER NOT NULL DEFAULT 1,
+                expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS outreach_releases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_by INTEGER,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS outreach_release_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                release_id INTEGER NOT NULL,
+                row_index INTEGER,
+                company TEXT NOT NULL,
+                company_domain TEXT,
+                sector TEXT,
+                contact_type TEXT,
+                incentive_score REAL,
+                verification_source_url TEXT,
+                find_status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (release_id) REFERENCES outreach_releases(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS outreach_release_people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                release_id INTEGER NOT NULL,
+                target_id INTEGER,
+                contact_id INTEGER,
+                full_name TEXT,
+                title TEXT,
+                email TEXT,
+                company_domain TEXT,
+                email_status TEXT NOT NULL DEFAULT 'inferred',
+                vendor TEXT,
+                vendor_check TEXT,
+                source_url TEXT,
+                blurb TEXT,
+                kept INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (release_id) REFERENCES outreach_releases(id) ON DELETE CASCADE
+            );
+        """)
+        await db.commit()
     finally:
         await db.close()

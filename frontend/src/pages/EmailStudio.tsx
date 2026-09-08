@@ -2,6 +2,16 @@ import { useEffect, useState, useRef, useMemo } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import { api } from '../api';
 import { loadDrafts, saveDraft, deleteDraft, type EmailDraft } from '../lib/emailDrafts';
+import AppSubnav from '../components/AppSubnav';
+import PageHeader from '../components/PageHeader';
+import AiModelSelect from '../components/AiModelSelect';
+import { useAiModel } from '../contexts/AiModelContext';
+
+function lastSendHint(c: { last_sent_at?: string | null; last_campaign_name?: string | null }) {
+  if (!c.last_sent_at) return '';
+  const when = String(c.last_sent_at).slice(0, 10);
+  return c.last_campaign_name ? `Last send: ${c.last_campaign_name} · ${when}` : `Last send ${when}`;
+}
 
 function groupContactsByCompany(contacts: any[]): { company: string; contacts: any[] }[] {
   const byCompany = new Map<string, any[]>();
@@ -97,6 +107,7 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
               >
                 <div className="font-medium text-deep-navy dark:text-[var(--text-primary)] text-xs truncate">{c.name || c.email}</div>
                 <div className="text-xs text-[var(--text-muted)] truncate">{c.title}{c.company ? ` • ${c.company}` : ''}</div>
+                {lastSendHint(c) && <div className="text-[11px] text-[var(--text-muted)] truncate">{lastSendHint(c)}</div>}
               </button>
             </div>
           ))}
@@ -109,6 +120,7 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
 
 export default function EmailStudio() {
   const { user } = useOutletContext<{ user: { email: string; name?: string } }>();
+  const { modelId } = useAiModel();
   const [contacts, setContacts] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [email, setEmail] = useState<{ subject: string; body: string } | null>(null);
@@ -141,6 +153,12 @@ export default function EmailStudio() {
   const [contactsPanelExpanded, setContactsPanelExpanded] = useState(true);
   const [aiGeneratorExpanded, setAiGeneratorExpanded] = useState(true);
   const [contactSearch, setContactSearch] = useState('');
+  const [releaseFilter, setReleaseFilter] = useState('');
+  const [releases, setReleases] = useState<any[]>([]);
+  const [onedriveOpen, setOnedriveOpen] = useState(false);
+  const [onedriveConfigured, setOnedriveConfigured] = useState(false);
+  const [onedriveItems, setOnedriveItems] = useState<any[]>([]);
+  const [onedriveBusy, setOnedriveBusy] = useState(false);
   const [companiesSummary, setCompaniesSummary] = useState<{ company: string; company_domain?: string; contact_count: number }[]>([]);
   const [selectedCompanyNames, setSelectedCompanyNames] = useState<Set<string>>(new Set());
   const [studioCampaignContacts, setStudioCampaignContacts] = useState<any[]>([]);
@@ -167,10 +185,18 @@ export default function EmailStudio() {
     setDrafts(loadDrafts());
   }, []);
 
+  const contactListParams = () => ({
+    ...(contactSearch.trim() ? { q: contactSearch.trim() } : {}),
+    ...(releaseFilter ? { release_id: Number(releaseFilter) } : {}),
+  });
+
   useEffect(() => {
-    const params = contactSearch.trim() ? { q: contactSearch.trim() } : {};
-    api.contacts.list(params).then(setContacts).catch(() => setContacts([]));
-  }, [contactSearch]);
+    api.contacts.list(contactListParams()).then(setContacts).catch(() => setContacts([]));
+  }, [contactSearch, releaseFilter]);
+
+  useEffect(() => {
+    api.yucg.listReleases().then(setReleases).catch(() => setReleases([]));
+  }, []);
 
   useEffect(() => {
     setSidebarBulkIds((prev) => {
@@ -227,6 +253,7 @@ export default function EmailStudio() {
           angle,
           value_proposition: valueProp || undefined,
           custom_instructions: instructions || customInstructions || undefined,
+          model: modelId,
         });
         setEmail({ subject: res.subject, body: res.body });
         api.emails.generated({ sort: sortBy }).then(setGeneratedEmails).catch(() => []);
@@ -246,10 +273,11 @@ export default function EmailStudio() {
           angle,
           value_proposition: valueProp || undefined,
           custom_instructions: instructions || customInstructions || undefined,
+          model: modelId,
         });
         setEmail({ subject: res.subject, body: res.body });
         setSelected({
-          id: null,
+          id: res.contact_id ?? null,
           name: quickCompose.name || 'Recipient',
           email: quickCompose.email || '',
           company: draftCompany || quickCompose.company,
@@ -409,8 +437,7 @@ export default function EmailStudio() {
     setCampaignMessage(null);
     try {
       const res = await api.contacts.bulkDelete(ids);
-      const params = contactSearch.trim() ? { q: contactSearch.trim() } : {};
-      const list = await api.contacts.list(params);
+      const list = await api.contacts.list(contactListParams());
       setContacts(list);
       api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
       await refreshStudioCampaignContacts();
@@ -535,8 +562,7 @@ export default function EmailStudio() {
         setEmail(null);
       }
       setCompaniesSummary([]);
-      const params = contactSearch.trim() ? { q: contactSearch.trim() } : {};
-      const list = await api.contacts.list(params);
+      const list = await api.contacts.list(contactListParams());
       setContacts(list);
       api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
       if (res.skipped > 0) {
@@ -580,35 +606,36 @@ export default function EmailStudio() {
 
   return (
     <div className="email-studio w-full max-w-[1920px] mx-auto">
-      <h1 className="text-2xl font-bold text-deep-navy mb-6">Email Studio</h1>
+      <PageHeader
+        title="Studio"
+        subtitle="Draft against kept people. Model is Opus → Haiku in the header — or the picker below."
+        imageSrc="/yucg-bg/texture-panel.jpg"
+      />
       <div className="flex flex-col xl:flex-row gap-4">
         <div className={`surface-card shadow-sm rounded-xl overflow-hidden flex-shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none ${contactsPanelExpanded ? 'w-full xl:w-[312px]' : 'w-full xl:w-14'}`}>
           {contactsPanelExpanded ? (
             <>
-              <div className="px-4 py-3 border-b border-[var(--border)] flex gap-2 flex-wrap items-center bg-white dark:bg-[var(--bg-card)]">
+              <div className="px-4 py-3 border-b border-[var(--border)] flex gap-2 flex-wrap items-stretch bg-white dark:bg-[var(--bg-card)]">
                 <button
                   onClick={() => setContactsPanelExpanded(false)}
-                  className="p-1.5 rounded text-[var(--text-muted)] hover:bg-pale-sky/20 hover:text-deep-navy dark:hover:text-[var(--text-primary)] shrink-0"
+                  className="app-nav-util-btn px-2 shrink-0"
                   title="Collapse panel"
                   aria-label="Collapse contacts panel"
                 >
                   ◀
                 </button>
-                <button
-                  onClick={() => setActiveTab('editor')}
-                  className={`flex-1 min-w-0 py-2 rounded text-sm font-medium transition-colors ${activeTab === 'editor' ? 'bg-white dark:bg-slate-700/50 text-deep-navy dark:text-[var(--text-primary)] ring-1 ring-[var(--border)]' : 'text-[var(--text-muted)] hover:text-deep-navy dark:hover:text-[var(--text-primary)] hover:bg-pale-sky/15 dark:hover:bg-slate-700/40'}`}
-                >
-                  Contacts
-                </button>
-                <button
-                  onClick={() => setActiveTab('cache')}
-                  className={`flex-1 min-w-0 py-2 rounded text-sm font-medium transition-colors ${activeTab === 'cache' ? 'bg-white dark:bg-slate-700/50 text-deep-navy dark:text-[var(--text-primary)] ring-1 ring-[var(--border)]' : 'text-[var(--text-muted)] hover:text-deep-navy dark:hover:text-[var(--text-primary)] hover:bg-pale-sky/15 dark:hover:bg-slate-700/40'}`}
-                >
-                  Generated
-                </button>
+                <AppSubnav
+                  className="app-subnav--stretch min-w-0"
+                  items={[
+                    { id: 'editor', label: 'Contacts' },
+                    { id: 'cache', label: 'Generated' },
+                  ]}
+                  active={activeTab}
+                  onChange={(id) => setActiveTab(id as 'editor' | 'cache')}
+                />
                 <button
                   onClick={startNewEmail}
-                  className="px-3 py-2 rounded text-sm font-medium bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] active:scale-[0.98] transition-all shrink-0"
+                  className="app-nav-util-btn shrink-0 font-bold uppercase tracking-wide text-[var(--btn-primary-text)] bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] border-[var(--deep-navy)]"
                 >
                   + New
                 </button>
@@ -616,7 +643,20 @@ export default function EmailStudio() {
               <div className="max-h-[calc(100vh-14rem)] overflow-y-auto">
             {activeTab === 'editor' ? (
               <>
-                <div className="px-4 py-2 border-b border-slate-200">
+                <div className="px-4 py-2 border-b border-slate-200 space-y-2">
+                  <select
+                    value={releaseFilter}
+                    onChange={(e) => setReleaseFilter(e.target.value)}
+                    className="w-full px-3 py-2 rounded border border-slate-200 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-slate-200"
+                    aria-label="Filter contacts by week slate"
+                  >
+                    <option value="">All contacts</option>
+                    {releases.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name} (#{r.id})
+                      </option>
+                    ))}
+                  </select>
                   <input
                     type="search"
                     placeholder="Search contacts... (press /)"
@@ -716,6 +756,7 @@ export default function EmailStudio() {
                         >
                           <div className="font-medium text-deep-navy dark:text-[var(--text-primary)] text-xs truncate">{c.name || c.email}</div>
                           <div className="text-xs text-[var(--text-muted)] truncate">{c.title}{c.company ? ` • ${c.company}` : ''}</div>
+                          {lastSendHint(c) && <div className="text-[11px] text-[var(--text-muted)] truncate">{lastSendHint(c)}</div>}
                         </button>
                       </div>
                     ))
@@ -877,6 +918,9 @@ export default function EmailStudio() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+              <div className="min-w-0 sm:col-span-3">
+                <AiModelSelect id="studio-ai-model" />
+              </div>
               <div className="min-w-0">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Tone</label>
                 <select
@@ -941,7 +985,7 @@ export default function EmailStudio() {
               disabled={loading}
               className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-semibold disabled:opacity-50 transition-all"
             >
-              {loading ? 'Generating With Ollama...' : 'Generate Email'}
+              {loading ? 'Generating…' : 'Generate email'}
             </button>
             </div>
             </>
@@ -1287,8 +1331,26 @@ export default function EmailStudio() {
                       <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
                         <span className="text-xs text-deep-navy dark:text-slate-400">Cloud:</span>
                         <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming Soon">Insert From Google Drive</button>
-                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming Soon">Insert From OneDrive</button>
-                        <span className="text-xs text-deep-navy/60 dark:text-slate-400">(Coming Soon)</span>
+                        <button
+                          type="button"
+                          disabled={!attachmentsEnabled || onedriveBusy}
+                          onClick={async () => {
+                            setOnedriveBusy(true);
+                            try {
+                              const res = await api.attachments.onedrive.list();
+                              setOnedriveConfigured(res.configured);
+                              setOnedriveItems(res.items || []);
+                              setOnedriveOpen(true);
+                            } catch (e: any) {
+                              setCampaignMessage(e?.message || 'OneDrive list failed');
+                            } finally {
+                              setOnedriveBusy(false);
+                            }
+                          }}
+                          className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy dark:text-slate-200 disabled:opacity-50"
+                        >
+                          Insert From OneDrive
+                        </button>
                       </div>
                     </div>
                   )}
@@ -1459,6 +1521,51 @@ export default function EmailStudio() {
           </div>
         </div>
       </div>
+      {onedriveOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="OneDrive files">
+          <div className="surface-card w-full max-w-lg rounded-xl p-5 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-semibold text-deep-navy">OneDrive</h2>
+              <button type="button" className="text-sm text-slate-600 hover:underline" onClick={() => setOnedriveOpen(false)}>
+                Close
+              </button>
+            </div>
+            {!onedriveConfigured ? (
+              <p className="text-sm text-slate-600">Set GRAPH_ACCESS_TOKEN on the API to list the club folder.</p>
+            ) : onedriveItems.length === 0 ? (
+              <p className="text-sm text-slate-600">No files in GRAPH_DRIVE_FOLDER.</p>
+            ) : (
+              <ul className="max-h-72 overflow-y-auto divide-y divide-pale-sky">
+                {onedriveItems.filter((i) => !i.folder).map((item) => (
+                  <li key={item.id} className="py-2 flex items-center justify-between gap-2">
+                    <span className="text-sm truncate" title={item.name}>{item.name}</span>
+                    <button
+                      type="button"
+                      disabled={onedriveBusy}
+                      className="text-xs px-2 py-1 rounded border border-pale-sky"
+                      onClick={async () => {
+                        setOnedriveBusy(true);
+                        try {
+                          await api.attachments.onedrive.attach(item.id);
+                          const lib = await api.attachments.list();
+                          setAttachmentLibrary(lib);
+                          setOnedriveOpen(false);
+                        } catch (e: any) {
+                          setCampaignMessage(e?.message || 'Attach failed');
+                        } finally {
+                          setOnedriveBusy(false);
+                        }
+                      }}
+                    >
+                      Attach
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

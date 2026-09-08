@@ -1,7 +1,7 @@
 """
-YUCGoutreach company discovery: research per-company email patterns, employee seeds
-(LinkedIn via Apify or web search), parallel enrichment (default 4 workers), AI scoring.
-Stores rows in yucgoutreach_prospects for SQL queries and Excel export.
+YUCGoutreach company discovery — same multi-source pipeline as the Scraper:
+domain crawl + LinkedIn (Apify) + Tavily web discovery → merge → verify (MX + AI).
+Stores verified prospects in yucgoutreach_prospects for SQL queries and Excel export.
 """
 from __future__ import annotations
 
@@ -14,37 +14,50 @@ from typing import Any
 import httpx
 
 from app.database import get_db, row_to_dict
-from app.services.contact_scraper import is_employee_outreach_email, normalize_domain
+from app.services.contact_ai_review import _log_row
+from app.services.contact_merge import merge_contacts
+from app.services.contact_scraper import (
+    extract_domain_from_company,
+    guess_linkedin_company_url,
+    infer_email_from_name,
+    is_employee_outreach_email,
+    is_heuristic_junk_contact,
+    is_valid_person_contact,
+    looks_like_person_name,
+    normalize_domain,
+    sanitize_email,
+    scrape_contacts_from_domain,
+)
+from app.services.contact_verify_pipeline import run_contact_verify_pipeline
+from app.services.web_contact_discovery import discover_contacts_from_web
 from app.services.linkedin_scraper import scrape_linkedin_company
+from app.services.discovery_policy import should_run_linkedin
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+YUCG_MAX_PROSPECTS = int(os.getenv("YUCG_MAX_PROSPECTS", "500"))
 
 
-async def _ollama_json(prompt: str, timeout: float = 90.0) -> dict[str, Any] | None:
-    """Ask Ollama for a single JSON object (async HTTP)."""
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(
-                f"{OLLAMA_URL.rstrip('/')}/api/chat",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "options": {"temperature": 0.3},
-                },
-            )
-            if r.status_code != 200:
-                return None
-            body = r.json()
-            content = (body.get("message") or {}).get("content") or body.get("response") or ""
-            content = str(content).strip()
-            m = re.search(r"\{[\s\S]*\}", content)
-            if not m:
-                return None
-            return json.loads(m.group())
-    except Exception:
-        return None
+async def _llm_json(prompt: str) -> dict[str, Any]:
+    from app.services.llm import complete_json, llm_provider, rank_model_id
+
+    if llm_provider() == "bedrock":
+        return await asyncio.to_thread(complete_json, prompt, rank_model_id()) or {}
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        r = await client.post(
+            f"{OLLAMA_URL.rstrip('/')}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "format": "json",
+            },
+        )
+        if r.status_code != 200:
+            return {}
+        content = (r.json().get("message") or {}).get("content") or "{}"
+        data = json.loads(content)
+        return data if isinstance(data, dict) else {}
 
 
 async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:
@@ -52,7 +65,7 @@ async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any
     if not key:
         return []
     try:
-        async with httpx.AsyncClient(timeout=35.0) as client:
+        async with httpx.AsyncClient(timeout=28.0) as client:
             r = await client.post(
                 "https://api.tavily.com/search",
                 json={
@@ -66,16 +79,14 @@ async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any
             data = r.json()
     except Exception:
         return []
-    out = []
-    for x in data.get("results") or []:
-        out.append(
-            {
-                "title": x.get("title") or "",
-                "url": x.get("url") or "",
-                "content": (x.get("content") or "")[:1200],
-            }
-        )
-    return out
+    return [
+        {
+            "title": x.get("title") or "",
+            "url": x.get("url") or "",
+            "content": (x.get("content") or "")[:1200],
+        }
+        for x in data.get("results") or []
+    ]
 
 
 def _split_first_last(full_name: str) -> tuple[str, str]:
@@ -88,122 +99,33 @@ def _split_first_last(full_name: str) -> tuple[str, str]:
     return parts[0], parts[-1]
 
 
-def _apply_local_template(tpl: str, first: str, last: str) -> str:
-    f = (first or "").lower().strip()
-    l = (last or "").lower().strip()
-    fi = f[:1] if f else ""
-    li = l[:1] if l else ""
-    s = tpl
-    s = s.replace("{first}", f).replace("{last}", l).replace("{f}", fi).replace("{l}", li)
-    s = s.replace("{FIRST}", f.upper()).replace("{LAST}", l.upper())
-    return re.sub(r"[^a-z0-9._+-]", "", s, flags=re.I)
-
-
-def _predict_emails(
-    first: str,
-    last: str,
-    domain: str,
-    templates: list[str],
-) -> list[str]:
-    domain = normalize_domain(domain)
-    if not domain:
-        return []
-    seen: set[str] = set()
-    emails: list[str] = []
-    for tpl in templates:
-        local = _apply_local_template(tpl, first, last)
-        if not local or "." not in local and len(local) < 2:
-            continue
-        email = f"{local}@{domain}".lower()
-        if email in seen:
-            continue
-        seen.add(email)
-        if is_employee_outreach_email(email):
-            emails.append(email)
-    return emails
-
-
-async def _research_email_patterns(
-    company_name: str,
-    domain: str,
-    research_snippets: list[dict[str, Any]],
-) -> dict[str, Any]:
-    snippet_text = "\n\n".join(
-        f"[{i+1}] {s.get('title', '')} {s.get('url', '')}\n{s.get('content', '')}"
-        for i, s in enumerate(research_snippets[:10])
-    )
-    dom = normalize_domain(domain) or "unknown"
-    prompt = f"""You are a B2B data researcher. Based on the company "{company_name}" and domain hint "{dom}",
-infer how employee work emails are MOST LIKELY formatted at THIS company specifically.
-Use the web snippets when helpful; if snippets are thin, infer from common US corporate patterns but lower confidence.
-
-Snippets:
-{snippet_text if snippet_text.strip() else "(no snippets — infer conservative templates)"}
-
-Return ONLY valid JSON:
-{{
-  "local_part_templates": ["{{first}}.{{last}}", "{{f}}{{last}}"],
-  "reasoning": "one short sentence",
-  "pattern_confidence": 0.0
-}}
-Rules for local_part_templates: use placeholders exactly {{first}}, {{last}}, {{f}}, {{l}} (lowercase).
-Provide 3–6 templates ordered by likelihood for THIS company. pattern_confidence is 0–1."""
-
-    data = await _ollama_json(prompt, timeout=120.0)
-    out: dict[str, Any] = {
-        "local_part_templates": ["{first}.{last}", "{f}{last}", "{first}{last}"],
-        "reasoning": "Default patterns (research unavailable)",
-        "pattern_confidence": 0.35,
-    }
-    if data and isinstance(data.get("local_part_templates"), list):
-        tpls = [str(t) for t in data["local_part_templates"] if t]
-        if tpls:
-            out["local_part_templates"] = tpls
-        if data.get("reasoning"):
-            out["reasoning"] = str(data["reasoning"])[:500]
-        try:
-            out["pattern_confidence"] = float(data.get("pattern_confidence", 0.5))
-        except (TypeError, ValueError):
-            pass
-    return out
-
-
 async def _infer_domain(company_name: str) -> str:
-    """Best-effort domain from web when user did not provide one."""
     results = await _tavily_search(f"{company_name} official company website homepage", max_results=5)
     if not results:
         return ""
-    snippet = "\n".join(f"{r.get('title')} {r.get('url')} {r.get('content', '')[:200]}" for r in results)
-    data = await _ollama_json(
-        f"""From the snippets, what is the primary corporate website domain for "{company_name}"?
-Return ONLY JSON: {{"domain": "example.com"}} Use bare domain, no protocol. If unknown: {{"domain": ""}}.
-
-Snippets:
-{snippet[:4000]}""",
-        timeout=45.0,
-    )
-    if not data:
-        url = (results[0].get("url") or "") if results else ""
-        return normalize_domain(url)
-    return normalize_domain(str(data.get("domain") or ""))
+    url = results[0].get("url") or ""
+    return normalize_domain(url)
 
 
 async def _company_meta(company_name: str, domain: str) -> dict[str, str]:
     results = await _tavily_search(
         f"{company_name} company industry headquarters employee count {domain}".strip(),
-        max_results=6,
+        max_results=5,
     )
     if not results:
         return {"country": "", "employees": "", "industry": "", "keywords": "", "keywords_2": ""}
-    snippet_text = "\n".join(f"{r.get('title')} — {r.get('content', '')[:400]}" for r in results[:5])
-    prompt = f"""From the text about "{company_name}", extract fields. Return ONLY JSON:
-{{"country": "", "employees": "", "industry": "", "keywords_1": "", "keywords_2": ""}}
-Use short strings; employees like "500-1000" or "unknown" if unclear."""
-    data = await _ollama_json(
-        prompt + "\n\nSource text:\n" + snippet_text[:3500],
-        timeout=60.0,
-    )
-    if not data:
+    snippet = "\n".join(f"{r.get('title')} — {r.get('content', '')[:300]}" for r in results[:4])
+    try:
+        data = await _llm_json(
+            f"""From text about "{company_name}", return ONLY JSON:
+{{"country":"","employees":"","industry":"","keywords_1":"","keywords_2":""}}
+
+Text:
+{snippet[:2500]}"""
+        )
+        if not data:
+            raise RuntimeError("company meta empty")
+    except Exception:
         return {"country": "", "employees": "", "industry": "", "keywords": "", "keywords_2": ""}
     return {
         "country": str(data.get("country") or ""),
@@ -214,113 +136,124 @@ Use short strings; employees like "500-1000" or "unknown" if unclear."""
     }
 
 
-async def _tavily_employee_seeds(company_name: str, max_n: int) -> list[dict[str, Any]]:
+async def _load_custom_patterns() -> list[str]:
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT pattern FROM custom_email_formats ORDER BY priority DESC")
+        rows = await cur.fetchall()
+        return [r["pattern"] for r in rows if r.get("pattern")]
+    except Exception:
+        return []
+    finally:
+        await db.close()
+
+
+async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str]) -> list[dict]:
+    """Supplement merged list with Tavily+LLM name extraction when Apify/web yield few rows."""
+    if max_n <= 0 or not (os.getenv("TAVILY_API_KEY") or "").strip():
+        return []
     results = await _tavily_search(
-        f'{company_name} employees OR leadership OR "works at" site:linkedin.com/in',
+        f'{company_name} employees OR leadership site:linkedin.com/in',
         max_results=12,
     )
     if not results:
         return []
-    snippet_text = "\n\n".join(
-        f"[{i+1}] {r.get('title', '')}\n{r.get('url', '')}\n{r.get('content', '')}"
-        for i, r in enumerate(results)
+    snippet = "\n".join(
+        f"{r.get('title')}\n{r.get('url')}\n{r.get('content', '')[:400]}" for r in results[:8]
     )
-    prompt = f"""Extract up to {max_n} DISTINCT people who appear to work at or be associated with "{company_name}".
-Prefer clear full names. Return ONLY JSON:
-{{"people": [{{"full_name": "", "title": "", "linkedin_url": ""}}]}}
-linkedin_url must be linkedin.com/in/... when present, else ""."""
-    data = await _ollama_json(prompt + "\n\nSearch results:\n" + snippet_text[:6000], timeout=120.0)
-    people = (data or {}).get("people") if isinstance(data, dict) else None
+    try:
+        data = await _llm_json(
+            f"""Extract up to {max_n} people at "{company_name}". JSON only:
+{{"people":[{{"full_name":"","title":"","linkedin_url":""}}]}}
+
+Results:
+{snippet[:5000]}"""
+        )
+        if not data:
+            return []
+    except Exception:
+        return []
+    people = data.get("people") if isinstance(data, dict) else None
     if not isinstance(people, list):
         return []
-    seeds = []
+    dom = normalize_domain(domain) if domain else ""
+    out: list[dict] = []
     for p in people:
         if not isinstance(p, dict):
             continue
-        fn = str(p.get("full_name") or p.get("name") or "").strip()
-        if len(fn) < 3:
+        name = str(p.get("full_name") or p.get("name") or "").strip()
+        if not looks_like_person_name(name, company_name):
             continue
-        seeds.append(
+        email = ""
+        if dom:
+            email = infer_email_from_name(name, dom, custom_patterns) or ""
+        if not email:
+            continue
+        out.append(
             {
-                "full_name": fn,
-                "title": str(p.get("title") or p.get("headline") or "").strip(),
-                "linkedin_url": str(p.get("linkedin_url") or "").strip(),
+                "name": name,
+                "email": sanitize_email(email),
+                "title": str(p.get("title") or "")[:300],
+                "company": company_name,
+                "company_domain": dom,
+                "linkedin_url": str(p.get("linkedin_url") or "").strip() or None,
+                "contact_source": "web_discovery",
+                "discovery_context": "Tavily name seed supplement",
             }
         )
-        if len(seeds) >= max_n:
+        if len(out) >= max_n:
             break
-    return seeds
+    return out
 
 
-def _parse_secondary_score(data: dict[str, Any] | None, fallback: float) -> float:
-    if not data:
-        return fallback
-    v = data.get("yucgoutreach_score")
-    if v is None:
-        v = data.get("apollo_score")
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return fallback
+def _quality_score(contact: dict) -> float:
+    score = 40.0
+    ev = contact.get("email_verification_status") or ""
+    if ev == "valid":
+        score += 28
+    elif ev == "likely_valid":
+        score += 18
+    elif ev == "invalid":
+        score -= 25
+    ai = contact.get("ai_verdict") or ""
+    if ai == "real":
+        score += 22
+    elif ai == "suspicious":
+        score += 6
+    elif ai == "junk":
+        score -= 40
+    src = contact.get("contact_source") or ""
+    if src in ("domain_scrape", "linkedin_apify"):
+        score += 12
+    elif src == "web_discovery":
+        score += 8
+    if contact.get("linkedin_url"):
+        score += 10
+    if contact.get("confidence") == "high":
+        score += 8
+    return max(0.0, min(100.0, score))
 
 
-async def _score_prospect_llm(
-    company_name: str,
-    full_name: str,
-    title: str,
-    email_guess: str,
-    linkedin_url: str,
-    pattern_confidence: float,
-    resume_snippets: str,
-) -> dict[str, Any]:
-    prompt = f"""Score this B2B prospect for outreach data quality.
+def _fit_status(score: float, contact: dict) -> str:
+    if contact.get("ai_verdict") == "junk" or contact.get("email_verification_status") == "invalid":
+        return "weak"
+    if score >= 78:
+        return "strong"
+    if score >= 55:
+        return "medium"
+    return "weak"
 
-Company: {company_name}
-Person: {full_name}
-Title: {title}
-Predicted email: {email_guess}
-LinkedIn: {linkedin_url}
-Email pattern confidence (0-1): {pattern_confidence}
-Web evidence (may be partial):
-{resume_snippets[:2000]}
 
-Return ONLY JSON:
-{{
-  "score": 0,
-  "yucgoutreach_score": 0,
-  "fit_status": "unknown",
-  "qualification_notes": "",
-  "verified_hint": 0
-}}
-score and yucgoutreach_score are 0-100 integers (yucgoutreach_score is a secondary lead-quality signal; both are in-house, not from any vendor API).
-fit_status one of: strong, medium, weak, unknown.
-verified_hint: 1 if email guess is plausibly corroborated by evidence, else 0."""
-    data = await _ollama_json(prompt, timeout=90.0)
-    if not data:
-        base = 40.0 + 30.0 * pattern_confidence
-        if linkedin_url:
-            base += 15
-        return {
-            "score": min(100.0, base),
-            "yucgoutreach_score": min(100.0, base - 5),
-            "fit_status": "medium" if base >= 55 else "weak",
-            "qualification_notes": "Heuristic score (LLM unavailable).",
-            "verified_hint": 1 if linkedin_url else 0,
-        }
-    try:
-        score = float(data.get("score", 50))
-    except (TypeError, ValueError):
-        score = 50.0
-    secondary = _parse_secondary_score(data, score)
-    return {
-        "score": max(0.0, min(100.0, score)),
-        "yucgoutreach_score": max(0.0, min(100.0, secondary)),
-        "fit_status": str(data.get("fit_status") or "unknown"),
-        "qualification_notes": str(data.get("qualification_notes") or "")[:2000],
-        "verified_hint": 1
-        if data.get("verified_hint") in (1, True, "1", "true", "True")
-        else 0,
-    }
+def _is_verified(contact: dict) -> int:
+    ev = contact.get("email_verification_status") or ""
+    ai = contact.get("ai_verdict") or ""
+    if ai == "junk" or ev == "invalid":
+        return 0
+    if ev in ("valid", "likely_valid") and ai in ("real", "suspicious", ""):
+        return 1
+    if ev in ("valid", "likely_valid") and ai == "real":
+        return 1
+    return 0
 
 
 async def _run_update(
@@ -333,7 +266,7 @@ async def _run_update(
     research_json: str | None = None,
     error_message: str | None = None,
     completed: bool = False,
-):
+) -> None:
     db = await get_db()
     try:
         sets = ["updated_at = CURRENT_TIMESTAMP"]
@@ -371,10 +304,7 @@ async def _run_update(
 async def execute_yucgoutreach_run(run_id: int) -> None:
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT * FROM yucgoutreach_discovery_runs WHERE id = ?",
-            (run_id,),
-        )
+        cur = await db.execute("SELECT * FROM yucgoutreach_discovery_runs WHERE id = ?", (run_id,))
         row = await cur.fetchone()
         if not row:
             return
@@ -384,243 +314,259 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
 
     company = (spec.get("company_name") or "").strip()
     domain_in = (spec.get("company_domain") or "").strip()
-    linkedin_url = (spec.get("linkedin_company_url") or "").strip() or None
-    max_prospects = int(spec.get("max_prospects") or 25)
-    max_prospects = max(1, min(max_prospects, 200))
-    workers = int(spec.get("worker_concurrency") or 4)
-    workers = max(1, min(workers, 16))
+    user_linkedin = (spec.get("linkedin_company_url") or "").strip()
+    linkedin_url = user_linkedin
+    has_apify = bool((os.getenv("APIFY_API_TOKEN") or "").strip())
+    max_prospects = max(1, min(int(spec.get("max_prospects") or 100), YUCG_MAX_PROSPECTS))
     domain = normalize_domain(domain_in) if domain_in else ""
 
     await _run_update(
         run_id,
         status="running",
-        progress_pct=2.0,
-        progress_message="Researching company email conventions (per-company patterns)…",
+        progress_pct=3.0,
+        progress_message="Website + web search first; LinkedIn only if URL given or crawl is thin…",
     )
-
-    research_snippets: list[dict[str, Any]] = []
-    if domain:
-        research_snippets.extend(
-            await _tavily_search(
-                f'"{company}" employee email format @{domain} OR "e-mail" site:{domain}',
-                max_results=8,
-            )
-        )
-    research_snippets.extend(
-        await _tavily_search(f"{company} press contact OR media contact email", max_results=4)
-    )
-
-    pattern_pack = await _research_email_patterns(company, domain, research_snippets)
-    templates_raw = pattern_pack.get("local_part_templates") or []
-    templates = []
-    for raw in templates_raw:
-        t = str(raw).strip()
-        t = re.sub(r"\{\{", "{", t)
-        t = re.sub(r"\}\}", "}", t)
-        if "{first}" in t or "{last}" in t or "{f}" in t or "{l}" in t:
-            templates.append(t)
-
-    if not templates:
-        templates = ["{first}.{last}", "{f}{last}", "{first}{last}"]
 
     if not domain:
         domain = await _infer_domain(company)
-        if domain:
-            await _run_update(
-                run_id,
-                progress_message=f"Inferred domain {domain} — refining email pattern…",
-            )
-            research_snippets.extend(
-                await _tavily_search(
-                    f'"{company}" employee email @{domain}',
-                    max_results=5,
+
+    custom_patterns = await _load_custom_patterns()
+    web_max = min(max_prospects * 2, int(os.getenv("SCRAPE_WEB_MAX_PEOPLE", "80")))
+
+    async def _domain() -> list[dict]:
+        if not domain:
+            return []
+
+        async def on_page(_i: int, _n: int, url: str) -> None:
+            if url == "queued":
+                await _run_update(
+                    run_id,
+                    progress_message="Waiting for website crawl slot (LinkedIn/web search keep going)",
                 )
-            )
-            pattern_pack = await _research_email_patterns(company, domain, research_snippets)
-            tr2 = pattern_pack.get("local_part_templates") or []
-            templates = []
-            for raw in tr2:
-                t = str(raw).strip()
-                t = re.sub(r"\{\{", "{", t)
-                t = re.sub(r"\}\}", "}", t)
-                if "{first}" in t or "{last}" in t or "{f}" in t or "{l}" in t:
-                    templates.append(t)
-            if not templates:
-                templates = ["{first}.{last}", "{f}{last}", "{first}{last}"]
 
-    pattern_confidence = float(pattern_pack.get("pattern_confidence") or 0.5)
+        return await scrape_contacts_from_domain(
+            domain=domain, company_name=company, on_page=on_page
+        )
 
-    await _run_update(
-        run_id,
-        progress_pct=18.0,
-        progress_message="Loading company profile (industry, geography)…",
-        research_json=json.dumps(
-            {"email_pattern": pattern_pack, "snippet_count": len(research_snippets)}
-        ),
+    async def _linkedin() -> tuple[list[dict], str | None]:
+        if not linkedin_url:
+            return [], company
+        li = await scrape_linkedin_company(linkedin_url, max_employees=min(max_prospects, 100))
+        return li.get("contacts") or [], company or li.get("company_name")
+
+    async def _web() -> list[dict]:
+        cn = company or (domain.split(".")[0].title() if domain else "")
+        if not cn or not (os.getenv("TAVILY_API_KEY") or "").strip():
+            return []
+        return await discover_contacts_from_web(cn, domain or None, max_people=web_max)
+
+    domain_contacts, web_contacts, meta = await asyncio.gather(
+        _domain(),
+        _web(),
+        _company_meta(company, domain),
     )
-
-    meta = await _company_meta(company, domain)
+    run_li = should_run_linkedin(
+        user_url=user_linkedin,
+        has_token=has_apify,
+        domain_hits=len(domain_contacts),
+    )
+    if run_li:
+        if not linkedin_url and has_apify:
+            linkedin_url = guess_linkedin_company_url(company, domain) or ""
+        linkedin_contacts, company_from_li = await _linkedin()
+    else:
+        linkedin_contacts, company_from_li = [], company
+    company = company_from_li or company
     kw1 = meta.get("keywords") or ""
     kw2 = meta.get("keywords_2") or ""
 
-    await _run_update(run_id, progress_pct=28.0, progress_message="Discovering named employees…")
+    await _run_update(
+        run_id,
+        progress_pct=22.0,
+        progress_message=(
+            f"Sources: website {len(domain_contacts)} · LinkedIn {len(linkedin_contacts)} · "
+            f"web {len(web_contacts)} — merging…"
+        ),
+        research_json=json.dumps(
+            {
+                "domain_contacts": len(domain_contacts),
+                "linkedin_contacts": len(linkedin_contacts),
+                "web_contacts": len(web_contacts),
+                "linkedin_url": linkedin_url or None,
+            }
+        ),
+    )
 
-    seeds: list[dict[str, Any]] = []
-    li_error: str | None = None
-    if linkedin_url:
-        li = await scrape_linkedin_company(linkedin_url, max_employees=max_prospects)
-        li_error = li.get("error")
-        for c in li.get("contacts") or []:
-            nm = (c.get("name") or "").strip()
-            if not nm:
-                continue
-            seeds.append(
-                {
-                    "full_name": nm,
-                    "title": (c.get("title") or "")[:300],
-                    "linkedin_url": (c.get("linkedin_url") or "").strip(),
-                }
-            )
-        if not seeds and li_error:
-            await _run_update(
-                run_id,
-                progress_message=f"LinkedIn step: {li_error[:200]}. Trying web search for names…",
-            )
+    merged = merge_contacts(
+        domain_contacts,
+        linkedin_contacts,
+        company,
+        domain,
+        custom_patterns,
+        web_contacts=web_contacts,
+    )
 
-    if len(seeds) < max_prospects:
-        need = max_prospects - len(seeds)
-        seeds.extend(await _tavily_employee_seeds(company, need))
+    if len(merged) < max_prospects:
+        extra = await _tavily_name_seeds(company, domain, max_prospects - len(merged), custom_patterns)
+        seen = {sanitize_email(c.get("email") or "").lower() for c in merged if c.get("email")}
+        for row in extra:
+            em = sanitize_email(row.get("email") or "").lower()
+            if em and em not in seen and is_valid_person_contact(row, company_name=company, domain=domain):
+                seen.add(em)
+                merged.append(row)
 
-    # De-dupe by name
-    seen_names: set[str] = set()
-    unique_seeds: list[dict[str, Any]] = []
-    for s in seeds:
-        key = s["full_name"].lower()
-        if key in seen_names:
-            continue
-        seen_names.add(key)
-        unique_seeds.append(s)
-        if len(unique_seeds) >= max_prospects:
-            break
-    seeds = unique_seeds
+    to_verify: list[dict] = []
+    junk_log: list[dict] = []
+    for c in merged:
+        junk, reason = is_heuristic_junk_contact(c, company)
+        if junk:
+            row = dict(c)
+            row["ai_verdict"] = "junk"
+            row["ai_reason"] = reason
+            junk_log.append(row)
+        else:
+            to_verify.append(c)
 
-    if not seeds:
+    if not to_verify and not junk_log:
         await _run_update(
             run_id,
             status="completed",
             progress_pct=100.0,
-            progress_message="No named employees found. Add a LinkedIn company URL and APIFY_API_TOKEN, or set TAVILY_API_KEY for web-based name discovery.",
+            progress_message="No contacts found. Add domain, LinkedIn URL, APIFY_API_TOKEN, or TAVILY_API_KEY.",
             prospects_count=0,
             completed=True,
         )
         return
 
-    sem = asyncio.Semaphore(workers)
-    inserted = 0
-    n = len(seeds)
-    lock = asyncio.Lock()
+    await _run_update(
+        run_id,
+        progress_pct=32.0,
+        progress_message=f"Verifying {len(to_verify)} contact(s) — MX inbox check + AI review…",
+    )
 
-    async def enrich_one(idx: int, seed: dict[str, Any]) -> None:
-        nonlocal inserted
-        full_name = seed["full_name"]
-        first, last = _split_first_last(full_name)
-        if not last:
-            first, last = full_name, ""
-        emails = _predict_emails(first, last, domain, templates)
-        email_pick = emails[0] if emails else ""
-
-        person_q = f"{full_name} {company} email OR resume OR contact"
-        evidence = await _tavily_search(person_q, max_results=5)
-        ev_text = "\n".join(f"{e.get('title')} {e.get('content', '')[:350]}" for e in evidence)
-
-        async with sem:
-            scores = await _score_prospect_llm(
-                company,
-                full_name,
-                seed.get("title") or "",
-                email_pick,
-                seed.get("linkedin_url") or "",
-                pattern_confidence,
-                ev_text,
-            )
-
-            linkedin = seed.get("linkedin_url") or ""
-            contact_profile = linkedin or (evidence[0].get("url") if evidence else "") or ""
-            verified = 0
-            if scores.get("verified_hint"):
-                verified = 1
-            elif email_pick and email_pick.lower() in ev_text.lower():
-                verified = 1
-            elif linkedin and "linkedin.com/in/" in linkedin:
-                verified = 1
-
-            evidence_obj = {
-                "pattern_templates": templates,
-                "predicted_emails_tried": emails[:8],
-                "search_hits": [{"title": e.get("title"), "url": e.get("url")} for e in evidence[:5]],
-            }
-            dbi = await get_db()
-            try:
-                await dbi.execute(
-                    """INSERT INTO yucgoutreach_prospects (
-                        run_id, first_name, last_name, email, company, contact_url, title,
-                        account_url, photo_url, account_link, phone, phone_code, verified,
-                        qualification_notes, contact_profile_url, linkedin_url, fit_status,
-                        score, country, employees, industry, keywords_1, keywords_2,
-                        yucgoutreach_score, evidence_json
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        run_id,
-                        first,
-                        last,
-                        email_pick or None,
-                        company,
-                        contact_profile or None,
-                        (seed.get("title") or None),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        verified,
-                        scores.get("qualification_notes"),
-                        contact_profile or None,
-                        linkedin or None,
-                        scores.get("fit_status"),
-                        scores.get("score"),
-                        meta.get("country") or None,
-                        meta.get("employees") or None,
-                        meta.get("industry") or None,
-                        kw1 or None,
-                        kw2 or None,
-                        scores.get("yucgoutreach_score"),
-                        json.dumps(evidence_obj)[:8000],
-                    ),
-                )
-                await dbi.commit()
-            finally:
-                await dbi.close()
-
-        async with lock:
-            inserted += 1
-            ic = inserted
-
-        pct = 30.0 + (idx + 1) / max(n, 1) * 65.0
+    async def _pipe_progress(phase: str, done: int, total: int, detail: str = "") -> None:
+        base = {"identity": 32.0, "verify": 38.0, "ai": 52.0, "done": 82.0}.get(phase, 35.0)
+        span = {"identity": 4.0, "verify": 12.0, "ai": 28.0, "done": 4.0}.get(phase, 10.0)
+        pct = base + (done / max(total, 1)) * span
+        label = {
+            "identity": "Identity gate",
+            "verify": "Inbox agents",
+            "ai": "AI agents",
+            "done": "Verification done",
+        }.get(phase, phase)
         await _run_update(
             run_id,
-            progress_pct=min(99.0, pct),
-            progress_message=f"Enriched {idx + 1}/{n}: {full_name[:40]}",
-            prospects_count=ic,
+            progress_pct=min(90.0, pct),
+            progress_message=f"{label} {done}/{total}" + (f" — {detail}" if detail else ""),
         )
 
-    await asyncio.gather(*[enrich_one(i, s) for i, s in enumerate(seeds)])
+    verified, discovery_log = await run_contact_verify_pipeline(
+        to_verify,
+        company_name=company,
+        domain=domain,
+        on_progress=_pipe_progress if to_verify else None,
+    )
+    for c in junk_log:
+        discovery_log.append(
+            _log_row(c, verdict="junk", reason=c.get("ai_reason") or "", model=None, source_note="heuristic")
+        )
 
+    candidates = [c for c in verified if c.get("ai_verdict") != "junk"]
+    candidates.sort(key=_quality_score, reverse=True)
+    candidates = candidates[:max_prospects]
+
+    inserted = 0
+    db = await get_db()
+    try:
+        for idx, c in enumerate(candidates):
+            name = (c.get("name") or "").strip()
+            first, last = _split_first_last(name)
+            email = sanitize_email(c.get("email") or "")
+            if not email or not is_employee_outreach_email(email):
+                continue
+            score = _quality_score(c)
+            secondary = score - 3 if c.get("contact_source") == "linkedin_inferred" else score
+            linkedin = c.get("linkedin_url") or ""
+            evidence_obj = {
+                "contact_source": c.get("contact_source"),
+                "email_verification_status": c.get("email_verification_status"),
+                "ai_verdict": c.get("ai_verdict"),
+                "ai_reason": c.get("ai_reason"),
+                "email_pattern": c.get("email_pattern"),
+                "discovery_context": (c.get("discovery_context") or "")[:500],
+            }
+            await db.execute(
+                """INSERT INTO yucgoutreach_prospects (
+                    run_id, first_name, last_name, email, company, contact_url, title,
+                    account_url, photo_url, account_link, phone, phone_code, verified,
+                    qualification_notes, contact_profile_url, linkedin_url, fit_status,
+                    score, country, employees, industry, keywords_1, keywords_2,
+                    yucgoutreach_score, evidence_json,
+                    email_verification_status, ai_verdict, ai_reason, contact_source
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    run_id,
+                    first,
+                    last,
+                    email,
+                    company,
+                    linkedin or c.get("source_url"),
+                    c.get("title"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    _is_verified(c),
+                    (c.get("ai_reason") or c.get("discovery_context") or "")[:2000],
+                    linkedin or None,
+                    linkedin or None,
+                    _fit_status(score, c),
+                    score,
+                    meta.get("country") or None,
+                    meta.get("employees") or None,
+                    meta.get("industry") or None,
+                    kw1 or None,
+                    kw2 or None,
+                    secondary,
+                    json.dumps(evidence_obj)[:8000],
+                    c.get("email_verification_status"),
+                    c.get("ai_verdict"),
+                    c.get("ai_reason"),
+                    c.get("contact_source"),
+                ),
+            )
+            inserted += 1
+            if idx % 10 == 0:
+                await _run_update(
+                    run_id,
+                    progress_pct=90.0 + (idx / max(len(candidates), 1)) * 8.0,
+                    progress_message=f"Saving prospects {idx + 1}/{len(candidates)}…",
+                    prospects_count=inserted,
+                )
+        await db.commit()
+    finally:
+        await db.close()
+
+    junk_total = len(junk_log) + sum(1 for c in verified if c.get("ai_verdict") == "junk")
     await _run_update(
         run_id,
         status="completed",
         progress_pct=100.0,
-        progress_message=f"Done — {inserted} prospects saved (parallel workers: {workers}).",
+        progress_message=(
+            f"Done — {inserted} verified prospects saved"
+            + (f" ({junk_total} junk filtered)" if junk_total else "")
+        ),
         prospects_count=inserted,
+        research_json=json.dumps(
+            {
+                "merged": len(merged),
+                "verified": len(verified),
+                "saved": inserted,
+                "junk_filtered": junk_total,
+                "discovery_log_count": len(discovery_log),
+            }
+        ),
         completed=True,
     )
 
@@ -639,7 +585,6 @@ async def _yucgoutreach_run_guard(run_id: int) -> None:
 
 
 async def build_yucgoutreach_excel_bytes(run_id: int) -> bytes:
-    """Build .xlsx for a run (async DB + sync openpyxl)."""
     from io import BytesIO
 
     from openpyxl import Workbook
@@ -650,25 +595,19 @@ async def build_yucgoutreach_excel_bytes(run_id: int) -> bytes:
         "Last Name",
         "Email",
         "Company",
-        "Contact URL",
         "Title",
-        "Account URL",
-        "Photo URL",
-        "Account Link",
-        "Phone",
-        "Phone Code",
-        "Verified",
-        "Qualification Notes",
-        "Contact Profile URL",
         "LinkedIn URL",
+        "Source",
+        "Inbox Status",
+        "AI Verdict",
+        "Verified",
         "Fit Status",
         "Score",
+        "YUCGoutreach Score",
         "Country",
         "Employees",
         "Industry",
-        "Keywords 1",
-        "Keywords 2",
-        "YUCGoutreach Score",
+        "Qualification Notes",
     ]
 
     db = await get_db()
@@ -682,15 +621,14 @@ async def build_yucgoutreach_excel_bytes(run_id: int) -> bytes:
             raise ValueError("Run not found")
         company_name = r0["company_name"]
         cur = await db.execute(
-            """SELECT first_name, last_name, email, company, contact_url, title,
-            account_url, photo_url, account_link, phone, phone_code, verified,
-            qualification_notes, contact_profile_url, linkedin_url, fit_status,
-            score, country, employees, industry, keywords_1, keywords_2, yucgoutreach_score
-            FROM yucgoutreach_prospects WHERE run_id = ? ORDER BY id""",
+            """SELECT first_name, last_name, email, company, title, linkedin_url,
+               contact_source, email_verification_status, ai_verdict, verified,
+               fit_status, score, yucgoutreach_score, country, employees, industry,
+               qualification_notes
+               FROM yucgoutreach_prospects WHERE run_id = ? ORDER BY score DESC, id""",
             (run_id,),
         )
-        rows = await cur.fetchall()
-        prospect_rows = [row_to_dict(r) for r in rows]
+        prospect_rows = [row_to_dict(r) for r in await cur.fetchall()]
     finally:
         await db.close()
 
@@ -705,32 +643,23 @@ async def build_yucgoutreach_excel_bytes(run_id: int) -> bytes:
         c.font = hdr_font
 
     for ri, pr in enumerate(prospect_rows, 2):
-        secondary = pr.get("yucgoutreach_score")
-        if secondary is None:
-            secondary = pr.get("apollo_score")
         ws.cell(row=ri, column=1, value=pr.get("first_name"))
         ws.cell(row=ri, column=2, value=pr.get("last_name"))
         ws.cell(row=ri, column=3, value=pr.get("email"))
         ws.cell(row=ri, column=4, value=pr.get("company") or company_name)
-        ws.cell(row=ri, column=5, value=pr.get("contact_url"))
-        ws.cell(row=ri, column=6, value=pr.get("title"))
-        ws.cell(row=ri, column=7, value=pr.get("account_url"))
-        ws.cell(row=ri, column=8, value=pr.get("photo_url"))
-        ws.cell(row=ri, column=9, value=pr.get("account_link"))
-        ws.cell(row=ri, column=10, value=pr.get("phone"))
-        ws.cell(row=ri, column=11, value=pr.get("phone_code"))
-        ws.cell(row=ri, column=12, value="Yes" if pr.get("verified") else "No")
-        ws.cell(row=ri, column=13, value=pr.get("qualification_notes"))
-        ws.cell(row=ri, column=14, value=pr.get("contact_profile_url"))
-        ws.cell(row=ri, column=15, value=pr.get("linkedin_url"))
-        ws.cell(row=ri, column=16, value=pr.get("fit_status"))
-        ws.cell(row=ri, column=17, value=pr.get("score"))
-        ws.cell(row=ri, column=18, value=pr.get("country"))
-        ws.cell(row=ri, column=19, value=pr.get("employees"))
-        ws.cell(row=ri, column=20, value=pr.get("industry"))
-        ws.cell(row=ri, column=21, value=pr.get("keywords_1"))
-        ws.cell(row=ri, column=22, value=pr.get("keywords_2"))
-        ws.cell(row=ri, column=23, value=secondary)
+        ws.cell(row=ri, column=5, value=pr.get("title"))
+        ws.cell(row=ri, column=6, value=pr.get("linkedin_url"))
+        ws.cell(row=ri, column=7, value=pr.get("contact_source"))
+        ws.cell(row=ri, column=8, value=pr.get("email_verification_status"))
+        ws.cell(row=ri, column=9, value=pr.get("ai_verdict"))
+        ws.cell(row=ri, column=10, value="Yes" if pr.get("verified") else "No")
+        ws.cell(row=ri, column=11, value=pr.get("fit_status"))
+        ws.cell(row=ri, column=12, value=pr.get("score"))
+        ws.cell(row=ri, column=13, value=pr.get("yucgoutreach_score"))
+        ws.cell(row=ri, column=14, value=pr.get("country"))
+        ws.cell(row=ri, column=15, value=pr.get("employees"))
+        ws.cell(row=ri, column=16, value=pr.get("industry"))
+        ws.cell(row=ri, column=17, value=pr.get("qualification_notes"))
 
     bio = BytesIO()
     wb.save(bio)

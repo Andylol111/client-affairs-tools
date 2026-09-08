@@ -31,9 +31,11 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
         row = await cursor.fetchone()
         if not row:
             return None
+        from app.token_crypto import decrypt_token, encrypt_token
+
         email = row["email"]
-        access_token = row["access_token"]
-        refresh_token = row["refresh_token"]
+        access_token = decrypt_token(row["access_token"])
+        refresh_token = decrypt_token(row["refresh_token"])
         expires_at = row["token_expires_at"]
 
         # If we have a valid access token (with 5 min buffer), use it
@@ -71,7 +73,7 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
         expires_at = now + new_expires
         await db.execute(
             "UPDATE users SET access_token = ?, token_expires_at = ? WHERE id = ?",
-            (new_access, expires_at, user_id),
+            (encrypt_token(new_access), expires_at, user_id),
         )
         await db.commit()
         return new_access, email

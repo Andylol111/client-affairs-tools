@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import PageHeader from '../components/PageHeader';
 
 export default function Campaigns() {
   const navigate = useNavigate();
@@ -46,28 +47,32 @@ export default function Campaigns() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="flex items-center justify-between gap-4 mb-6">
-        <h1 className="text-2xl font-bold text-deep-navy">Campaigns</h1>
-        <button
-          onClick={async () => {
-            const name = window.prompt('Campaign name:');
-            if (!name?.trim()) return;
-            setLoading(true);
-            try {
-              await api.campaigns.create(name.trim());
-              setCampaigns(await api.campaigns.list());
-            } catch (e: any) {
-              alert(e?.message || 'Failed to create campaign');
-            } finally {
-              setLoading(false);
-            }
-          }}
-          disabled={loading}
-          className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-medium whitespace-nowrap transition-all disabled:opacity-50"
-        >
-          + Create Campaign
-        </button>
-      </div>
+      <PageHeader
+        title="Send"
+        subtitle="Release mail on a clock. One click is a drain tick, not the whole list."
+        imageSrc="/yucg-bg/texture-panel.jpg"
+        actions={
+          <button
+            onClick={async () => {
+              const name = window.prompt('Campaign name:');
+              if (!name?.trim()) return;
+              setLoading(true);
+              try {
+                await api.campaigns.create(name.trim());
+                setCampaigns(await api.campaigns.list());
+              } catch (e: any) {
+                alert(e?.message || 'Failed to create campaign');
+              } finally {
+                setLoading(false);
+              }
+            }}
+            disabled={loading}
+            className="px-4 py-2 bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium whitespace-nowrap disabled:opacity-50"
+          >
+            + Create campaign
+          </button>
+        }
+      />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="surface-card shadow-sm rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Create Campaign</h2>

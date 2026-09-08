@@ -683,3 +683,22 @@ async def reset_2fa(admin: dict = Depends(get_current_admin)):
         return {"ok": True, "message": "2FA reset. You can set up again."}
     finally:
         await db.close()
+
+
+@router.get("/catalog")
+async def list_catalog(_admin: dict = Depends(get_current_admin)):
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "SELECT id, kind, s3_key, sha256, byte_size, content_type, source, created_at FROM stored_objects ORDER BY id DESC LIMIT 200"
+        )
+        objects = [row_to_dict(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+    from app.services.object_catalog import PREFIXES, catalog_bucket, list_prefix
+
+    prefixes = []
+    if catalog_bucket():
+        for p in PREFIXES:
+            prefixes.append({"prefix": p, "objects": list_prefix(p if p.endswith("/") else p, 20)})
+    return {"bucket": catalog_bucket() or None, "objects": objects, "prefixes": prefixes}

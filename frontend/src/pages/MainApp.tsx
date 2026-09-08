@@ -1,13 +1,10 @@
 /**
  * Main app - shown when user IS authenticated.
- * Full app with nav, dashboard, email studio, etc.
- * Tracks cursor position (throttled, batched) for heatmap analytics.
+ * Layout lives in AppShell; this file owns auth-adjacent side effects only.
  */
 import { useEffect, useRef } from 'react';
-import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import BackButton from '../components/BackButton';
-import CommunitySidebar from '../components/CommunitySidebar';
-import ChecklistOverlay from '../components/ChecklistOverlay';
+import { useLocation } from 'react-router-dom';
+import AppShell from '../components/shell/AppShell';
 import { api } from '../api';
 import { applyStoredPreferences } from '../lib/userPreferences';
 
@@ -22,7 +19,6 @@ const CURSOR_BATCH_MAX = 40;
 
 export default function MainApp({ user, onLogout }: MainAppProps) {
   const location = useLocation();
-  const navigate = useNavigate();
   const cursorBufferRef = useRef<{ event_type: string; resource_type?: string; details?: Record<string, unknown> }[]>([]);
   const lastCursorRef = useRef<number>(0);
 
@@ -36,15 +32,12 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
     api.telemetry.event({ event_type: 'page_view', resource_type: resource });
   }, [location.pathname]);
 
-  // Keyboard shortcuts: / focus search, Esc clear selection/close
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName || '')) {
         e.preventDefault();
         const first = document.querySelector<HTMLInputElement>('[data-search-input]');
-        if (first) {
-          first.focus();
-        }
+        if (first) first.focus();
       }
       if (e.key === 'Escape') {
         (e.target as HTMLElement)?.blur?.();
@@ -54,7 +47,6 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Throttled cursor tracking: normalize to 0–100, batch and send periodically
   useEffect(() => {
     const flush = () => {
       const buf = cursorBufferRef.current;
@@ -97,85 +89,5 @@ export default function MainApp({ user, onLogout }: MainAppProps) {
     };
   }, [location.pathname]);
 
-  return (
-    <div className="min-h-screen flex flex-col">
-      <nav className="bg-[var(--bg-card)] border-b border-[var(--border)] sticky top-0 z-50 shadow-sm">
-        <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-14 flex-nowrap gap-2 min-w-0">
-            <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
-              <img
-                src="/yucg-logo.png"
-                alt="YUCG"
-                className="h-7 w-auto flex-shrink-0 block outline-none select-none"
-                decoding="async"
-              />
-              <span className="text-lg font-bold text-deep-navy whitespace-nowrap">YUCG Outreach</span>
-              <span className="text-xs text-slate-500 hidden xl:inline truncate">Yale Undergraduate Consulting Group</span>
-            </div>
-            <div className="flex items-center gap-1 flex-nowrap flex-shrink-0 min-w-0">
-              <div className="flex gap-1 flex-shrink-0">
-                {[
-                  { to: '/', label: 'Dashboard', icon: '📊' },
-                  { to: '/scraper', label: 'Scraper', icon: '🔍' },
-                  { to: '/studio', label: 'Studio', icon: '✉️' },
-                  { to: '/campaigns', label: 'Campaigns', icon: '📤' },
-                  { to: '/analytics', label: 'Analytics', icon: '📈' },
-                  { to: '/outreach', label: 'Outreach', icon: '🎯' },
-                  { to: '/yucgoutreach', label: 'YUCGoutreach', icon: '🧭' },
-                  ...(user.role === 'admin' ? [{ to: '/admin', label: 'Admin', icon: '🔐' }] : []),
-                ].map(({ to, label, icon }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    className={({ isActive }) =>
-                      `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                        isActive
-                          ? 'bg-white border border-[var(--border)] text-deep-navy shadow-sm dark:bg-slate-700/60 dark:border-slate-600'
-                          : 'text-slate-600 hover:text-deep-navy hover:bg-pale-sky/15 dark:hover:bg-slate-700/40'
-                      }`
-                    }
-                  >
-                    <span className="hidden md:inline">{label}</span>
-                    <span className="md:hidden">{icon}</span>
-                  </NavLink>
-                ))}
-              </div>
-              <div className="flex items-center gap-2 ml-2 pl-2 border-l border-pale-sky flex-shrink-0">
-                {user.picture && (
-                  <img src={user.picture} alt="" className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                )}
-                <NavLink
-                  to="/profile"
-                  className="text-sm font-medium text-slate-700 hidden md:inline truncate max-w-[160px] hover:text-deep-navy"
-                >
-                  Welcome, {user.name || user.email?.split('@')[0] || 'User'}
-                </NavLink>
-                <button
-                  onClick={() => {
-                    onLogout();
-                    navigate('/login');
-                  }}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-800 dark:hover:text-slate-100 whitespace-nowrap"
-                >
-                  Log out
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </nav>
-      <div className="flex flex-1 min-h-0">
-        <main className="flex-1 min-w-0 min-h-0 overflow-auto p-4 sm:p-6 lg:p-8">
-          <div key={location.pathname} className="page-enter">
-            <BackButton />
-            <Outlet context={{ user }} />
-          </div>
-        </main>
-        <div className="hidden xl:flex xl:flex-col xl:min-h-[calc(100vh-3.5rem)] xl:flex-shrink-0">
-          <CommunitySidebar />
-        </div>
-      </div>
-      <ChecklistOverlay />
-    </div>
-  );
+  return <AppShell user={user} onLogout={onLogout} pageKey={location.pathname} />;
 }

@@ -6,6 +6,8 @@ import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useTheme } from '../contexts/ThemeContext';
 import { SignatureEditor } from '../components/SignatureEditor';
+import AppTabMenu from '../components/AppTabMenu';
+import AppSubnav from '../components/AppSubnav';
 import { getStoredPreferences, savePreferences, applyUserPreferences, resetPreferencesToDefault, type UserPreferences } from '../lib/userPreferences';
 
 export default function Profile() {
@@ -177,20 +179,23 @@ export default function Profile() {
     <div className="max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold text-deep-navy mb-6">My Profile</h1>
 
-      <div className="flex gap-2 mb-6 border-b border-pale-sky">
-        <button
-          onClick={() => { setActiveTab('profile'); setSearchParams({}); }}
-          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'profile' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
-          >
-            Profile
-        </button>
-        <button
-          onClick={() => { setActiveTab('settings'); setSearchParams({ tab: 'settings' }); }}
-          className={`px-4 py-2 rounded-t-lg font-medium ${activeTab === 'settings' ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]' : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'}`}
-        >
-          Settings
-        </button>
-      </div>
+      <AppTabMenu
+        className="mb-6"
+        tabs={[
+          { id: 'profile', label: 'Profile' },
+          { id: 'settings', label: 'Settings' },
+        ]}
+        active={activeTab}
+        onChange={(id) => {
+          if (id === 'profile') {
+            setActiveTab('profile');
+            setSearchParams({});
+          } else {
+            setActiveTab('settings');
+            setSearchParams({ tab: 'settings' });
+          }
+        }}
+      />
 
       {activeTab === 'profile' && (
         <div className="space-y-6">
@@ -276,30 +281,14 @@ export default function Profile() {
           <div className="surface-card shadow-sm rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Appearance</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">Choose light or dark theme.</p>
-            <div className="inline-flex p-1 rounded-xl bg-white dark:bg-slate-700/80 border border-[var(--border)] dark:border-slate-500 shadow-sm">
-              <button
-                type="button"
-                onClick={() => setTheme('light')}
-                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
-                  theme === 'light'
-                    ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-                    : 'text-deep-navy/80 dark:text-slate-300 bg-transparent hover:bg-white/70 dark:hover:bg-slate-600/60'
-                }`}
-              >
-                Light
-              </button>
-              <button
-                type="button"
-                onClick={() => setTheme('dark')}
-                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
-                  theme === 'dark'
-                    ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-                    : 'text-deep-navy/80 dark:text-slate-300 bg-transparent hover:bg-white/70 dark:hover:bg-slate-600/60'
-                }`}
-              >
-                Dark
-              </button>
-            </div>
+            <AppSubnav
+              items={[
+                { id: 'light', label: 'Light' },
+                { id: 'dark', label: 'Dark' },
+              ]}
+              active={theme}
+              onChange={(id) => setTheme(id as 'light' | 'dark')}
+            />
             <div className="mt-6 pt-4 border-t border-pale-sky dark:border-slate-600 space-y-4">
               <div className="flex items-center gap-3">
                 <label className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">Accent Color</label>

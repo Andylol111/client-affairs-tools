@@ -73,7 +73,9 @@ async def run_notification_digests() -> dict:
             text = "YUCG Outreach – Daily digest\n\n" + "\n".join(parts)
 
             # Open DM with user and post
-            token = slack_row["access_token"]
+            from app.token_crypto import decrypt_token
+
+            token = decrypt_token(slack_row["access_token"])
             user_slack_id = slack_row["user_slack_id"]
             async with httpx.AsyncClient(timeout=10.0) as client:
                 try:
