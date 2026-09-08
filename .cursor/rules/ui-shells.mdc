@@ -1,0 +1,48 @@
+---
+description: Keep UI shells, nav, and styles consistent across desktop and mobile
+globs: frontend/src/components/shell/**,frontend/src/components/nav/**,frontend/src/lib/navConfig.ts,frontend/src/index.css,frontend/src/pages/MainApp.tsx,frontend/src/components/AppTabMenu.tsx,frontend/src/components/AppSubnav.tsx
+alwaysApply: false
+---
+
+# UI Shell & Style Consistency
+
+## Single sources of truth
+
+| Concern | Update here |
+|---------|-------------|
+| Nav routes & labels | `frontend/src/lib/navConfig.ts` |
+| Desktop + mobile layout | `frontend/src/components/shell/AppShell*.tsx` |
+| Shared rigid styles | `frontend/src/index.css` (`.app-*` classes) |
+
+Never duplicate nav items or shell markup in pages.
+
+## Shell variants
+
+- **Authenticated app**: `AppShell` — header (lg+ nav), `AppShellMobile` (bottom nav + menu btn), drawer
+- **Login**: `app-auth-shell` class on the page wrapper
+
+When changing layout or nav behavior, use **one** nav per viewport: top nav (lg+) OR `AppShellMobile` (< lg). The menu (☰) button lives only in `AppShellMobile`, never in the header.
+
+## Nav labels
+
+- Use text labels only (no emoji or icon glyphs in nav)
+- Desktop top nav: `item.label`; mobile bottom nav: `item.shortLabel`
+- Use `AppNavLink` with variant `desktop` | `mobile`
+
+## Menus & tabs
+
+- Primary page tabs → `AppTabMenu` + `.app-tab-menu` CSS
+- Segmented sub-nav → `AppSubnav` + `.app-subnav` CSS
+- Mobile: menus scroll horizontally (CSS in `index.css`); do not create one-off mobile tab styles in pages
+
+## Style rules
+
+- Rigid/square UI: use `.surface-card`, `.app-nav-*`, `.app-tab-*` — avoid ad-hoc `rounded-*` or shadows on shells
+- YUCG palette only: `--deep-navy`, `--pale-sky`, `--steel-blue`, `--accent`
+- New shell UI → add classes to `index.css` under the App shell section, not inline Tailwind in multiple files
+
+## Checklist for nav/feature changes
+
+1. Add route in `App.tsx` and `navConfig.ts`
+2. Verify desktop (lg+ top nav only) and mobile/tablet (< lg bottom nav + drawer; no top nav strip)
+4. Run `npm run build` in `frontend/`

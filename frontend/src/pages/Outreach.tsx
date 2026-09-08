@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import AppTabMenu from '../components/AppTabMenu';
+import PageHeader from '../components/PageHeader';
 
 const PIPELINE_STATUSES = ['cold', 'contacted', 'replied', 'meeting', 'closed'];
 
@@ -40,6 +42,11 @@ function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect
         <div className="min-w-0 flex-1">
           <div className="font-medium text-slate-800 truncate text-sm">{c.name || c.email}</div>
           <div className="text-xs text-slate-500 truncate mt-0.5">{c.company || c.email}</div>
+          {c.last_sent_at && (
+            <div className="text-[11px] text-slate-400 truncate mt-0.5">
+              Last send{c.last_campaign_name ? `: ${c.last_campaign_name}` : ''} · {String(c.last_sent_at).slice(0, 10)}
+            </div>
+          )}
         </div>
       </div>
       <select
@@ -368,32 +375,32 @@ export default function Outreach() {
 
   return (
     <div className="w-full max-w-[1920px] mx-auto">
-      <h1 className="text-2xl font-bold text-deep-navy mb-6">Outreach Hub</h1>
+      <PageHeader
+        title="Pipeline"
+        subtitle="Cold through closed. Follow-ups use the same send drain."
+        imageSrc="/yucg-bg/pauli-murray-tower.jpg"
+      />
 
-      <div className="mb-6 border-b border-pale-sky">
-        <div className="flex gap-2 flex-wrap">
-          {(['pipeline', 'campaigns', 'priorities', 'templates', 'sequences'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 rounded-t-lg font-medium ${
-                activeTab === tab
-                  ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-                  : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'
-              }`}
-            >
-              {tab === 'priorities' ? 'Club Priorities' : tab === 'sequences' ? 'Sequences (follow-ups)' : tab.charAt(0).toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
-        </div>
+      <div className="mb-6">
+        <AppTabMenu
+          tabs={[
+            { id: 'pipeline', label: 'Pipeline' },
+            { id: 'campaigns', label: 'Campaigns' },
+            { id: 'priorities', label: 'Club Priorities' },
+            { id: 'templates', label: 'Templates' },
+            { id: 'sequences', label: 'Sequences' },
+          ]}
+          active={activeTab}
+          onChange={(id) => setActiveTab(id as typeof activeTab)}
+        />
         {activeTab === 'templates' && (
-          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-[var(--border)] bg-white dark:bg-slate-800/40 rounded-b-lg mt-0">
+          <p className="app-tab-panel text-sm text-slate-600 dark:text-slate-400">
             <strong className="text-deep-navy dark:text-slate-200">Templates</strong> store reusable subject and body snippets you can paste or adapt in Email Studio and campaigns.
             Prioritize a small set of sharp, role-specific templates over dozens of generic ones; keep subjects under ~60 characters and lead with one clear ask.
           </p>
         )}
         {activeTab === 'sequences' && (
-          <p className="text-sm text-slate-600 dark:text-slate-400 py-3 px-1 border-t border-[var(--border)] bg-white dark:bg-slate-800/40 rounded-b-lg mt-0">
+          <p className="app-tab-panel text-sm text-slate-600 dark:text-slate-400">
             <strong className="text-deep-navy dark:text-slate-200">Sequences (follow-ups)</strong> are timed steps after the first send: each step waits <em>days after the previous message</em> and only goes to contacts who have not replied.
             Priority is to stay polite and spaced out—use sequences to nudge, not to spam; pair them with inbox sync so replied contacts drop out automatically.
           </p>
@@ -558,9 +565,9 @@ export default function Outreach() {
           )}
           {activeTab === 'campaigns' && (
             <div className="surface-card rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4 w-full">
-              <h3 className="font-semibold text-deep-navy">Outreach Campaigns</h3>
+              <h3 className="font-semibold text-deep-navy">Outreach work lists</h3>
               <p className="text-sm text-slate-600">
-                Community = institution priorities. Individual = your outreach. Track what each person is working on.
+                CRM work lists (who is on which effort). Mail send lives in Studio → Send — these rows are not the send ledger.
               </p>
               <div className="flex gap-2 flex-wrap">
                 <input

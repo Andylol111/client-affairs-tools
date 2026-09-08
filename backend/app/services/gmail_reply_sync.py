@@ -121,6 +121,47 @@ def _thread_has_inbound_reply_from_contact(
     return False
 
 
+_BOUNCE_FROM_MARKERS = ("mailer-daemon", "postmaster", "mail-daemon")
+_BOUNCE_SUBJECT_MARKERS = (
+    "undeliverable",
+    "delivery status notification",
+    "mail delivery failed",
+    "returned mail",
+    "delivery failure",
+    "failure notice",
+)
+
+
+def thread_has_bounce(thread: dict) -> bool:
+    """DSN / Gmail bounce in a thread we sent. Does not prove the inbox existed."""
+    if not thread:
+        return False
+    for m in thread.get("messages") or []:
+        hdr = _headers_dict(m)
+        from_e = _parseaddr_email(hdr.get("from", ""))
+        subj = (hdr.get("subject") or "").lower()
+        labels = [str(x).lower() for x in (m.get("labelIds") or [])]
+        if any(mark in from_e for mark in _BOUNCE_FROM_MARKERS):
+            return True
+        if any(mark in subj for mark in _BOUNCE_SUBJECT_MARKERS):
+            return True
+        if "bounce" in labels:
+            return True
+    return False
+
+
+async def _mark_campaign_contact_bounced(db, cc_id: int, contact_id: int) -> None:
+    await db.execute(
+        """UPDATE campaign_contacts SET status = 'bounced' WHERE id = ?""",
+        (cc_id,),
+    )
+    await db.execute(
+        """UPDATE contacts SET email_verification_status = 'dead'
+           WHERE id = ?""",
+        (contact_id,),
+    )
+
+
 async def _mark_campaign_contact_replied(db, cc_id: int, contact_id: int) -> None:
     await db.execute(
         """UPDATE campaign_contacts SET replied_at = CURRENT_TIMESTAMP, status = 'replied' WHERE id = ?""",
@@ -154,13 +195,14 @@ async def sync_replies_for_user(user_id: int, *, auto_sort_contacted: bool = Tru
     """
     Scan gmail threads for this user's sent campaign rows; mark replies and pipeline.
     """
-    result = get_valid_access_token(user_id)
+    result = await get_valid_access_token(user_id)
     if not result:
         return {
             "ok": False,
             "error": "no_gmail_token",
             "message": "No Gmail OAuth token. Sign in with Google.",
             "marked_replied": 0,
+            "marked_bounced": 0,
             "skipped": 0,
             "errors": [],
         }
@@ -168,6 +210,7 @@ async def sync_replies_for_user(user_id: int, *, auto_sort_contacted: bool = Tru
 
     db = await get_db()
     marked = 0
+    bounced = 0
     skipped = 0
     errors: list[dict] = []
     try:
@@ -196,7 +239,11 @@ async def sync_replies_for_user(user_id: int, *, auto_sort_contacted: bool = Tru
                     skipped += 1
                     continue
                 sent_ms = _sent_at_to_ms(row["sent_at"])
-                if _thread_has_inbound_reply_from_contact(
+                if thread_has_bounce(thread):
+                    await _mark_campaign_contact_bounced(db, row["id"], row["contact_id"])
+                    await db.commit()
+                    bounced += 1
+                elif _thread_has_inbound_reply_from_contact(
                     thread,
                     row["email"] or "",
                     owner_email,
@@ -221,6 +268,7 @@ async def sync_replies_for_user(user_id: int, *, auto_sort_contacted: bool = Tru
         return {
             "ok": True,
             "marked_replied": marked,
+            "marked_bounced": bounced,
             "skipped_no_reply": skipped,
             "pipeline_promoted_contacted": promoted,
             "errors": errors,
@@ -233,6 +281,7 @@ async def sync_replies_all_senders() -> dict[str, Any]:
     """Scheduled job: every user who has pending threads."""
     db = await get_db()
     total_marked = 0
+    total_bounced = 0
     total_promoted = 0
     all_errors: list[dict] = []
     try:
@@ -253,6 +302,7 @@ async def sync_replies_all_senders() -> dict[str, Any]:
             continue
         res = await sync_replies_for_user(int(uid), auto_sort_contacted=True)
         total_marked += int(res.get("marked_replied") or 0)
+        total_bounced += int(res.get("marked_bounced") or 0)
         total_promoted += int(res.get("pipeline_promoted_contacted") or 0)
         all_errors.extend(res.get("errors") or [])
 
@@ -260,6 +310,7 @@ async def sync_replies_all_senders() -> dict[str, Any]:
         "ok": True,
         "users_processed": len(user_ids),
         "marked_replied": total_marked,
+        "marked_bounced": total_bounced,
         "pipeline_promoted_contacted": total_promoted,
         "errors": all_errors,
     }

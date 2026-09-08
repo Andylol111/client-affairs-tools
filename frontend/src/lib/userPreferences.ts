@@ -37,7 +37,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   fontSize: 'medium',
   sidebarCollapsed: false,
   reduceMotion: false,
-  borderRadius: 'medium',
+  borderRadius: 'sharp',
   checklistBadge: true,
 };
 
@@ -48,7 +48,7 @@ export function getStoredPreferences(): UserPreferences {
     const fontSize = (localStorage.getItem(KEY_FONT_SIZE) || 'medium') as UserPreferences['fontSize'];
     const sidebarCollapsed = localStorage.getItem(KEY_SIDEBAR_COLLAPSED) === '1';
     const reduceMotion = localStorage.getItem(KEY_REDUCE_MOTION) === '1';
-    const borderRadius = (localStorage.getItem(KEY_BORDER_RADIUS) || 'medium') as UserPreferences['borderRadius'];
+    const borderRadius = (localStorage.getItem(KEY_BORDER_RADIUS) || 'sharp') as UserPreferences['borderRadius'];
     const checklistBadge = localStorage.getItem(KEY_CHECKLIST_BADGE) !== '0';
     return {
       accent,

@@ -61,7 +61,7 @@ function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast:
           return (
             <div
               key={t.id}
-              className={`rounded-lg shadow-lg border p-4 pr-10 relative overflow-hidden ${
+              className={`app-toast p-4 pr-10 relative overflow-hidden ${
                 t.type === 'error'
                   ? 'bg-red-50 border-red-200 text-red-800'
                   : t.type === 'success'

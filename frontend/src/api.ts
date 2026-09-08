@@ -1,7 +1,100 @@
-// In dev, use same-origin so Vite proxy forwards /api to backend (avoids self-signed cert issues)
-const API_BASE = import.meta.env.DEV
-  ? ''
-  : (import.meta.env.VITE_API_URL || 'http://localhost:8000');
+export type DiscoveryLogEntry = {
+  email?: string;
+  name?: string;
+  title?: string;
+  contact_source?: string;
+  source_url?: string;
+  ai_verdict?: string;
+  ai_reason?: string;
+  ai_source_note?: string;
+  discovery_context?: string;
+};
+
+export type ScrapeResult = {
+  contacts: any[];
+  count: number;
+  found_total?: number;
+  duplicates_skipped?: number;
+  ai_junk_skipped?: number;
+  scrape_run_id?: string;
+  discovery_log?: DiscoveryLogEntry[];
+  cancelled?: boolean;
+};
+
+/** Spreadsheet-backed YUCG outreach coordinator (Agent 3/4 API). */
+export type YucgProspectRow = {
+  row_index: number;
+  company: string;
+  sector?: string;
+  why_attractive?: string;
+  engagement_theme?: string;
+  yale_hook?: string;
+  outreach_priority?: number;
+  contact_type?: string;
+  target_role_title?: string;
+  incentive_score?: number;
+  verification_source_url?: string;
+  recommended_message_angle?: string;
+  yucg_service_tags?: string[];
+};
+
+export type YucgScoreBreakdown = {
+  incentive?: number;
+  priority?: number;
+  yale_hook?: number;
+  contact_type_match?: number;
+  total?: number;
+  rationale?: string;
+};
+
+export type YucgVerifiability = {
+  company: string;
+  row_index: number;
+  score_breakdown?: YucgScoreBreakdown;
+  verification_source_url?: string;
+  yucg_service_tags?: string[];
+  website_citation_url?: string;
+  website_citation_excerpt?: string;
+  reasoning_chain?: string[];
+};
+
+export type YucgRecommendation = {
+  prospect: YucgProspectRow;
+  verifiability: YucgVerifiability;
+  composite_score?: number;
+};
+
+export type YucgRecommendResponse = {
+  mode: 'rules' | 'ollama' | 'ai';
+  count: number;
+  recommendations: YucgRecommendation[];
+  ollama_error?: string | null;
+  model?: string | null;
+};
+
+export type YucgProspectsMeta = {
+  source_path: string;
+  source_exists: boolean;
+  sheet?: string;
+  row_count: number;
+  sectors: string[];
+  contact_types: string[];
+};
+
+export type EmailPatternRow = {
+  company_domain: string;
+  company_name?: string;
+  pattern_key: string;
+  pattern_template: string;
+  confidence: number;
+  sample_count: number;
+  verified_samples: number;
+  sources?: string[];
+  updated_at?: string;
+};
+
+// Empty = same origin. Local Vite proxies /api → :8000. Hosted box serves SPA + API together.
+export const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 /**
  * Full-page navigations (Google OAuth) must use the real API origin. In dev, `API_BASE` is '' so
@@ -28,6 +121,7 @@ function isParseFailure(e: unknown): boolean {
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...getAuthHeaders(),
@@ -77,6 +171,14 @@ export type CursorHeatmapResponse = { days: number, pages: Record<string, Cursor
 
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
+  ai: {
+    models: () =>
+      fetchApi<{
+        provider: string;
+        default: string;
+        groups: { id: string; label: string; models: { id: string; label: string; tier: string; blurb: string }[] }[];
+      }>('/api/ai/models'),
+  },
   telemetry: {
     event: (data: { event_type: string; resource_type?: string; details?: Record<string, unknown> }) =>
       fetchApi<any>('/api/telemetry/event', { method: 'POST', body: JSON.stringify(data) }).catch(() => {}),
@@ -98,6 +200,7 @@ export const api = {
       q?: string;
       pipeline_status?: string;
       employee_only?: boolean;
+      release_id?: number;
       limit?: number;
     }) => {
       const params = new URLSearchParams();
@@ -107,6 +210,7 @@ export const api = {
       if (opts?.q?.trim()) params.set('q', opts.q.trim());
       if (opts?.pipeline_status) params.set('pipeline_status', opts.pipeline_status);
       if (opts?.employee_only) params.set('employee_only', 'true');
+      if (opts?.release_id != null) params.set('release_id', String(opts.release_id));
       if (opts?.limit != null) params.set('limit', String(opts.limit));
       return fetchApi<any[]>(`/api/contacts${params.toString() ? '?' + params : ''}`);
     },
@@ -139,7 +243,7 @@ export const api = {
       data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number },
       onEvent: (ev: Record<string, unknown>) => void,
       opts?: { signal?: AbortSignal }
-    ): Promise<{ contacts: any[]; count: number; duplicates_skipped?: number; cancelled?: boolean }> => {
+    ): Promise<ScrapeResult> => {
       let res: Response;
       try {
         res = await fetch(`${API_BASE}/api/contacts/scrape-stream`, {
@@ -169,7 +273,7 @@ export const api = {
       if (!reader) throw new Error('No response body');
       const dec = new TextDecoder();
       let buffer = '';
-      let result: { contacts: any[]; count: number; duplicates_skipped?: number; cancelled?: boolean } | null = null;
+      let result: ScrapeResult | null = null;
 
       const handleLine = (line: string) => {
         if (!line.trim()) return;
@@ -179,13 +283,18 @@ export const api = {
           result = {
             contacts: (ev.contacts as any[]) || [],
             count: Number(ev.count) || 0,
+            found_total: Number(ev.found_total) || Number(ev.count) || 0,
             duplicates_skipped: Number(ev.duplicates_skipped) || 0,
+            ai_junk_skipped: Number(ev.ai_junk_skipped) || 0,
+            scrape_run_id: ev.scrape_run_id as string | undefined,
+            discovery_log: (ev.discovery_log as DiscoveryLogEntry[]) || [],
           };
         }
         if (ev.type === 'cancelled') {
           result = {
             contacts: (ev.contacts as any[]) || [],
             count: Number(ev.count) || 0,
+            found_total: Number(ev.found_total) || Number(ev.count) || 0,
             duplicates_skipped: Number(ev.duplicates_skipped) || 0,
             cancelled: true,
           };
@@ -228,6 +337,39 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ contact_ids }),
       }),
+    clearAll: (data: {
+      confirm: boolean;
+      domain?: string;
+      clear_pattern_cache?: boolean;
+      clear_discovery_logs?: boolean;
+    }) =>
+      fetchApi<{
+        contacts_deleted: number;
+        patterns_deleted: number;
+        discovery_logs_deleted: number;
+        domain: string | null;
+      }>('/api/contacts/clear-all', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    emailPatterns: (domain: string) =>
+      fetchApi<{ domain: string; patterns: EmailPatternRow[]; count: number }>(
+        `/api/contacts/email-patterns?domain=${encodeURIComponent(domain)}`
+      ),
+    reconcileIdentity: (domain?: string) =>
+      fetchApi<{ fixed: number; removed: number; unchanged: number }>(
+        `/api/contacts/reconcile-identity${domain ? '?domain=' + encodeURIComponent(domain) : ''}`,
+        { method: 'POST' }
+      ),
+    purgeJunkContacts: (domain?: string) =>
+      fetchApi<{ removed: number }>(
+        `/api/contacts/purge-junk-contacts${domain ? '?domain=' + encodeURIComponent(domain) : ''}`,
+        { method: 'POST' }
+      ),
+    discoveryLog: (scrapeRunId: string) =>
+      fetchApi<{ scrape_run_id: string; entries: DiscoveryLogEntry[]; count: number }>(
+        `/api/contacts/discovery-log?scrape_run_id=${encodeURIComponent(scrapeRunId)}`
+      ),
   },
   emails: {
     generate: (data: {
@@ -237,6 +379,7 @@ export const api = {
       angle?: string;
       custom_instructions?: string;
       value_proposition?: string;
+      model?: string;
     }) =>
       fetchApi<{ subject: string; body: string; contact_id: number }>('/api/emails/generate', {
         method: 'POST',
@@ -258,8 +401,9 @@ export const api = {
       angle?: string;
       custom_instructions?: string;
       value_proposition?: string;
+      model?: string;
     }) =>
-      fetchApi<{ subject: string; body: string }>('/api/emails/generate-template', {
+      fetchApi<{ subject: string; body: string; contact_id?: number | null }>('/api/emails/generate-template', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
@@ -277,6 +421,8 @@ export const api = {
       }),
     send: (id: number) =>
       fetchApi<any>(`/api/campaigns/${id}/send`, { method: 'POST' }),
+    release: (id: number) =>
+      fetchApi<any>(`/api/campaigns/${id}/release`, { method: 'POST' }),
     updateContactEmail: (campaignId: number, ccId: number, subject?: string, body?: string) =>
       fetchApi<any>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
         method: 'PATCH',
@@ -323,8 +469,19 @@ export const api = {
       status: () => fetchApi<{ connected: boolean; team_name?: string }>('/api/auth/slack/status'),
       disconnect: () => fetchApi<any>('/api/auth/slack/disconnect', { method: 'DELETE' }),
     },
+    complete2fa: (code: string) =>
+      fetchApi<{ ok: boolean }>('/api/auth/2fa/login', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      }),
   },
   admin: {
+    catalog: () =>
+      fetchApi<{
+        bucket: string | null;
+        objects: any[];
+        prefixes: { prefix: string; objects: any[] }[];
+      }>('/api/admin/catalog'),
     loginLog: () => fetchApi<any[]>('/api/admin/login-log'),
     users: {
       list: () => fetchApi<any[]>('/api/admin/users'),
@@ -637,6 +794,119 @@ export const api = {
     delete: (id: number) =>
       fetchApi<any>(`/api/attachments/${id}`, { method: 'DELETE' }),
     downloadUrl: (id: number) => `${API_BASE}/api/attachments/${id}/download`,
+    onedrive: {
+      list: () => fetchApi<{ configured: boolean; items: any[] }>('/api/attachments/onedrive'),
+      attach: (item_id: string) =>
+        fetchApi<any>('/api/attachments/onedrive/attach', {
+          method: 'POST',
+          body: JSON.stringify({ item_id }),
+        }),
+    },
+  },
+  yucg: {
+    prospectsMeta: () => fetchApi<YucgProspectsMeta>('/api/yucg/prospects/meta'),
+    listProspects: (opts?: {
+      sector?: string;
+      contact_type?: string;
+      min_incentive_score?: number;
+      outreach_priority?: number;
+      limit?: number;
+      q?: string;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts?.sector) params.set('sector', opts.sector);
+      if (opts?.contact_type) params.set('contact_type', opts.contact_type);
+      if (opts?.min_incentive_score != null) params.set('min_incentive_score', String(opts.min_incentive_score));
+      if (opts?.outreach_priority != null) params.set('outreach_priority', String(opts.outreach_priority));
+      if (opts?.limit != null) params.set('limit', String(opts.limit));
+      if (opts?.q?.trim()) params.set('q', opts.q.trim());
+      const qs = params.toString();
+      return fetchApi<{ prospects: YucgProspectRow[]; count: number; items?: YucgProspectRow[]; total?: number }>(
+        `/api/yucg/prospects${qs ? `?${qs}` : ''}`
+      ).then((res) => ({
+        prospects: res.prospects ?? res.items ?? [],
+        count: res.count ?? res.total ?? (res.prospects ?? res.items ?? []).length,
+      }));
+    },
+    recommend: (opts?: {
+      sector?: string;
+      contact_type?: string;
+      min_incentive_score?: number;
+      contact_type_match?: string;
+      n?: number;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts?.sector) params.set('sector', opts.sector);
+      if (opts?.contact_type) params.set('contact_type', opts.contact_type);
+      if (opts?.min_incentive_score != null) params.set('min_incentive_score', String(opts.min_incentive_score));
+      if (opts?.contact_type_match) params.set('contact_type_match', opts.contact_type_match);
+      if (opts?.n != null) params.set('n', String(opts.n));
+      const qs = params.toString();
+      return fetchApi<YucgRecommendResponse>(`/api/yucg/prospects/recommend${qs ? `?${qs}` : ''}`);
+    },
+    aiRecommend: (data?: {
+      sector?: string;
+      contact_type?: string;
+      min_incentive_score?: number;
+      n?: number;
+      model?: string;
+    }) =>
+      fetchApi<YucgRecommendResponse>('/api/yucg/prospects/ai-recommend', {
+        method: 'POST',
+        body: JSON.stringify(data ?? {}),
+      }),
+    exportShortlist: async (row_indices: number[]) => {
+      const res = await fetch(`${API_BASE}/api/yucg/prospects/export-shortlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ row_indices: row_indices, row_indexes: row_indices }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        try {
+          const j = JSON.parse(text);
+          const d = j.detail;
+          throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
+        } catch (e) {
+          if (e instanceof Error && e.message !== text) throw e;
+          throw new Error(text);
+        }
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition');
+      const match = cd?.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || 'YUCG_outreach_shortlist.csv';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+    listReleases: () => fetchApi<any[]>('/api/yucg/releases'),
+    getRelease: (id: number) => fetchApi<any>(`/api/yucg/releases/${id}`),
+    createRelease: (data: { name: string; row_indexes: number[]; notes?: string }) =>
+      fetchApi<{ id: number; status: string; targets: number }>('/api/yucg/releases', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    mintPerson: (
+      releaseId: number,
+      targetId: number,
+      data: { full_name: string; title?: string; source_url?: string; blurb?: string },
+    ) =>
+      fetchApi<any>(`/api/yucg/releases/${releaseId}/targets/${targetId}/mint`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    keepPerson: (releaseId: number, personId: number, keep = true) =>
+      fetchApi<any>(`/api/yucg/releases/${releaseId}/people/${personId}/keep`, {
+        method: 'POST',
+        body: JSON.stringify({ keep }),
+      }),
+    rebuildPack: (releaseId: number) =>
+      fetchApi<any>(`/api/yucg/releases/${releaseId}/pack`, { method: 'POST' }),
+    releaseInbox: (releaseId: number) => fetchApi<any[]>(`/api/yucg/releases/${releaseId}/inbox`),
   },
   yucgoutreach: {
     createRun: (data: {
@@ -655,6 +925,11 @@ export const api = {
     getRun: (id: number) => fetchApi<any>(`/api/yucgoutreach/runs/${id}`),
     listProspects: (runId: number, limit?: number) =>
       fetchApi<any[]>(`/api/yucgoutreach/runs/${runId}/prospects?limit=${limit ?? 500}`),
+    importContacts: (runId: number) =>
+      fetchApi<{ created: number; updated: number; skipped: number }>(
+        `/api/yucgoutreach/runs/${runId}/import-contacts`,
+        { method: 'POST' }
+      ),
     deleteRun: (id: number) =>
       fetchApi<{ ok: boolean; deleted: number }>(`/api/yucgoutreach/runs/${id}`, { method: 'DELETE' }),
     exportExcel: async (runId: number) => {

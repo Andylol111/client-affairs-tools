@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { api } from '../api';
+import { api, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
+import AppSubnav from '../components/AppSubnav';
+import PageHeader from '../components/PageHeader';
 
 type ScraperTab = 'import' | 'scrape' | 'find';
 
@@ -13,10 +15,86 @@ type ScrapeProgressState = {
 const PHASE_TYPICAL: Record<string, string> = {
   init: 'Startup is usually a few seconds.',
   domain: 'Site crawl: often 30 seconds–2 minutes depending on pages and latency.',
+  web: 'Web search: Tavily scans LinkedIn, press, and directories (30–90 seconds).',
   linkedin: 'LinkedIn step: Apify runs about 1–3 minutes; public page fallback is faster but yields fewer people.',
-  prepare: 'Merge and pattern load: typically under 15 seconds.',
+  prepare: 'Inbox + AI agent pools run in parallel (6 threaded Ollama agents by default).',
   save: 'Database save: quick unless you are upserting hundreds of rows.',
 };
+
+function aiVerdictLabel(v?: string | null): string {
+  switch (v) {
+    case 'real':
+      return 'Real name';
+    case 'suspicious':
+      return 'Suspicious';
+    case 'junk':
+      return 'Junk';
+    case 'unreviewed':
+      return 'Unreviewed';
+    default:
+      return '—';
+  }
+}
+
+function aiVerdictClass(v?: string | null): string {
+  switch (v) {
+    case 'real':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'suspicious':
+      return 'bg-amber-100 text-amber-800';
+    case 'junk':
+      return 'bg-red-100 text-red-800';
+    default:
+      return 'bg-pale-sky/50 text-slate-blue';
+  }
+}
+
+function formatScrapeSummary(res: {
+  count?: number;
+  found_total?: number;
+  duplicates_skipped?: number;
+  ai_junk_skipped?: number;
+}): string {
+  const found = res.found_total ?? res.count ?? 0;
+  const saved = res.count ?? 0;
+  const dupes = res.duplicates_skipped ?? 0;
+  const junk = res.ai_junk_skipped ?? 0;
+  const parts: string[] = [];
+  parts.push(`Found ${found} on page`);
+  if (saved > 0) parts.push(`${saved} new saved`);
+  if (dupes > 0) parts.push(`${dupes} already in database (shown below)`);
+  if (junk > 0) parts.push(`${junk} junk removed (not shown)`);
+  if (saved === 0 && found > 0 && dupes === found) {
+    return `Found ${found} contacts on page — all already in your database. They are listed below with fresh scrape metadata.`;
+  }
+  return parts.join(' · ');
+}
+
+function inboxStatusLabel(status?: string | null): string {
+  switch (status) {
+    case 'valid':
+      return 'Verified inbox';
+    case 'likely_valid':
+      return 'Likely deliverable';
+    case 'invalid':
+      return 'Invalid';
+    default:
+      return 'Unknown';
+  }
+}
+
+function inboxStatusClass(status?: string | null): string {
+  switch (status) {
+    case 'valid':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'likely_valid':
+      return 'bg-sky-100 text-sky-800';
+    case 'invalid':
+      return 'bg-red-100 text-red-800';
+    default:
+      return 'bg-pale-sky/50 text-slate-blue';
+  }
+}
 
 function formatEtaSeconds(sec: number | null): string {
   if (sec == null || !Number.isFinite(sec) || sec < 0) return 'calculating…';
@@ -203,6 +281,14 @@ export default function Scraper() {
   const scrapeAbortRef = useRef<AbortController | null>(null);
   const [scrapeCancelArmed, setScrapeCancelArmed] = useState(false);
   const scrapeCancelArmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [emailPatterns, setEmailPatterns] = useState<EmailPatternRow[]>([]);
+  const [patternsLoading, setPatternsLoading] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [discoveryLog, setDiscoveryLog] = useState<DiscoveryLogEntry[]>([]);
+  const [scrapeRunId, setScrapeRunId] = useState<string | null>(null);
+  const [showDiscoveryLog, setShowDiscoveryLog] = useState(false);
 
   useEffect(() => {
     if (!loading || activeTab !== 'scrape') return;
@@ -215,6 +301,104 @@ export default function Scraper() {
       if (scrapeCancelArmTimeoutRef.current) clearTimeout(scrapeCancelArmTimeoutRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    const raw = domain.trim();
+    if (!raw) {
+      setEmailPatterns([]);
+      return;
+    }
+    const t = window.setTimeout(async () => {
+      setPatternsLoading(true);
+      try {
+        const res = await api.contacts.emailPatterns(raw);
+        setEmailPatterns(res.patterns || []);
+      } catch {
+        setEmailPatterns([]);
+      } finally {
+        setPatternsLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [domain]);
+
+  const handleReconcileIdentity = async () => {
+    setReconciling(true);
+    setError('');
+    setInfoMessage('');
+    try {
+      const res = await api.contacts.reconcileIdentity(domain.trim() || undefined);
+      setInfoMessage(
+        `Identity pass: ${res.fixed} fixed, ${res.removed} removed, ${res.unchanged} unchanged.`
+      );
+    } catch (e: any) {
+      setError(e.message || 'Reconcile failed');
+    } finally {
+      setReconciling(false);
+    }
+  };
+
+  const handlePurgeJunk = async () => {
+    if (!window.confirm('Delete saved contacts that look like nav/product labels (Gift Cards, Mac Studio, etc.)?')) return;
+    setPurging(true);
+    setError('');
+    setInfoMessage('');
+    try {
+      const res = await api.contacts.purgeJunkContacts(domain.trim() || undefined);
+      setInfoMessage(`Removed ${res.removed} junk contact(s) from the database.`);
+    } catch (e: any) {
+      setError(e.message || 'Purge failed');
+    } finally {
+      setPurging(false);
+    }
+  };
+
+  const handleClearContactsCache = async () => {
+    const dom = domain.trim();
+    const scope = dom ? `contacts matching ${dom}` : 'ALL contacts in the database';
+    if (
+      !window.confirm(
+        `Clear ${scope}?\n\nThis permanently deletes those contacts plus related campaign rows, notes, and generated emails. Email pattern cache and AI discovery logs can be cleared too on the next step.`
+      )
+    ) {
+      return;
+    }
+    const alsoCaches = window.confirm(
+      'Also clear email pattern cache and AI discovery logs?\n\nOK = yes, clear everything listed above.\nCancel = delete contacts only (keep learned email patterns).'
+    );
+    if (
+      !window.confirm(
+        `Last chance: permanently delete ${scope}${alsoCaches ? ', email patterns, and discovery logs' : ''}.\n\nThis cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setClearing(true);
+    setError('');
+    setInfoMessage('');
+    try {
+      const res = await api.contacts.clearAll({
+        confirm: true,
+        domain: dom || undefined,
+        clear_pattern_cache: alsoCaches,
+        clear_discovery_logs: alsoCaches,
+      });
+      setContacts([]);
+      setDiscoveryLog([]);
+      setScrapeRunId(null);
+      if (alsoCaches) setEmailPatterns([]);
+      setInfoMessage(
+        `Cleared ${res.contacts_deleted} contact(s)` +
+          (alsoCaches
+            ? `, ${res.patterns_deleted} email pattern(s), ${res.discovery_logs_deleted} discovery log row(s).`
+            : '.')
+      );
+    } catch (e: any) {
+      setError(e.message || 'Clear failed');
+    } finally {
+      setClearing(false);
+    }
+  };
 
   const disarmScrapeCancel = () => {
     setScrapeCancelArmed(false);
@@ -257,6 +441,8 @@ export default function Scraper() {
     setError('');
     setInfoMessage('');
     setContacts([]);
+    setDiscoveryLog([]);
+    setScrapeRunId(null);
     scrapeStartedAtRef.current = Date.now();
     setScrapeProgress({
       phase: 'init',
@@ -288,18 +474,20 @@ export default function Scraper() {
       );
       if (res.cancelled) {
         setContacts(res.contacts || []);
-        if ((res.count || 0) > 0) {
-          setInfoMessage(`Scrape stopped. ${res.count} contact(s) were saved before cancel.${res.duplicates_skipped ? ` ${res.duplicates_skipped} duplicate(s) skipped.` : ''}`);
+        setDiscoveryLog(res.discovery_log || []);
+        setScrapeRunId(res.scrape_run_id || null);
+        if ((res.contacts?.length || 0) > 0) {
+          setInfoMessage(formatScrapeSummary(res));
         } else {
           setInfoMessage('Scrape stopped. Any in-flight Apify run was aborted when possible.');
         }
         return;
       }
-      setContacts(res.contacts);
-      if (res.duplicates_skipped && res.duplicates_skipped > 0) {
-        setInfoMessage(`Found ${res.count} new contacts. ${res.duplicates_skipped} duplicate(s) skipped (existing email).`);
-      } else if (res.count > 0) {
-        setInfoMessage(`Scraped ${res.count} contact(s).`);
+      setContacts(res.contacts || []);
+      setDiscoveryLog(res.discovery_log || []);
+      setScrapeRunId(res.scrape_run_id || null);
+      if ((res.found_total || res.count || 0) > 0) {
+        setInfoMessage(formatScrapeSummary(res));
       } else {
         setInfoMessage('');
       }
@@ -361,44 +549,26 @@ export default function Scraper() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 pb-12">
-      <h1 className="text-2xl font-semibold text-deep-navy mb-4 pt-2">Contact Scraper</h1>
-      <p className="text-sm text-slate-600 mb-6 max-w-3xl leading-relaxed">
-        Saves <strong>employee-style</strong> emails only (no info@, sales@, etc.). Website crawl skips generic contact pages for raw harvesting; use a <strong>LinkedIn company URL</strong> with an Apify token for reliable people + titles, then we infer addresses from your company domain when needed. Tavily “Find contact” remains a free-form web hint, not verified email.
-      </p>
+      <PageHeader
+        title="Find"
+        subtitle="Crawl, LinkedIn, Tavily. AI review uses the model in the header."
+        imageSrc="/yucg-bg/texture-panel.jpg"
+      />
 
-      {/* Segmented control (pill box) */}
-      <div className="inline-flex p-1 rounded-xl bg-white border border-[var(--border)] mb-8 shadow-sm">
-        <button
-          onClick={() => { setActiveTab('scrape'); setError(''); setFindResult(null); }}
-          className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-            activeTab === 'scrape'
-              ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-              : 'text-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:text-[var(--btn-primary-text)]'
-          }`}
-        >
-          Scrape Website
-        </button>
-        <button
-          onClick={() => { setActiveTab('find'); setError(''); }}
-          className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-            activeTab === 'find'
-              ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-              : 'text-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:text-[var(--btn-primary-text)]'
-          }`}
-        >
-          Find Contact
-        </button>
-        <button
-          onClick={() => { setActiveTab('import'); setError(''); setFindResult(null); }}
-          className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-            activeTab === 'import'
-              ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-              : 'text-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:text-[var(--btn-primary-text)]'
-          }`}
-        >
-          Import Spreadsheet
-        </button>
-      </div>
+      <AppSubnav
+        className="mb-8"
+        items={[
+          { id: 'scrape', label: 'Scrape Website' },
+          { id: 'find', label: 'Find Contact' },
+          { id: 'import', label: 'Import Spreadsheet' },
+        ]}
+        active={activeTab}
+        onChange={(id) => {
+          setActiveTab(id as ScraperTab);
+          setError('');
+          if (id !== 'find') setFindResult(null);
+        }}
+      />
 
       {activeTab === 'scrape' && (
         <div className="space-y-6">
@@ -447,6 +617,55 @@ export default function Scraper() {
                   />
                 </div>
               </div>
+              {(domain.trim() || patternsLoading || emailPatterns.length > 0) && (
+                <div className="rounded-xl border border-pale-sky/80 bg-pale-sky/20 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <p className="text-[13px] font-medium text-deep-navy">
+                      Email layout cache {domain.trim() ? `· ${domain.trim()}` : ''}
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={handleReconcileIdentity}
+                        disabled={reconciling}
+                        className="text-[12px] font-semibold text-steel-blue hover:text-deep-navy disabled:opacity-50"
+                      >
+                        {reconciling ? 'Reconciling…' : 'Fix identity mismatches'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePurgeJunk}
+                        disabled={purging}
+                        className="text-[12px] font-semibold text-red-700 hover:text-red-900 disabled:opacity-50"
+                      >
+                        {purging ? 'Purging…' : 'Remove nav junk contacts'}
+                      </button>
+                    </div>
+                  </div>
+                  {patternsLoading ? (
+                    <p className="text-[12px] text-slate-500">Loading patterns…</p>
+                  ) : emailPatterns.length === 0 ? (
+                    <p className="text-[12px] text-slate-500">
+                      No learned patterns yet for this domain. Verified scrapes will populate{' '}
+                      <span className="font-mono">first.last</span>, <span className="font-mono">flast</span>, etc.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1.5">
+                      {emailPatterns.map((p) => (
+                        <li key={p.pattern_key} className="text-[12px] text-slate-700 flex flex-wrap gap-x-2 gap-y-0.5">
+                          <span className="font-mono font-medium text-deep-navy">{p.pattern_template}</span>
+                          <span className="text-slate-500">
+                            {Math.round((p.confidence || 0) * 100)}% · {p.verified_samples} verified · {p.sample_count} samples
+                          </span>
+                          {p.sources && p.sources.length > 0 && (
+                            <span className="text-slate-400">({p.sources.join(', ')})</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
             <div className="p-4 pt-0">
               <div className="flex gap-2 w-full items-stretch">
@@ -483,6 +702,19 @@ export default function Scraper() {
                   <strong className="text-slate-600">Stop scrape</strong> slides out next to Start. Tap it once to arm, again—then confirm—to disconnect and abort Apify.
                 </p>
               )}
+              <div className="mt-4 pt-4 border-t border-pale-sky/80 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[12px] text-slate-600">
+                  Reset saved contacts{domain.trim() ? ` for ${domain.trim()}` : ''} before a fresh scrape.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleClearContactsCache}
+                  disabled={clearing || loading}
+                  className="text-[12px] font-semibold text-red-800 hover:text-red-950 disabled:opacity-50 px-3 py-1.5 rounded-lg border border-red-200 bg-red-50/80"
+                >
+                  {clearing ? 'Clearing…' : 'Clear contacts & cache…'}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -603,8 +835,17 @@ export default function Scraper() {
 
       {contacts.length > 0 && (
         <div className="mt-8 bg-white rounded-2xl overflow-hidden shadow-sm border border-pale-sky">
-          <div className="px-5 py-4 border-b border-pale-sky">
+          <div className="px-5 py-4 border-b border-pale-sky flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-[15px] font-semibold text-deep-navy">Discovered ({contacts.length})</h2>
+            {discoveryLog.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowDiscoveryLog((v) => !v)}
+                className="text-[12px] font-semibold text-steel-blue hover:text-deep-navy"
+              >
+                {showDiscoveryLog ? 'Hide' : 'Show'} AI audit log ({discoveryLog.length})
+              </button>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -613,24 +854,60 @@ export default function Scraper() {
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3">Title</th>
-                  <th className="px-4 py-3">Company</th>
-                  <th className="px-4 py-3">LinkedIn</th>
+                  <th className="px-4 py-3">Source</th>
+                  <th className="px-4 py-3">AI</th>
+                  <th className="px-4 py-3">DB</th>
+                  <th className="px-4 py-3">Inbox</th>
                   <th className="px-4 py-3">Confidence</th>
                 </tr>
               </thead>
               <tbody>
                 {contacts.map((c) => (
-                  <tr key={c.id} className="border-t border-pale-sky/50 hover:bg-pale-sky/20">
+                  <tr
+                    key={c.id ?? c.email}
+                    className={`border-t border-pale-sky/50 hover:bg-pale-sky/20 ${c.ai_rejected ? 'opacity-70' : ''}`}
+                  >
                     <td className="px-4 py-3 text-[14px] text-deep-navy">{c.name}</td>
                     <td className="px-4 py-3 text-[14px] text-steel-blue">{c.email}</td>
-                    <td className="px-4 py-3 text-[14px] text-deep-navy">{c.title || '—'}</td>
-                    <td className="px-4 py-3 text-[14px] text-deep-navy">{c.company || '—'}</td>
-                    <td className="px-4 py-3">
-                      {c.linkedin_url ? (
-                        <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-[14px] text-steel-blue hover:text-deep-navy">Profile</a>
-                      ) : (
-                        <span className="text-slate-400">—</span>
+                    <td className="px-4 py-3 text-[14px] text-deep-navy max-w-[12rem] truncate" title={c.title}>{c.title || '—'}</td>
+                    <td className="px-4 py-3 text-[12px] text-slate-600 max-w-[10rem]">
+                      <div>{c.contact_source || c.scrape_source || '—'}</div>
+                      {(c.source_url || c.scrape_source_url) && (
+                        <a
+                          href={c.source_url || c.scrape_source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-steel-blue hover:text-deep-navy truncate block max-w-[10rem]"
+                          title={c.source_url || c.scrape_source_url}
+                        >
+                          page
+                        </a>
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${aiVerdictClass(c.ai_verdict)}`}
+                        title={[c.ai_reason, c.ai_source_note].filter(Boolean).join(' · ')}
+                      >
+                        {aiVerdictLabel(c.ai_verdict)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {c.ai_rejected ? (
+                        <span className="text-[11px] text-red-700 font-medium">Not saved</span>
+                      ) : c.already_exists ? (
+                        <span className="text-[11px] text-slate-600 font-medium">In database</span>
+                      ) : (
+                        <span className="text-[11px] text-emerald-700 font-medium">New</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${inboxStatusClass(c.email_verification_status)}`}
+                        title={c.email_verification_status || 'unknown'}
+                      >
+                        {inboxStatusLabel(c.email_verification_status)}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <span
@@ -650,6 +927,36 @@ export default function Scraper() {
               </tbody>
             </table>
           </div>
+          {showDiscoveryLog && discoveryLog.length > 0 && (
+            <div className="border-t border-pale-sky px-5 py-4 bg-pale-sky/15 max-h-80 overflow-y-auto">
+              <p className="text-[12px] font-semibold text-deep-navy mb-2">
+                Ollama audit log {scrapeRunId ? `· run ${scrapeRunId.slice(0, 8)}…` : ''}
+              </p>
+              <ul className="space-y-2">
+                {discoveryLog.map((e, i) => (
+                  <li key={`${e.email}-${i}`} className="text-[12px] text-slate-700 border border-pale-sky/60 rounded-lg px-3 py-2 bg-white/80">
+                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 font-medium text-deep-navy">
+                      <span>{e.name || '—'}</span>
+                      <span className="text-steel-blue">{e.email}</span>
+                      <span className={`px-1.5 rounded ${aiVerdictClass(e.ai_verdict)}`}>{aiVerdictLabel(e.ai_verdict)}</span>
+                    </div>
+                    {e.ai_reason && <p className="mt-1 text-slate-600">{e.ai_reason}</p>}
+                    {e.ai_source_note && <p className="text-slate-500">{e.ai_source_note}</p>}
+                    {e.source_url && (
+                      <a href={e.source_url} target="_blank" rel="noopener noreferrer" className="text-steel-blue hover:underline block truncate mt-0.5">
+                        {e.source_url}
+                      </a>
+                    )}
+                    {e.discovery_context && (
+                      <p className="text-slate-400 mt-1 italic truncate" title={e.discovery_context}>
+                        “{e.discovery_context}”
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>

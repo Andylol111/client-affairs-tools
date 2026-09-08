@@ -8,3 +8,18 @@ clientreach.db
 backend/attachments/
 .DS_Store
 .rag_index/
+data/.cache/
+data/.yucg_cache/
+data/releases/
+data/YUCG_Outreach_Pack.xlsx
+infra/cdk.out/
+infra/node_modules/
+infra/dist/
+
+# Planning / agent scratch (product docs stay: infra/README.md, data/README.md)
+docs/plans/
+docs/superpowers/
+**/*.plan.md
+.cursor/plans/
+**/*.canvas.tsx
+amplify.yml
