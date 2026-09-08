@@ -185,7 +185,8 @@ export class YucgOutreachStack extends cdk.Stack {
         origin: origins.VpcOrigin.withEc2Instance(box, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           httpPort: 80,
-          readTimeout: cdk.Duration.seconds(120),
+          // New-account CloudFront quota is 60s; 120/180 fail deploy.
+          readTimeout: cdk.Duration.seconds(60),
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
