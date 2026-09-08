@@ -20,19 +20,43 @@ if _raw_jwt in _WEAK_JWT_SECRETS:
 JWT_SECRET = _raw_jwt
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24 * 7  # 7 days
+COOKIE_NAME = "yucg_session"
+PENDING_2FA_COOKIE = "yucg_2fa_pending"
 
 
-def create_token(user_id: int, email: str, name: str | None = None, picture: str | None = None, role: str = "standard") -> str:
+def session_cookie_kwargs() -> dict:
+    return {
+        "key": COOKIE_NAME,
+        "httponly": True,
+        "samesite": "lax",
+        "secure": (os.getenv("FRONTEND_URL") or "").startswith("https"),
+        "max_age": JWT_EXPIRY_HOURS * 3600,
+        "path": "/",
+    }
+
+
+def create_token(
+    user_id: int,
+    email: str,
+    name: str | None = None,
+    picture: str | None = None,
+    role: str = "standard",
+    extra: dict | None = None,
+    expiry_hours: float | None = None,
+) -> str:
     now = datetime.utcnow()
+    hours = JWT_EXPIRY_HOURS if expiry_hours is None else expiry_hours
     payload = {
         "sub": str(user_id),
         "email": email,
         "name": name,
         "picture": picture,
         "role": role,
-        "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
+        "exp": now + timedelta(hours=hours),
         "iat": now,
     }
+    if extra:
+        payload.update(extra)
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 

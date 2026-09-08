@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "yucg-prospect-list/v1",
+  "title": "YUCG Prospect List",
+  "description": "Company-level outreach targets for the YUCG outreach coordinator. Source of truth: data/YUCG_Prospect_List.xlsx",
+  "type": "object",
+  "properties": {
+    "source_file": {
+      "type": "string",
+      "const": "data/YUCG_Prospect_List.xlsx"
+    },
+    "sheet": {
+      "type": "string",
+      "const": "YUCG Prospects",
+      "description": "Primary data worksheet (active sheet in the canonical file)"
+    },
+    "header_row": {
+      "type": "integer",
+      "const": 1
+    },
+    "row_count": {
+      "type": "integer",
+      "description": "Data rows excluding header",
+      "minimum": 1,
+      "const": 620
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["header", "field", "type"],
+        "properties": {
+          "header": {
+            "type": "string",
+            "description": "Exact column header in the spreadsheet"
+          },
+          "field": {
+            "type": "string",
+            "description": "SQLite column on yucg_prospect_targets (or extra_json key for extensions)"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["string", "text", "integer", "number", "boolean", "date"]
+          },
+          "required": {
+            "type": "boolean",
+            "default": false
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "columns": [
+    {
+      "header": "Company",
+      "field": "company",
+      "type": "string",
+      "required": true,
+      "description": "Target organization name; unique key for sync upserts"
+    },
+    {
+      "header": "Sector",
+      "field": "sector",
+      "type": "string",
+      "description": "Industry or segment label (e.g. Regional Aircraft OEM)"
+    },
+    {
+      "header": "Why Attractive Prospect for YUCG",
+      "field": "why_attractive",
+      "type": "text",
+      "description": "Rationale for YUCG fit, proof points, and student project angles"
+    },
+    {
+      "header": "Suggested Engagement Theme",
+      "field": "suggested_engagement_theme",
+      "type": "text",
+      "description": "Recommended outreach narrative or project theme"
+    },
+    {
+      "header": "Yale / YUCG Hook",
+      "field": "yale_yucg_hook",
+      "type": "text",
+      "description": "Yale-specific connection or YUCG credential to lead with"
+    },
+    {
+      "header": "Outreach Priority",
+      "field": "outreach_priority",
+      "type": "integer",
+      "description": "1 (highest) through 5 (nurture); derived from Incentive Score"
+    },
+    {
+      "header": "Contact Type",
+      "field": "contact_type",
+      "type": "string",
+      "description": "Outreach persona bucket (e.g. VP Business Development, Studio Strategy)"
+    },
+    {
+      "header": "Target Role Title",
+      "field": "target_role_title",
+      "type": "string",
+      "description": "Specific job title to hunt for at the company"
+    },
+    {
+      "header": "Incentive Score",
+      "field": "incentive_score",
+      "type": "integer",
+      "description": "0-100 outreach priority score"
+    },
+    {
+      "header": "Score Rationale",
+      "field": "score_rationale",
+      "type": "text",
+      "description": "Brief rationale tied to Why Attractive and scoring weights"
+    },
+    {
+      "header": "Verification Source URL",
+      "field": "verification_source_url",
+      "type": "string",
+      "description": "Public page or LinkedIn/SEC search template for contact verification"
+    },
+    {
+      "header": "Recommended First Message Angle",
+      "field": "first_message_angle",
+      "type": "text",
+      "description": "One-sentence opening angle for first outreach"
+    },
+    {
+      "header": "Contact Discovery Hint",
+      "field": "discovery_hint",
+      "type": "text",
+      "description": "Where to find the target (conferences, alumni, press, etc.)"
+    }
+  ],
+  "database": {
+    "table": "yucg_prospect_targets",
+    "unique_key": "company",
+    "extra_columns_policy": "Unknown spreadsheet columns are stored in extra_json during sync until schema and migrations add dedicated fields"
+  },
+  "related_tables": {
+    "yucgoutreach_discovery_runs": "Per-company automated contact discovery jobs (user-triggered)",
+    "yucgoutreach_prospects": "Individual people discovered during a run (person-level, not spreadsheet seed)",
+    "contacts": "CRM contacts; populated via import from discovery or manual entry"
+  }
+}

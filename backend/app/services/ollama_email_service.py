@@ -1,11 +1,7 @@
 """
-AI Email Generation Engine - Powered by Ollama
-Generates unique, personalized emails per contact (not template fill-in)
+AI email generation. Bedrock Anthropic (Opus → Haiku) or local Ollama.
 """
-from ollama import chat
 from typing import Optional
-import json
-import re
 
 
 TONE_INSTRUCTIONS = {
@@ -41,10 +37,11 @@ def generate_email(
     angle: str = "pain_point",
     custom_instructions: Optional[str] = None,
     value_proposition: Optional[str] = None,
-    model: str = "llama3.2",
+    model: Optional[str] = None,
 ) -> tuple[str, str]:
     """
-    Generate a unique, personalized email for a contact using Ollama.
+    Generate a unique, personalized email. Bedrock Anthropic when the model id is Claude;
+    Ollama on the laptop otherwise.
     Returns (subject, body) tuple.
     """
     tone_inst = TONE_INSTRUCTIONS.get(tone, TONE_INSTRUCTIONS["professional"])
@@ -75,25 +72,14 @@ Respond with ONLY valid JSON in this exact format (no markdown, no explanation):
 {{"subject": "Your compelling subject line here", "body": "Full email body here. Use \\n for line breaks."}}"""
 
     try:
-        response = chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        content = (response.message.content or "").strip()
+        from app.services.llm import complete_json
 
-        # Extract JSON from response (handle markdown code blocks if present)
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            data = json.loads(json_match.group())
+        data = complete_json(prompt, model_id=model)
+        if data:
             subject = data.get("subject", "Quick question")
-            body = data.get("body", "").replace("\\n", "\n")
+            body = (data.get("body") or "").replace("\\n", "\n")
             return subject, body
-        else:
-            # Fallback: treat entire response as body
-            lines = content.split("\n")
-            subject = lines[0].replace("Subject:", "").strip() if lines else "Quick question"
-            body = "\n".join(lines[1:]) if len(lines) > 1 else content
-            return subject, body
+        raise RuntimeError("Model returned no JSON")
 
     except Exception as e:
         # Fallback to a simple template if Ollama fails

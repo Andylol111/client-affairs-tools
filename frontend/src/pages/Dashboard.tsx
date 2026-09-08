@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import PageHeader from '../components/PageHeader';
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -11,10 +12,37 @@ const DEFAULT_DATA = {
   reply_rate: 0,
 };
 
+const WEEK = [
+  {
+    n: '01',
+    title: 'Cut the slate',
+    body: 'Pick this week’s companies from the prospect list.',
+    to: '/yucgoutreach',
+  },
+  {
+    n: '02',
+    title: 'Comb addresses',
+    body: 'Mint inferred inboxes, Keep or Drop. Never a verified-inbox badge.',
+    to: '/yucgoutreach',
+  },
+  {
+    n: '03',
+    title: 'Write',
+    body: 'Draft in Studio against kept people. Pick Opus → Haiku in the header.',
+    to: '/studio',
+  },
+  {
+    n: '04',
+    title: 'Release',
+    body: 'Pace Gmail. Pause lives in Send. Bounces are the ground truth.',
+    to: '/campaigns',
+  },
+];
+
 export default function Dashboard() {
-  const [data, setData] = useState<any>(DEFAULT_DATA);
+  const [data, setData] = useState<typeof DEFAULT_DATA>(DEFAULT_DATA);
   const [insights, setInsights] = useState<string[]>([]);
-  const [dueFollowUps, setDueFollowUps] = useState<number>(0);
+  const [dueFollowUps, setDueFollowUps] = useState(0);
   const [apiError, setApiError] = useState(false);
 
   useEffect(() => {
@@ -25,16 +53,10 @@ export default function Dashboard() {
         setData(DEFAULT_DATA);
         setApiError(true);
       });
-  }, []);
-
-  useEffect(() => {
     api.analytics
       .insights()
       .then((i) => setInsights(i?.insights || []))
       .catch(() => setInsights([]));
-  }, []);
-
-  useEffect(() => {
     api.analytics
       .dueFollowUps()
       .then((d) => setDueFollowUps(d?.count ?? 0))
@@ -42,69 +64,54 @@ export default function Dashboard() {
   }, []);
 
   const cards = [
-    { label: 'Contacts Discovered Today', value: data.contacts_discovered_today ?? 0, link: '/scraper', color: 'cyan' },
-    { label: 'Emails in Queue', value: data.emails_in_queue ?? 0, link: '/studio', color: 'teal' },
-    { label: 'Active Campaigns', value: data.active_campaigns ?? 0, link: '/campaigns', color: 'cyan' },
-    { label: 'Due Follow-ups', value: dueFollowUps, link: '/campaigns', color: 'amber' },
-    { label: 'Total Sent', value: data.total_sent ?? 0, color: 'slate' },
-    { label: 'Open Rate', value: `${data.open_rate ?? 0}%`, color: 'emerald' },
-    { label: 'Reply Rate', value: `${data.reply_rate ?? 0}%`, color: 'emerald' },
+    { label: 'Found today', value: data.contacts_discovered_today ?? 0, to: '/scraper' },
+    { label: 'In queue', value: data.emails_in_queue ?? 0, to: '/studio' },
+    { label: 'Active sends', value: data.active_campaigns ?? 0, to: '/campaigns' },
+    { label: 'Follow-ups due', value: dueFollowUps, to: '/campaigns' },
+    { label: 'Sent', value: data.total_sent ?? 0, to: '/analytics' },
+    { label: 'Reply rate', value: `${data.reply_rate ?? 0}%`, to: '/analytics' },
   ];
 
   return (
     <div className="max-w-[1920px] mx-auto">
-      <div className="flex items-center gap-6 flex-wrap mb-6">
-        <h1 className="text-2xl font-bold text-deep-navy">Dashboard</h1>
-        {apiError && (
-          <p className="text-amber-600 text-sm">Backend not responding. Run: <code className="bg-slate-100 px-1 rounded text-xs">./start-all.sh</code></p>
-        )}
-      </div>
+      <PageHeader
+        title="Client affairs"
+        subtitle="One week: slate, comb, write, release. Yale undergraduate consulting — not a generic CRM."
+        imageSrc="/yucg-bg/hero-campus.jpg"
+      />
+      {apiError && (
+        <p className="text-amber-800 text-sm mb-4">
+          API not responding. From the project folder run <code className="px-1 border border-pale-sky">./start-all.sh</code>
+        </p>
+      )}
 
-      {/* Usage Guide */}
-      <div className="surface-card rounded-xl p-6 mb-8 shadow-sm">
-        <h2 className="text-lg font-semibold text-deep-navy mb-4">How to Use YUCG Outreach</h2>
-        <ol className="space-y-4 text-slate-600 list-decimal list-inside">
-          <li>
-            <strong className="text-slate-800">Get contacts</strong> — Go to <Link to="/scraper" className="text-steel-blue hover:text-deep-navy hover:underline">Scraper</Link> and either:
-            <ul className="ml-6 mt-2 space-y-1 list-disc text-sm">
-              <li>Import a CSV or Excel file with columns: name, email, title, company</li>
-              <li>Enter a company name, domain (e.g. acme.com), or LinkedIn company URL and click Scrape</li>
-            </ul>
-          </li>
-          <li>
-            <strong className="text-slate-800">Generate emails</strong> — Go to <Link to="/studio" className="text-steel-blue hover:text-deep-navy hover:underline">Email Studio</Link>, select a contact, choose tone/length/angle, and click Generate Email. Requires Ollama running locally (<code className="bg-slate-100 px-1 rounded text-sm">ollama run llama3.2</code>).
-          </li>
-          <li>
-            <strong className="text-slate-800">Create a campaign</strong> — Go to <Link to="/campaigns" className="text-steel-blue hover:text-deep-navy hover:underline">Campaigns</Link>, create a campaign, add contacts (with optional &quot;Generate &amp; Add&quot; to create emails on the fly), then send.
-          </li>
-          <li>
-            <strong className="text-slate-800">Track results</strong> — Use <Link to="/analytics" className="text-steel-blue hover:text-deep-navy hover:underline">Analytics</Link> to view open rates, reply rates, and AI insights.
-          </li>
-        </ol>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
-        {cards.map((c) => (
-          <Link
-            key={c.label}
-            to={c.link || '#'}
-            className={`block p-4 rounded-xl surface-card shadow-sm hover:border-steel-blue/50 hover:shadow transition-colors ${
-              !c.link ? 'cursor-default' : ''
-            }`}
-          >
-            <div className="text-slate-500 text-xs mb-0.5 truncate">{c.label}</div>
-            <div className="text-xl font-bold text-deep-navy">{c.value}</div>
+      <div className="app-week-steps mb-8">
+        {WEEK.map((step) => (
+          <Link key={step.n} to={step.to} className="app-week-step">
+            <div className="app-week-step__n">Step {step.n}</div>
+            <h2 className="app-week-step__title">{step.title}</h2>
+            <p className="app-week-step__body">{step.body}</p>
           </Link>
         ))}
       </div>
-      <div className="surface-card rounded-xl p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-deep-navy mb-4">AI Insights</h2>
+
+      <div className="app-stat-grid mb-8">
+        {cards.map((c) => (
+          <Link key={c.label} to={c.to} className="app-stat surface-card">
+            <div className="app-stat__label">{c.label}</div>
+            <div className="app-stat__value">{c.value}</div>
+          </Link>
+        ))}
+      </div>
+
+      <div className="surface-card p-6">
+        <h2 className="text-lg font-semibold text-deep-navy mb-3">Notes from the numbers</h2>
         <ul className="space-y-2">
           {insights.length === 0 ? (
-            <li className="text-slate-500 text-sm">Loading insights...</li>
+            <li className="text-sm text-deep-navy/70">No insights yet.</li>
           ) : (
             insights.map((s, i) => (
-              <li key={i} className="text-slate-600 flex items-start gap-2">
+              <li key={i} className="text-deep-navy flex items-start gap-2">
                 <span className="text-steel-blue">•</span>
                 {s}
               </li>

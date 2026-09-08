@@ -20,10 +20,12 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth_deps import get_current_user
+from app.services.llm import list_models
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.database import init_db
-from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach, yucg_prospects
+from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach, yucg_prospects, releases
+from app.routers.campaigns import drain_releasing_campaigns
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
 from app.services.gmail_reply_sync import sync_replies_all_senders
@@ -64,6 +66,13 @@ def _run_gmail_reply_sync():
         )
 
 
+def _run_campaign_drain():
+    if _loop_for_jobs:
+        _loop_for_jobs.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(drain_releasing_campaigns(), loop=_loop_for_jobs)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _loop_for_jobs
@@ -89,6 +98,12 @@ async def lifespan(app: FastAPI):
         "cron",
         minute="*/30",
         id="gmail_reply_sync",
+    )
+    scheduler.add_job(
+        _run_campaign_drain,
+        "cron",
+        minute="*/5",
+        id="campaign_drain",
     )
     scheduler.start()
     yield
@@ -126,8 +141,28 @@ app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"]
 app.include_router(operations.router, prefix="/api/admin/operations", tags=["operations"])
 app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgoutreach"])
 app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
+app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases"], dependencies=_require_user)
 
 
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "service": "ClientReach AI"}
+
+
+@app.get("/api/ai/models")
+async def ai_models(_user: dict = Depends(get_current_user)):
+    return list_models()
+
+
+def _mount_spa() -> None:
+    """Hosted box: same process as the API. Localhost still uses Vite on :5173."""
+    raw = (os.getenv("FRONTEND_DIST") or "").strip()
+    root = Path(raw) if raw else _backend_dir / "frontend_dist"
+    if not root.is_dir():
+        return
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(root), html=True), name="spa")
+
+
+_mount_spa()

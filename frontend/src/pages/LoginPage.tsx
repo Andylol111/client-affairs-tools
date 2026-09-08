@@ -1,46 +1,38 @@
 /**
  * Login page - shown when user is NOT authenticated.
- * Handles both the sign-in form and OAuth callback (?token=xxx).
  */
-import { useEffect } from 'react';
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { getBackendOriginForOAuth } from '../api';
+import { api, getBackendOriginForOAuth } from '../api';
 
 export default function LoginPage() {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get('token');
   const error = searchParams.get('error');
-
-  // OAuth callback: we have token in URL → store it and redirect to app root
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem('yucg_token', token);
-      localStorage.setItem('yucg_token_time', String(Date.now()));
-      const appRoot = import.meta.env.VITE_APP_URL || window.location.origin;
-      window.location.replace(appRoot.replace(/\/$/, '') + '/');
-      return;
-    }
-  }, [token]);
+  const need2fa = searchParams.get('need_2fa') === '1';
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [twoFaError, setTwoFaError] = useState<string | null>(null);
 
   const handleGoogleLogin = () => {
     window.location.href = `${getBackendOriginForOAuth()}/api/auth/google`;
   };
 
-  // Still processing OAuth callback (token in URL, about to redirect)
-  if (token) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)]">
-        <div className="text-center">
-          <div className="animate-spin w-10 h-10 border-2 border-deep-navy border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-slate-600">Signing you in...</p>
-        </div>
-      </div>
-    );
-  }
+  const submit2fa = async () => {
+    setBusy(true);
+    setTwoFaError(null);
+    try {
+      await api.auth.complete2fa(code.trim());
+      window.location.href = '/';
+    } catch (e) {
+      setTwoFaError(e instanceof Error ? e.message : 'Invalid code');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)] p-4">
-      <div className="surface-card rounded-2xl shadow-xl p-8 w-full max-w-md">
+    <div className="app-auth-shell">
+      <div className="surface-card p-6 sm:p-8 w-full max-w-md">
         <div className="flex justify-center mb-6">
           <img
             src="/yucg-logo.png"
@@ -80,9 +72,34 @@ GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback`}
           </div>
         )}
 
+        {need2fa && (
+          <div className="mb-6 space-y-3">
+            <p className="text-sm text-slate-700">Enter the 6-digit code from your authenticator app.</p>
+            {twoFaError && (
+              <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">{twoFaError}</div>
+            )}
+            <input
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="123456"
+              className="w-full px-3 py-2 rounded-lg border border-pale-sky text-center tracking-widest"
+            />
+            <button
+              type="button"
+              disabled={busy || code.trim().length < 6}
+              onClick={submit2fa}
+              className="w-full px-4 py-3 bg-deep-navy text-white font-bold uppercase tracking-wide text-sm disabled:opacity-50"
+            >
+              {busy ? 'Checking…' : 'Continue'}
+            </button>
+          </div>
+        )}
+
         <button
           onClick={handleGoogleLogin}
-          className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 font-medium text-slate-800 transition-colors"
+          className="w-full flex items-center justify-center gap-3 px-4 py-3 border-2 border-[var(--deep-navy)] bg-white hover:bg-pale-sky/30 font-bold uppercase tracking-wide text-sm text-deep-navy transition-colors"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -97,7 +114,7 @@ GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback`}
           Secure login via Google. Only @yale.edu accounts.
         </p>
 
-        <div className="mt-6 p-4 rounded-lg bg-slate-50 border border-slate-200">
+        <div className="mt-6 p-4 bg-slate-50 border-2 border-[var(--border)]">
           <h3 className="text-sm font-semibold text-slate-700 mb-2">Yale Duo verification</h3>
           <p className="text-xs text-slate-600 mb-2">
             @yale.edu accounts require Duo two-factor authentication. When you sign in, you may be prompted to verify via the Duo Mobile app, a phone call, or passcode.

@@ -5,11 +5,13 @@ import { api } from '../api';
 import type { CursorHeatmapResponse } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { AnimatedEventTypeChart, AnimatedResourceChart } from '../components/AnimatedOperationsCharts';
+import AppTabMenu from '../components/AppTabMenu';
 
 export default function Admin() {
   const { user } = useOutletContext<{ user: { id?: number; email: string; role?: string } }>();
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'audit' | 'apikeys' | '2fa' | 'operations'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'audit' | 'apikeys' | '2fa' | 'catalog' | 'operations'>('users');
+  const [catalog, setCatalog] = useState<{ bucket: string | null; objects: any[]; prefixes: { prefix: string; objects: any[] }[] } | null>(null);
   const [users, setUsers] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [projectForm, setProjectForm] = useState({ name: '', semester: '', description: '' });
@@ -55,6 +57,7 @@ export default function Admin() {
     if (activeTab === 'audit') api.admin.auditLog().then(setAuditLog).catch(() => setAuditLog([]));
     if (activeTab === 'apikeys') api.admin.apiKeys.list().then(setApiKeys).catch(() => setApiKeys([]));
     if (activeTab === '2fa') api.admin.twoFactor.status().then((s) => setTwoFactorStatus(s.status)).catch(() => setTwoFactorStatus('not_setup'));
+    if (activeTab === 'catalog') api.admin.catalog().then(setCatalog).catch(() => setCatalog({ bucket: null, objects: [], prefixes: [] }));
     if (activeTab === 'operations') {
       api.admin.operations.aggregates(opsDays).then(setOpsAggregates).catch(() => setOpsAggregates({ by_event_type: [], by_resource_type: [], days: 30 }));
       api.admin.operations.heatmap({ days: opsDays, group_by: opsGroupBy }).then(setOpsHeatmap).catch(() => setOpsHeatmap(null));
@@ -215,21 +218,20 @@ export default function Admin() {
         </button>
       </div>
 
-      <div className="flex gap-2 mb-6 border-b border-pale-sky">
-        {(['users', 'projects', 'audit', 'apikeys', '2fa', 'operations'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`px-4 py-2 rounded-t-lg font-medium capitalize ${
-              activeTab === tab
-                ? 'bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)]'
-                : 'bg-white border border-[var(--border)] text-slate-600 hover:bg-pale-sky/20 dark:bg-slate-700/40 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700/70'
-            }`}
-          >
-            {tab === '2fa' ? '2FA' : tab === 'operations' ? 'Operations' : tab}
-          </button>
-        ))}
-      </div>
+      <AppTabMenu
+        className="mb-6"
+        tabs={[
+          { id: 'users', label: 'Users' },
+          { id: 'projects', label: 'Projects' },
+          { id: 'audit', label: 'Audit' },
+          { id: 'apikeys', label: 'API Keys' },
+          { id: '2fa', label: '2FA' },
+          { id: 'catalog', label: 'Catalog' },
+          { id: 'operations', label: 'Operations' },
+        ]}
+        active={activeTab}
+        onChange={(id) => setActiveTab(id as typeof activeTab)}
+      />
 
       {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
 
@@ -561,7 +563,7 @@ export default function Admin() {
       {activeTab === '2fa' && (
         <div className="surface-card rounded-xl p-6">
           <h2 className="font-semibold text-deep-navy mb-4">Two-Factor Authentication</h2>
-          <p className="text-sm text-slate-600 mb-4">Add an extra layer of security for your admin account.</p>
+          <p className="text-sm text-slate-600 mb-4">When enabled, Google sign-in asks for this code before a session cookie is issued.</p>
           {twoFactorStatus === 'enabled' && (
             <p className="text-sm text-green-600 font-medium mb-4">✓ 2FA is enabled for your account.</p>
           )}
@@ -611,6 +613,38 @@ export default function Admin() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'catalog' && (
+        <div className="surface-card rounded-xl p-6 space-y-4">
+          <h2 className="font-semibold text-deep-navy">Object catalog</h2>
+          <p className="text-sm text-slate-600">
+            Bucket: {catalog?.bucket || 'not set (local files only)'}
+          </p>
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left bg-slate-50">
+                <th className="px-3 py-2">Kind</th>
+                <th className="px-3 py-2">Key</th>
+                <th className="px-3 py-2">Size</th>
+                <th className="px-3 py-2">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(catalog?.objects || []).map((o) => (
+                <tr key={o.id} className="border-t border-pale-sky/60">
+                  <td className="px-3 py-2">{o.kind}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{o.s3_key}</td>
+                  <td className="px-3 py-2 tabular-nums">{o.byte_size ?? '—'}</td>
+                  <td className="px-3 py-2">{o.source}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(catalog?.objects || []).length === 0 && (
+            <p className="text-sm text-slate-500">No stored_objects rows yet.</p>
+          )}
         </div>
       )}
 

@@ -9,14 +9,15 @@ import secrets
 
 logger = logging.getLogger(__name__)
 from urllib.parse import urlencode
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 import httpx
 from datetime import datetime, timedelta
 from app.database import get_db, row_to_dict
 from app.auth_deps import get_current_user, get_current_user_optional
-from app.jwt_utils import JWT_SECRET, create_token
+from app.jwt_utils import JWT_SECRET, PENDING_2FA_COOKIE, create_token, decode_token, session_cookie_kwargs
+from app.token_crypto import encrypt_token
 
 router = APIRouter()
 
@@ -148,11 +149,14 @@ async def _do_google_callback(code: str):
 
     from datetime import datetime as dt
     token_expires_at = (dt.utcnow().timestamp() + expires_in) if expires_in else None
+    stored_access = encrypt_token(access_token)
+    stored_refresh = encrypt_token(refresh_token)
 
+    totp_secret = None
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, email, name, picture, role, is_active FROM users WHERE google_id = ? OR email = ?",
+            "SELECT id, email, name, picture, role, is_active, totp_secret FROM users WHERE google_id = ? OR email = ?",
             (google_id, email),
         )
         row = await cursor.fetchone()
@@ -165,20 +169,22 @@ async def _do_google_callback(code: str):
             if refresh_token:
                 await db.execute(
                     """UPDATE users SET name = ?, picture = ?, google_id = ?, access_token = ?, refresh_token = ?, token_expires_at = ? WHERE id = ?""",
-                    (name, picture, google_id, access_token, refresh_token, token_expires_at, user_id),
+                    (name, picture, google_id, stored_access, stored_refresh, token_expires_at, user_id),
                 )
             else:
                 await db.execute(
                     "UPDATE users SET name = ?, picture = ?, google_id = ?, access_token = ?, token_expires_at = ? WHERE id = ?",
-                    (name, picture, google_id, access_token, token_expires_at, user_id),
+                    (name, picture, google_id, stored_access, token_expires_at, user_id),
                 )
         else:
             cursor = await db.execute(
                 """INSERT INTO users (email, name, picture, google_id, access_token, refresh_token, token_expires_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, 'standard')""",
-                (email, name, picture, google_id, access_token, refresh_token, token_expires_at),
+                (email, name, picture, google_id, stored_access, stored_refresh, token_expires_at),
             )
             user_id = cursor.lastrowid
             role = "standard"
+            row = None
+        totp_secret = (row or {}).get("totp_secret")
         await db.execute(
             "INSERT INTO login_log (user_id, email, name) VALUES (?, ?, ?)",
             (user_id, email, name),
@@ -187,8 +193,24 @@ async def _do_google_callback(code: str):
     finally:
         await db.close()
 
+    if totp_secret:
+        pending = create_token(user_id, email, name, picture, role, extra={"2fa": "pending"}, expiry_hours=0.25)
+        resp = RedirectResponse(url=f"{FRONTEND_URL}/login?need_2fa=1")
+        resp.set_cookie(
+            PENDING_2FA_COOKIE,
+            pending,
+            httponly=True,
+            samesite="lax",
+            secure=(FRONTEND_URL.startswith("https")),
+            max_age=900,
+            path="/",
+        )
+        return resp
     token = create_token(user_id, email, name, picture, role)
-    return RedirectResponse(url=f"{FRONTEND_URL}/login?token={token}")
+    resp = RedirectResponse(url=f"{FRONTEND_URL}/")
+    ck = session_cookie_kwargs()
+    resp.set_cookie(ck.pop("key"), token, **ck)
+    return resp
 
 
 @router.get("/me")
@@ -208,10 +230,47 @@ async def get_me(user: dict | None = Depends(get_current_user_optional)):
     }
 
 
+class TwoFactorLogin(BaseModel):
+    code: str
+
+
+@router.post("/2fa/login")
+async def complete_2fa_login(payload: TwoFactorLogin, request: Request):
+    import pyotp
+    from fastapi.responses import JSONResponse
+
+    pending = request.cookies.get(PENDING_2FA_COOKIE)
+    decoded = decode_token(pending) if pending else None
+    if not decoded or decoded.get("2fa") != "pending" or not decoded.get("sub"):
+        raise HTTPException(401, "2FA session expired. Sign in again.")
+    user_id = int(decoded["sub"])
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT totp_secret, email, name, picture, role FROM users WHERE id = ?", (user_id,))
+        row = row_to_dict(await cur.fetchone())
+    finally:
+        await db.close()
+    if not row or not row.get("totp_secret"):
+        raise HTTPException(400, "2FA is not enabled")
+    if not pyotp.TOTP(row["totp_secret"]).verify(payload.code.strip(), valid_window=1):
+        raise HTTPException(400, "Invalid code")
+    token = create_token(user_id, row["email"], row.get("name"), row.get("picture"), row.get("role") or "standard")
+    resp = JSONResponse({"ok": True})
+    ck = session_cookie_kwargs()
+    resp.set_cookie(ck.pop("key"), token, **ck)
+    resp.delete_cookie(PENDING_2FA_COOKIE, path="/")
+    return resp
+
+
 @router.post("/logout")
 async def logout():
-    """Client-side logout (clear token). No server action needed."""
-    return {"ok": True}
+    from fastapi.responses import JSONResponse
+    from app.jwt_utils import COOKIE_NAME
+
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE_NAME, path="/")
+    resp.delete_cookie(PENDING_2FA_COOKIE, path="/")
+    return resp
 
 
 @router.get("/notification-preferences")
@@ -391,7 +450,7 @@ async def slack_callback(code: str | None = None, state: str | None = None, erro
         await db.execute(
             """INSERT OR REPLACE INTO user_slack_tokens (user_id, access_token, team_id, team_name, user_slack_id, scope, created_at)
                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-            (user_id, access_token, team_id, team_name, user_slack_id, scope),
+            (user_id, encrypt_token(access_token), team_id, team_name, user_slack_id, scope),
         )
         await db.commit()
     finally:

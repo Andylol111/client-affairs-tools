@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.database import get_db, row_to_dict
 from app.auth_deps import get_current_user, get_current_admin
@@ -43,6 +44,65 @@ async def list_attachments(user: dict = Depends(get_current_user)):
         )
         rows = await cursor.fetchall()
         return [row_to_dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+@router.get("/onedrive")
+async def list_onedrive(user: dict = Depends(get_current_user)):
+    from app.services.graph_onedrive import configured, list_folder
+
+    if not configured():
+        return {"configured": False, "items": []}
+    try:
+        return {"configured": True, "items": list_folder()}
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class OneDriveAttach(BaseModel):
+    item_id: str
+
+
+@router.post("/onedrive/attach")
+async def attach_onedrive(body: OneDriveAttach, user: dict = Depends(get_current_user)):
+    if not await _attachments_enabled():
+        raise HTTPException(400, "Attachments are disabled. Enable in Settings.")
+    from app.services.graph_onedrive import download_item
+
+    try:
+        content, filename, mime_type = download_item(body.item_id)
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"File type not allowed. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(400, f"File too large. Max {MAX_FILE_SIZE // (1024 * 1024)} MB.")
+    _ensure_dir()
+    storage_name = f"{uuid.uuid4().hex}{ext}"
+    storage_path = ATTACHMENTS_DIR / storage_name
+    storage_path.write_bytes(content)
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO email_attachments (filename, display_name, storage_path, file_size, mime_type)
+               VALUES (?, ?, ?, ?, ?)""",
+            (filename, filename, str(storage_path), len(content), mime_type),
+        )
+        await db.commit()
+        row_id = cursor.lastrowid
+        cursor = await db.execute(
+            "SELECT id, filename, display_name, file_size, mime_type, created_at FROM email_attachments WHERE id = ?",
+            (row_id,),
+        )
+        row = await cursor.fetchone()
+        await log_audit(user["id"], "attachment_onedrive", "attachment", str(row_id), filename)
+        return row_to_dict(row)
+    except Exception:
+        if storage_path.exists():
+            storage_path.unlink()
+        raise
     finally:
         await db.close()
 

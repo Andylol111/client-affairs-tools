@@ -17,11 +17,11 @@ if [ ! -d "venv" ]; then
   echo "   Creating Python virtual environment..."
   python3 -m venv venv
 fi
-echo "   Activating venv and installing dependencies..."
-source venv/bin/activate
-pip install -q -r requirements.txt
+echo "   Installing dependencies into venv..."
+# macOS has python3, not python. Don't rely on `activate` + PATH (this repo path has a space).
+./venv/bin/python -m pip install -q -r requirements.txt
 echo "   Starting backend on http://localhost:8000"
-python -m uvicorn main:app --reload --port 8000 &
+./venv/bin/python -m uvicorn main:app --reload --port 8000 &
 BACKEND_PID=$!
 cd ..
 
