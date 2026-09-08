@@ -7,7 +7,7 @@ alwaysApply: true
 
 This repo is **one website** members use over time, not a batch pipeline and not a laptop-hosted demo.
 
-- **Host:** CloudFront `AppUrl` = SPA + `/api` on one box (`docker/app.Dockerfile`), SQLite on retained EBS. **GitHub → CodeBuild** ships the image. CloudShell is on/off + secrets, not a laptop upload path. Do not split Studio onto static hosting.
+- **Host:** CloudFront `AppUrl` = SPA + `/api` on one box (`docker/app.Dockerfile`), SQLite on retained EBS. CloudFront is the only HTTP door (VPC origin; port 80 is not world-open). The box may have a public IP for egress (Bedrock, ECR, Google) only. **GitHub → CodeBuild** ships the image. CloudShell is on/off + secrets, not a laptop upload path. Do not split Studio onto static hosting.
 - **On / off:** Always-on template = instance running. Off = `ec2 stop-instances` (keep volume). Mail jobs only run when On. Do not use Lambda+API Gateway for the app (Find exceeds 29s). Do not use Aurora 24/7 as the default DB (more expensive than this box).
 - **Shared state:** one SQLite file is the club warehouse. Writes on AppUrl are visible to other members. Browser `localStorage` is not shared truth.
 - **On-demand:** Home, Week, Studio, Send, Pipeline, Find, Stats are doors. Any order. Studio generate must work against existing contacts (or upsert quick-compose). Do not require Find → comb → Studio → Gmail.

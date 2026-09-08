@@ -23,7 +23,8 @@ export interface YucgOutreachStackProps extends cdk.StackProps {
 
 /**
  * Club host: one t3.small (same process as localhost), SQLite on retained EBS,
- * CloudFront HTTPS, S3 catalog, Bedrock. No Fargate, ALB, RDS, or Amplify.
+ * CloudFront HTTPS via VPC origin (no world :80), S3 catalog, Bedrock.
+ * No Fargate, ALB, NAT, RDS, or Amplify.
  * 70 members / ~12 concurrent. Scale-up = bigger instance; two boxes needs RDS.
  */
 export class YucgOutreachStack extends cdk.Stack {
@@ -125,7 +126,14 @@ export class YucgOutreachStack extends cdk.Stack {
       description: "YUCG outreach box",
       allowAllOutbound: true,
     });
-    sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), "CloudFront origin + health");
+    const cfOriginFacing = ec2.PrefixList.fromLookup(this, "CfOriginFacing", {
+      prefixListName: "com.amazonaws.global.cloudfront.origin-facing",
+    });
+    sg.addIngressRule(
+      ec2.Peer.prefixList(cfOriginFacing.prefixListId),
+      ec2.Port.tcp(80),
+      "CloudFront origin-facing only",
+    );
 
     const userData = ec2.UserData.forLinux();
     userData.addCommands(
@@ -150,6 +158,7 @@ export class YucgOutreachStack extends cdk.Stack {
       securityGroup: sg,
       userData,
       userDataCausesReplacement: true,
+      // Egress only (ECR, Bedrock, Google). HTTP in is CloudFront VPC origin, not this IP.
       associatePublicIpAddress: true,
       blockDevices: [
         {
@@ -170,16 +179,10 @@ export class YucgOutreachStack extends cdk.Stack {
       device: "/dev/xvdf",
     });
 
-    const eip = new ec2.CfnEIP(this, "Eip", { domain: "vpc" });
-    new ec2.CfnEIPAssociation(this, "EipAssoc", {
-      allocationId: eip.attrAllocationId,
-      instanceId: box.instanceId,
-    });
-
     const cdn = new cloudfront.Distribution(this, "Cdn", {
       comment: `yucg-outreach-${envName}`,
       defaultBehavior: {
-        origin: new origins.HttpOrigin(eip.attrPublicIp, {
+        origin: origins.VpcOrigin.withEc2Instance(box, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           httpPort: 80,
           readTimeout: cdk.Duration.seconds(180),
@@ -276,7 +279,6 @@ export class YucgOutreachStack extends cdk.Stack {
     void credits;
 
     new cdk.CfnOutput(this, "InstanceId", { value: box.instanceId });
-    new cdk.CfnOutput(this, "OriginIp", { value: eip.attrPublicIp });
     new cdk.CfnOutput(this, "HostControlFunctionName", { value: hostFn.functionName });
   }
 }

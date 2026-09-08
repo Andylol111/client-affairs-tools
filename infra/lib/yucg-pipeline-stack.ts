@@ -37,11 +37,13 @@ export class YucgPipelineStack extends cdk.Stack {
         phases: {
           install: {
             "runtime-versions": { nodejs: "22" },
-            commands: ["cd infra && npm ci && npx cdk --version"],
+            commands: [
+              "cd \"$CODEBUILD_SRC_DIR/infra\" && npm ci && npx cdk --version",
+            ],
           },
           build: {
             commands: [
-              "cd infra && npx cdk deploy YucgOutreach-$YUCG_ENV -c env=$YUCG_ENV --require-approval never",
+              "cd \"$CODEBUILD_SRC_DIR/infra\" && npx cdk deploy YucgOutreach-$YUCG_ENV -c env=$YUCG_ENV --require-approval never",
             ],
           },
         },
