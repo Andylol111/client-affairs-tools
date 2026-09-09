@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs on the box via SSM. ship.yml envsubst: IMAGE, AWS_REGION, YUCG_ENV, ECR_HOST
+# Runs on the box via SSM. ci.yml envsubst: IMAGE, AWS_REGION, YUCG_ENV, ECR_HOST
 set -euo pipefail
 DATA=/data
 [ -d /data ] || DATA=/var/lib/yucg
