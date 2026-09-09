@@ -1,4 +1,5 @@
-# Live ship on main only. Requires AWS_SHIP_ROLE_ARN (OIDC). Does not use CodeBuild.
+# Build image, push ECR, SSM-restart the existing box.
+# Do not cdk deploy YucgOutreach-dev — that replaces the instance.
 name: ship
 
 on:
@@ -19,23 +20,37 @@ jobs:
     runs-on: ubuntu-latest
     if: vars.AWS_SHIP_ROLE_ARN != ''
     env:
-      CDK_DEFAULT_REGION: us-east-1
+      AWS_REGION: us-east-1
       YUCG_ENV: dev
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: infra/package-lock.json
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_SHIP_ROLE_ARN }}
           aws-region: us-east-1
-      - name: CDK deploy app
-        working-directory: infra
+      - name: Build, push, restart box
         run: |
-          npm ci
-          CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-          export CDK_DEFAULT_ACCOUNT
-          npx cdk deploy "YucgOutreach-$YUCG_ENV" -c env="$YUCG_ENV" --require-approval never
+          set -euo pipefail
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          ECR_HOST="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          IMAGE="${ECR_HOST}/cdk-hnb659fds-container-assets-${ACCOUNT}-${AWS_REGION}:live"
+          ID="$(aws cloudformation describe-stacks --stack-name "YucgOutreach-${YUCG_ENV}" \
+            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" --output text)"
+          test -n "$ID"
+
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$ECR_HOST"
+          docker build --platform linux/amd64 -f docker/app.Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+
+          export IMAGE ECR_HOST AWS_REGION YUCG_ENV
+          envsubst '$IMAGE $ECR_HOST $AWS_REGION $YUCG_ENV' < infra/scripts/restart-yucg.sh > /tmp/restart-yucg.sh
+          CMD_ID="$(jq -n --rawfile script /tmp/restart-yucg.sh \
+            --arg id "$ID" \
+            '{
+              InstanceIds: [$id],
+              DocumentName: "AWS-RunShellScript",
+              Comment: "yucg ship",
+              Parameters: { commands: [$script] }
+            }' | aws ssm send-command --cli-input-json file:///dev/stdin --query Command.CommandId --output text)"
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$ID"
