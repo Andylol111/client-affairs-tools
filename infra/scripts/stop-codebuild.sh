@@ -1,7 +1,23 @@
 #!/bin/bash
-# CloudShell, us-east-1. Stops CodeBuild billing. Does not touch YucgOutreach-dev.
+# CloudShell, us-east-1. Stops CodePipeline V2 + CodeBuild billing.
+# Does not touch YucgOutreach-dev (the live CloudFront box).
 set -euo pipefail
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+
+echo "== CodePipeline names =="
+aws codepipeline list-pipelines --query 'pipelines[].name' --output text || true
+
+echo "== abandon IN_PROGRESS CodePipeline executions =="
+for name in $(aws codepipeline list-pipelines --query 'pipelines[].name' --output text 2>/dev/null || true); do
+  [ -z "$name" ] && continue
+  echo "pipeline $name"
+  eids="$(aws codepipeline list-pipeline-executions --pipeline-name "$name" --query 'pipelineExecutionSummaries[?status==`InProgress`].pipelineExecutionId' --output text 2>/dev/null || true)"
+  for eid in $eids; do
+    [ -z "$eid" ] && continue
+    aws codepipeline stop-pipeline-execution --pipeline-name "$name" --pipeline-execution-id "$eid" --abandon --reason "stop free-tier burn" >/dev/null
+    echo "abandoned $name $eid"
+  done
+done
 
 echo "== stop IN_PROGRESS CodeBuild =="
 ids="$(aws codebuild list-builds --query 'ids[:40]' --output text 2>/dev/null || true)"
@@ -18,7 +34,7 @@ else
   echo "no recent builds"
 fi
 
-echo "== delete YucgPipeline-dev (CodePipeline + CodeBuild ship) =="
+echo "== delete YucgPipeline-dev (this is the V2 pipeline + CodeBuild project) =="
 if aws cloudformation describe-stacks --stack-name YucgPipeline-dev >/dev/null 2>&1; then
   aws cloudformation delete-stack --stack-name YucgPipeline-dev
   echo "delete started for YucgPipeline-dev"
@@ -26,8 +42,8 @@ else
   echo "YucgPipeline-dev not present"
 fi
 
-echo "== Amplify: turn off auto-build (Amplify runs on CodeBuild) =="
-aws amplify list-apps --query 'apps[].[appId,name]' --output text | while read -r app_id name; do
+echo "== Amplify auto-build off (Amplify is CodeBuild) =="
+aws amplify list-apps --query 'apps[].[appId,name]' --output text 2>/dev/null | while read -r app_id name; do
   [ -z "${app_id:-}" ] && continue
   echo "amplify $name $app_id"
   aws amplify list-branches --app-id "$app_id" --query 'branches[].branchName' --output text | tr '\t' '\n' | while read -r br; do
@@ -42,6 +58,7 @@ aws amplify list-apps --query 'apps[].[appId,name]' --output text | while read -
   esac
 done
 
-echo "== CodeBuild projects still in the account =="
-aws codebuild list-projects --output json
+echo "== leftover pipelines / CodeBuild projects =="
+aws codepipeline list-pipelines --output json || true
+aws codebuild list-projects --output json || true
 echo "Done. Live site is CloudFront. Ship is GitHub Actions. Do not recreate YucgPipeline-dev."
