@@ -144,6 +144,12 @@ jobs:
             -e DATABASE_URL=sqlite:////data/smoke.db \
             "yucg-check:${GITHUB_SHA}" \
             scripts/container_smoke.py
+      - name: Verify backend behavior on the runtime libc
+        run: |
+          docker run --rm --network none --entrypoint python \
+            -e JWT_SECRET=ci-container-test-secret-not-for-production \
+            "yucg-check:${GITHUB_SHA}" \
+            -c 'import glob, subprocess, sys; results=[subprocess.run([sys.executable, path], timeout=180).returncode for path in sorted(glob.glob("tests/test_*.py"))]; sys.exit(any(results))'
       - name: Preserve verified image
         id: archive
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
