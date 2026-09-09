@@ -1,6 +1,5 @@
 import { NavLink } from 'react-router-dom';
 import type { NavItem } from '../../lib/navConfig';
-import AiModelSelect from '../AiModelSelect';
 import AppNavLink from './AppNavLink';
 
 type AppShellHeaderProps = {
@@ -28,7 +27,6 @@ export default function AppShellHeader({ user, navItems, onLogout }: AppShellHea
         </nav>
 
         <div className="app-shell-header-actions">
-          <AiModelSelect variant="header" id="header-ai-model" className="hidden lg:flex" />
           {user.picture && (
             <img
               src={user.picture}

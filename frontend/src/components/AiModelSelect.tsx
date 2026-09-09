@@ -3,21 +3,17 @@ import { useAiModel } from '../contexts/AiModelContext';
 type AiModelSelectProps = {
   id?: string;
   className?: string;
-  /** header = compact in the top bar */
-  variant?: 'header' | 'field';
 };
 
-export default function AiModelSelect({ id = 'ai-model', className = '', variant = 'field' }: AiModelSelectProps) {
+export default function AiModelSelect({ id = 'ai-model', className = '' }: AiModelSelectProps) {
   const { modelId, setModelId, groups } = useAiModel();
-  const fieldClass = variant === 'header' ? 'app-ai-select app-ai-select--header' : 'app-ai-select';
 
   return (
     <label className={`app-ai-select-wrap ${className}`.trim()} htmlFor={id}>
-      {variant === 'field' && <span className="app-ai-select-label">AI model</span>}
-      {variant === 'header' && <span className="sr-only">AI model</span>}
+      <span className="app-ai-select-label">AI model</span>
       <select
         id={id}
-        className={fieldClass}
+        className="app-ai-select"
         value={modelId}
         onChange={(e) => setModelId(e.target.value)}
         title="Anthropic on Bedrock, Opus through Haiku"

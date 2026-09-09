@@ -1,6 +1,5 @@
 import { NavLink } from 'react-router-dom';
 import CommunitySidebar from '../CommunitySidebar';
-import AiModelSelect from '../AiModelSelect';
 
 type AppShellDrawerProps = {
   open: boolean;
@@ -34,9 +33,6 @@ export default function AppShellDrawer({ open, onClose, user, onLogout }: AppShe
           <NavLink to="/profile" onClick={onClose} className="app-sidebar-link mb-3">
             Profile &amp; Settings
           </NavLink>
-          <div className="mb-4">
-            <AiModelSelect id="drawer-ai-model" />
-          </div>
           <button
             type="button"
             className="app-sidebar-link w-full text-left mb-4"

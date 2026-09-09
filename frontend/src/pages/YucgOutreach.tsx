@@ -11,7 +11,6 @@ import {
 } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
 import PageHeader from '../components/PageHeader';
-import AiModelSelect from '../components/AiModelSelect';
 import { useAiModel } from '../contexts/AiModelContext';
 
 type PageTab = 'coordinator' | 'comb' | 'discovery';
@@ -594,7 +593,6 @@ function CoordinatorPanel() {
               AI
             </button>
           </div>
-          {recommendMode === 'ai' && <AiModelSelect id="week-ai-model" className="min-w-[14rem]" />}
           <button
             type="button"
             disabled={recommendBusy}
