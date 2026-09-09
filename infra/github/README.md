@@ -1,6 +1,6 @@
 # Proposed GitHub protection migration
 
-The production environment and main-only deployment policy are now applied and verified. Topic branch restrictions are disabled. Main/feature aggregate-gate payloads are being activated only after passing hosted checks. The repository is public, current caller has administrator access, and only Andylol111 is listed as a collaborator. The user has deferred a second maintainer. The current proposal supports one maintainer; the future independent-review policy is retained separately.
+The production environment and main-only deployment policy are now applied and verified. Topic branch restrictions are disabled. Main and feature now require the GitHub Actions `required-checks` gate after the candidate passed hosted checks. Both preserve PR/deletion/force-push protections and have no administrator bypass. The repository is public, current caller has administrator access, and only Andylol111 is listed as a collaborator. The user has deferred a second maintainer. The current proposal supports one maintainer; the future independent-review policy is retained separately.
 
 Fresh inspection on 2026-09-09:
 
@@ -27,4 +27,6 @@ Do not run these API updates on an unreviewed revision. Save the previous rulese
 
 When another maintainer is available, review `main-ruleset.future-reviewers.json` to require one fresh independent PR approval and last-push approval. Add the authorized deployment reviewer and enable prevention of self-review. Until then, this future policy must not block the current workflow. No collaborator invitation is requested or sent.
 
-Both promotion branches use the same aggregate gate: `feature-ruleset.proposed.json` targets ruleset 22605434 and `main-ruleset.proposed.json` targets 22605433. Activate after the candidate passes real hosted checks. Branch progression remains develop → feature → main, with topic PRs also permitted.
+Both promotion branches use the same aggregate gate: `feature-ruleset.proposed.json` targets ruleset 22605434 and `main-ruleset.proposed.json` targets 22605433. Both were activated after candidate d616543 passed all hosted checks. Branch progression remains develop → feature → main, with topic PRs also permitted.
+
+When feature is behind main, synchronize main into develop and promote that merge through a passing develop-to-feature PR. Direct protected-head updates are rejected by design; do not bypass the rule to synchronize branches.
