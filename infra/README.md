@@ -2,7 +2,7 @@
 
 One HTTPS `AppUrl` (CloudFront) in front of the club app. **Nothing ships from a laptop.**
 
-**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `feature` for a test-only hop, or PR `develop` → `main` when you want to ship (tests + Docker build, then `ship`). `feature` → `main` also ships. Random other heads are blocked. Repo **Admins** can **Bypass rules** on a PR. After `main` moves, `feature` is fast-forwarded to match.
+**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `main` to ship (tests + Docker build, then `ship`). `develop` → `feature` is an optional test-only hop. Random other heads are blocked. Repo **Admins** can **Bypass rules** on a PR.
 
 CloudShell is on/off, secrets, and one-time AWS bootstrap. Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite on a retained 8 GB volume. No ALB, no Amplify, no NAT. Do not set `VITE_API_URL`.
 
