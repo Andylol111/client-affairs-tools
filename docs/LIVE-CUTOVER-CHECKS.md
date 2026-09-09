@@ -46,3 +46,5 @@ Use two explicitly authorized test members A/B, one administrator and a controll
 Retain sanitized results, not OAuth codes, signed URLs, raw mailbox contents or production database exports. Failed cases block the relevant cutover.
 
 Gross deployed AWS delta remains $0 from this work. No resources changed and no Cost Explorer queries were issued in this pass. Proposed storage and backup costs remain unapproved and depend on retained GB-months, requests and transfer; credits do not reduce the gross estimate.
+
+Container deployment now uses UID/GID 10001. Before live cutover, review existing `/data` and SQLite file ownership and permissions for that identity. The restart script checks access before stopping the old container and fails closed; it does not recursively change production file ownership. Backup creation uses an explicit root exec to write the root-only backup directory.

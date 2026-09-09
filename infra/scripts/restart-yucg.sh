@@ -12,10 +12,13 @@ OLD_MOUNT=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/dat
 [ "$OLD_MOUNT" = /data ] || { echo 'Unexpected current database mount'; exit 1; }
 aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_HOST}"
 docker pull "${IMAGE}"
+# Existing root-owned data needs a reviewed permissions migration before cutover.
+# Probe with the candidate image identity before stopping the running application.
+docker run --rm --network none --entrypoint python -v /data:/data "${IMAGE}" -c 'import os,sqlite3; assert os.geteuid()!=0,"Non-root image required"; assert os.access("/data",os.W_OK) and os.access("/data/clientreach.db",os.W_OK),"Review data ownership for UID 10001 before deploying"; c=sqlite3.connect("file:/data/clientreach.db?mode=rw",uri=True); c.execute("BEGIN IMMEDIATE"); c.rollback(); c.close()'
 # SQLite online backup accounts for WAL; no raw copy of a live database.
 install -d -m 0700 /data/backups
 BACKUP="/data/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).db"
-docker exec -e BACKUP="$BACKUP" yucg python -c 'import os,sqlite3; s=sqlite3.connect("/data/clientreach.db"); d=sqlite3.connect(os.environ["BACKUP"]); s.backup(d); assert d.execute("PRAGMA integrity_check").fetchone()[0]=="ok"; d.close(); s.close()'
+docker exec --user 0 -e BACKUP="$BACKUP" yucg python -c 'import os,sqlite3; s=sqlite3.connect("/data/clientreach.db"); d=sqlite3.connect(os.environ["BACKUP"]); s.backup(d); assert d.execute("PRAGMA integrity_check").fetchone()[0]=="ok"; d.close(); s.close()'
 run_image() {
   docker rm -f yucg >/dev/null 2>&1 || true
   docker run -d --name yucg --restart unless-stopped --env-file /etc/yucg/app.env \
