@@ -2,13 +2,13 @@
 
 One HTTPS `AppUrl` (CloudFront) in front of the club app. **Nothing ships from a laptop.**
 
-**Branches:** work on `develop`. Open a PR into `main`. GitHub Actions (`verify-backend`, `verify-frontend`, `verify-infra`) must pass. Live AppUrl updates when `main` moves (CodeBuild today; later a GitHub Actions `ship` job via AWS OIDC — no Andre-only CodeStar connection).
+**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `feature` (tests). PR `feature` → `main` (tests + Docker build). Live AppUrl updates when `main` moves (`ship` in [`ci.yml`](../.github/workflows/ci.yml), OIDC).
 
 CloudShell is on/off, secrets, and one-time AWS bootstrap. Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite on a retained 8 GB volume. No ALB, no Amplify, no NAT. Do not set `VITE_API_URL`.
 
 ## GitHub Actions runners
 
-No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) starts three `ubuntu-latest` jobs on push/PR to `develop` or `main`. Confirm under the **Actions** tab. Protect `main` so those three checks are required.
+No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Protect `feature` (verify jobs) and `main` (verify + `build-image`). Do not require `ship` on PRs.
 
 ## Modes (one template)
 
@@ -85,8 +85,9 @@ No SSH. Session Manager if the box is up and sick. After a secret change: Sessio
 
 ## Ship a website change (no laptop)
 
-1. PR `develop` → `main`. Wait for the three verify jobs.
-2. Merge. Until Actions `ship` is armed, CodeBuild deploys if the pipeline still watches that branch.
+1. Push to `develop`.
+2. PR `develop` → `feature`. Wait for verify.
+3. PR `feature` → `main`. Wait for verify + `build-image`. Merge. The `ci` run on `main` continues to `ship`.
 
 ### Replace CodeBuild with Actions ship (CloudShell, once)
 
@@ -99,7 +100,7 @@ npx cdk deploy YucgGithubOidc-dev -c env=dev
 # Name: AWS_SHIP_ROLE_ARN
 ```
 
-[`.github/workflows/ship.yml`](../.github/workflows/ship.yml) builds the image, pushes ECR `:live`, and SSM-restarts the **existing** box. It does **not** `cdk deploy YucgOutreach-dev` (that replaces the instance and breaks the VPC origin + attached SQLite volume). After one green `ship` job:
+The `ship` job in [`ci.yml`](../.github/workflows/ci.yml) builds the image, pushes ECR `:live`, and SSM-restarts the **existing** box. It does **not** `cdk deploy YucgOutreach-dev` (that replaces the instance and breaks the VPC origin + attached SQLite volume). After one green `ship` job:
 
 ```bash
 npx cdk destroy YucgPipeline-dev -c env=dev --force
