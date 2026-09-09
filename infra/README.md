@@ -100,7 +100,7 @@ npx cdk deploy YucgGithubOidc-dev -c env=dev
 # Name: AWS_SHIP_ROLE_ARN
 ```
 
-The `ship` job in [`ci.yml`](../.github/workflows/ci.yml) builds the image, pushes ECR `:live`, and SSM-restarts the **existing** box. It does **not** `cdk deploy YucgOutreach-dev` (that replaces the instance and breaks the VPC origin + attached SQLite volume). After one green `ship` job:
+The `ship` job in [`ci.yml`](../.github/workflows/ci.yml) builds the image, pushes a unique ECR tag (the CDK asset repo is immutable), and SSM-restarts the **existing** box. It does **not** `cdk deploy YucgOutreach-dev` (that replaces the instance and breaks the VPC origin + attached SQLite volume). After one green `ship` job:
 
 ```bash
 npx cdk destroy YucgPipeline-dev -c env=dev --force
