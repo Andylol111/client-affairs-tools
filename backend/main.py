@@ -154,15 +154,39 @@ async def ai_models(_user: dict = Depends(get_current_user)):
     return list_models()
 
 
+def spa_file(root: Path, full_path: str) -> Path:
+    """Serve a real file if it exists under dist; otherwise index.html (React routes)."""
+    root = root.resolve()
+    index = root / "index.html"
+    if not full_path or full_path.endswith("/"):
+        return index
+    candidate = (root / full_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return index
+    return candidate if candidate.is_file() else index
+
+
 def _mount_spa() -> None:
     """Hosted box: same process as the API. Localhost still uses Vite on :5173."""
     raw = (os.getenv("FRONTEND_DIST") or "").strip()
     root = Path(raw) if raw else _backend_dir / "frontend_dist"
     if not root.is_dir():
         return
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=str(root), html=True), name="spa")
+    assets = root / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="spa-assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(spa_file(root, full_path))
 
 
 _mount_spa()
