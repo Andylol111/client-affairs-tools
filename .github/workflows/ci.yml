@@ -1,0 +1,150 @@
+# develop: no gates. feature: tests. main: tests + image build, then ship.
+# Allowed PRs: develop → feature, develop → main, feature → main.
+# Other heads are blocked (repo Admins can Bypass rules). Do not cdk deploy YucgOutreach-dev.
+name: ci
+
+on:
+  pull_request:
+    branches: [feature, main]
+  push:
+    branches: [develop, feature, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  develop-open:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "develop is open; nothing required"
+
+  gate-branch:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Allowed branch pairs
+        run: |
+          set -euo pipefail
+          base="${{ github.base_ref }}"
+          head="${{ github.head_ref }}"
+          echo "PR ${head} → ${base}"
+          if [ "$head" = "develop" ] && [ "$base" = "feature" ]; then exit 0; fi
+          if [ "$head" = "develop" ] && [ "$base" = "main" ]; then exit 0; fi
+          if [ "$head" = "feature" ] && [ "$base" = "main" ]; then exit 0; fi
+          echo "Use develop or feature. Random branches cannot target feature/main."
+          exit 1
+
+  verify-backend:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/feature' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and test
+        env:
+          JWT_SECRET: p2-test-secret-not-a-known-default-xx
+        run: |
+          python -m pip install -q -r requirements.txt
+          for f in tests/test_*.py; do
+            echo "::group::$f"
+            python "$f"
+            echo "::endgroup::"
+          done
+
+  verify-frontend:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/feature' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  verify-infra:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/feature' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  build-image:
+    needs: [verify-backend, verify-frontend, verify-infra]
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker build
+        run: docker build --platform linux/amd64 -f docker/app.Dockerfile .
+
+  ship:
+    needs: [verify-backend, verify-frontend, verify-infra]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_SHIP_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      YUCG_ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_SHIP_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Build, push, restart box
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          ECR_HOST="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          IMAGE="${ECR_HOST}/cdk-hnb659fds-container-assets-${ACCOUNT}-${AWS_REGION}:live"
+          ID="$(aws cloudformation describe-stacks --stack-name "YucgOutreach-${YUCG_ENV}" \
+            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" --output text)"
+          test -n "$ID"
+
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$ECR_HOST"
+          docker build --platform linux/amd64 -f docker/app.Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+
+          export IMAGE ECR_HOST AWS_REGION YUCG_ENV
+          envsubst '$IMAGE $ECR_HOST $AWS_REGION $YUCG_ENV' < infra/scripts/restart-yucg.sh > /tmp/restart-yucg.sh
+          jq -n --rawfile script /tmp/restart-yucg.sh \
+            --arg id "$ID" \
+            '{
+              InstanceIds: [$id],
+              DocumentName: "AWS-RunShellScript",
+              Comment: "yucg ship",
+              Parameters: { commands: [$script] }
+            }' > /tmp/ssm-send.json
+          CMD_ID="$(aws ssm send-command --cli-input-json file:///tmp/ssm-send.json --query Command.CommandId --output text)"
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$ID"
