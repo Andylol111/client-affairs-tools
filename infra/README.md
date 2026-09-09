@@ -2,13 +2,13 @@
 
 One HTTPS `AppUrl` (CloudFront) in front of the club app. **Nothing ships from a laptop.**
 
-**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `feature` (tests). PR `feature` → `main` (tests + Docker build). Live AppUrl updates when `main` moves (`ship` in [`ci.yml`](../.github/workflows/ci.yml), OIDC).
+**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `feature` (tests). PR `feature` → `main` (tests + Docker build). Live AppUrl updates when `main` moves (`ship` in [`ci.yml`](../.github/workflows/ci.yml), OIDC). You cannot merge straight to `main` unless a repo **Admin** uses **Bypass rules** on that PR (Write cannot).
 
 CloudShell is on/off, secrets, and one-time AWS bootstrap. Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite on a retained 8 GB volume. No ALB, no Amplify, no NAT. Do not set `VITE_API_URL`.
 
 ## GitHub Actions runners
 
-No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Protect `feature` (verify jobs) and `main` (verify + `build-image`). Do not require `ship` on PRs.
+No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Rulesets on `feature` and `main` require the sequence; repo Admins may **Bypass rules** on a PR. Do not require `ship` on PRs.
 
 ## Modes (one template)
 
