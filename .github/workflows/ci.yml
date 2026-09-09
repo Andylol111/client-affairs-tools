@@ -126,7 +126,8 @@ jobs:
           set -euo pipefail
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
           ECR_HOST="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          IMAGE="${ECR_HOST}/cdk-hnb659fds-container-assets-${ACCOUNT}-${AWS_REGION}:live"
+          # CDK asset repo tags are immutable; :live cannot be overwritten.
+          IMAGE="${ECR_HOST}/cdk-hnb659fds-container-assets-${ACCOUNT}-${AWS_REGION}:${GITHUB_SHA}-${GITHUB_RUN_ID}"
           ID="$(aws cloudformation describe-stacks --stack-name "YucgOutreach-${YUCG_ENV}" \
             --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" --output text)"
           test -n "$ID"
