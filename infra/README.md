@@ -86,10 +86,30 @@ No SSH. Session Manager if the box is up and sick. After a secret change: Sessio
 ## Ship a website change (no laptop)
 
 1. PR `develop` → `main`. Wait for the three verify jobs.
-2. Merge. Until Actions `ship` exists, CodeBuild deploys if the pipeline still watches that branch.
-3. Later: `.github/workflows/ship.yml` on `main` assumes an AWS OIDC role and runs `cdk deploy YucgOutreach-dev`. Then disable or delete `YucgPipeline-dev` so only Actions deploys.
+2. Merge. Until Actions `ship` is armed, CodeBuild deploys if the pipeline still watches that branch.
 
-CloudShell is not in the daily loop.
+### Replace CodeBuild with Actions ship (CloudShell, once)
+
+Does not replace the EC2 instance.
+
+```bash
+cd /tmp/yucg/infra && git pull
+npx cdk deploy YucgGithubOidc-dev -c env=dev
+# Output GitHubShipRoleArn → repo Settings → Secrets and variables → Actions → Variables
+# Name: AWS_SHIP_ROLE_ARN
+```
+
+[`.github/workflows/ship.yml`](../.github/workflows/ship.yml) runs on push to `main` only (OIDC, no GitHub AWS keys). After one green `ship` job:
+
+```bash
+npx cdk destroy YucgPipeline-dev -c env=dev --force
+```
+
+Do not leave CodePipeline and Actions ship both armed — they will double-deploy.
+
+If `cdk deploy YucgGithubOidc-dev` fails because `token.actions.githubusercontent.com` already exists in the account, the OIDC provider is already there; import it or reuse that provider ARN in the stack before retrying.
+
+CloudShell is not in the daily loop after that.
 
 Workbook / corpus live in **S3**, not in the image (`data/` is docker-excluded). From CloudShell, copy **from the clone on AWS**, not from a laptop upload:
 

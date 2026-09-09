@@ -1,0 +1,40 @@
+# Live ship on main only. Requires AWS_SHIP_ROLE_ARN (OIDC). Does not use CodeBuild.
+name: ship
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ship-main
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    if: vars.AWS_SHIP_ROLE_ARN != ''
+    env:
+      CDK_DEFAULT_REGION: us-east-1
+      YUCG_ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_SHIP_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: CDK deploy app
+        working-directory: infra
+        run: |
+          npm ci
+          CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          export CDK_DEFAULT_ACCOUNT
+          npx cdk deploy "YucgOutreach-$YUCG_ENV" -c env="$YUCG_ENV" --require-approval never
