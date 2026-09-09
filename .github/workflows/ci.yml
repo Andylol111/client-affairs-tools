@@ -143,7 +143,7 @@ jobs:
             -e JWT_SECRET=ci-container-test-secret-not-for-production \
             -e DATABASE_URL=sqlite:////data/smoke.db \
             "yucg-check:${GITHUB_SHA}" \
-            -c 'import os; assert os.geteuid() != 0; from app.database import init_db, get_db; init_db(); c=get_db(); c.execute("SELECT count(*) FROM users"); c.close(); import main'
+            scripts/container_smoke.py
       - name: Preserve verified image
         id: archive
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
