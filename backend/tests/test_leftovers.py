@@ -55,12 +55,19 @@ def test_pending_2fa_not_authenticated() -> None:
 def test_anthropic_catalog_opus_to_haiku() -> None:
     from app.services.llm import BEDROCK_ANTHROPIC, is_bedrock_model, list_models
 
-    tiers = {m["tier"] for m in BEDROCK_ANTHROPIC}
-    assert "opus" in tiers and "haiku" in tiers
-    assert is_bedrock_model("us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    ids = {m["id"] for m in BEDROCK_ANTHROPIC}
+    labels = {m["label"] for m in BEDROCK_ANTHROPIC}
+    assert ids == {
+        "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
+    assert "Claude Opus 4" not in labels
+    assert is_bedrock_model("us.anthropic.claude-opus-5")
     assert not is_bedrock_model("ollama:llama3.2")
     catalog = list_models()
-    assert catalog["groups"][0]["id"] == "anthropic"
+    assert [g["id"] for g in catalog["groups"]] == ["anthropic"]
+    assert not any(m["id"].startswith("ollama:") for g in catalog["groups"] for m in g["models"])
 
 
 def test_spa_week_route_uses_index() -> None:

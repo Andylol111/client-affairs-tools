@@ -285,7 +285,7 @@ export default function EmailStudio() {
       }
     } catch (e) {
       console.error(e);
-      setEmail({ subject: 'Error', body: 'Failed to generate. Is Ollama running? Try: ollama run llama3.2' });
+      setEmail({ subject: 'Error', body: 'Failed to generate. Check Bedrock model access for the selected Claude model.' });
     } finally {
       setLoading(false);
     }
@@ -608,11 +608,11 @@ export default function EmailStudio() {
     <div className="email-studio w-full max-w-[1920px] mx-auto">
       <PageHeader
         title="Studio"
-        subtitle="Draft against kept people. Model is Opus → Haiku in the header — or the picker below."
+        subtitle="Pick a kept person, generate, edit, send. Claude on Bedrock is next to Generate."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
-      <div className="flex flex-col xl:flex-row gap-4">
-        <div className={`surface-card shadow-sm rounded-xl overflow-hidden flex-shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none ${contactsPanelExpanded ? 'w-full xl:w-[312px]' : 'w-full xl:w-14'}`}>
+      <div className="email-studio-layout">
+        <div className={`surface-card shadow-sm rounded-xl flex-shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none ${contactsPanelExpanded ? 'w-full xl:w-[280px] email-studio-contacts' : 'w-full xl:w-14'}`}>
           {contactsPanelExpanded ? (
             <>
               <div className="px-4 py-3 border-b border-[var(--border)] flex gap-2 flex-wrap items-stretch bg-white dark:bg-[var(--bg-card)]">
@@ -829,10 +829,10 @@ export default function EmailStudio() {
             </div>
           )}
         </div>
-        <div className="flex-1 flex min-w-0 gap-4">
+        <div className="email-studio-main">
           <div
             id="email-generator-section"
-            className={`surface-card shadow-sm rounded-xl overflow-hidden flex-shrink-0 flex flex-col transition-[width] duration-300 ease-out motion-reduce:transition-none ${aiGeneratorExpanded ? 'w-full xl:min-w-[380px] xl:w-[42%]' : 'w-full xl:w-14'}`}
+            className={`surface-card shadow-sm rounded-xl flex-shrink-0 flex flex-col min-w-0 ${aiGeneratorExpanded ? 'w-full email-studio-generator' : 'w-full xl:w-14'}`}
           >
             {aiGeneratorExpanded ? (
             <>
@@ -918,9 +918,6 @@ export default function EmailStudio() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-              <div className="min-w-0 sm:col-span-3">
-                <AiModelSelect id="studio-ai-model" />
-              </div>
               <div className="min-w-0">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Tone</label>
                 <select
@@ -980,13 +977,16 @@ export default function EmailStudio() {
                 />
               </div>
             </div>
-            <button
-              onClick={generateEmail}
-              disabled={loading}
-              className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-semibold disabled:opacity-50 transition-all"
-            >
-              {loading ? 'Generating…' : 'Generate email'}
-            </button>
+            <div className="studio-generate-row">
+              <AiModelSelect id="studio-ai-model" compact />
+              <button
+                onClick={generateEmail}
+                disabled={loading}
+                className="studio-generate-row__go py-3.5 px-4 bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-semibold disabled:opacity-50 transition-all"
+              >
+                {loading ? 'Generating…' : 'Generate email'}
+              </button>
+            </div>
             </div>
             </>
             ) : (
@@ -1006,7 +1006,7 @@ export default function EmailStudio() {
             </div>
             )}
           </div>
-          <div id="email-editor-section" className="flex-1 min-w-0 surface-card shadow-sm rounded-xl overflow-hidden overflow-y-auto max-h-[calc(100vh-12rem)]">
+          <div id="email-editor-section" className="flex-1 min-w-0 surface-card shadow-sm rounded-xl overflow-y-auto max-h-[calc(100vh-12rem)]">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] p-4 border-b border-pale-sky dark:border-slate-600 truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
               Email for {selected?.name || quickCompose.name || 'Recipient'} ({selected?.email || quickCompose.email || 'enter email for test send'})
             </h2>
@@ -1025,7 +1025,7 @@ export default function EmailStudio() {
                 <div className="overflow-hidden min-h-0">
                 <div className="p-4 space-y-3 text-sm border-t border-[var(--border)] bg-white dark:bg-[var(--bg-card)]">
                   <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-                    Pick companies, load <strong>employee</strong> contacts (generic inboxes like info@ are excluded). Compose subject/body below, then save or send a campaign. An optional <strong>follow-up sequence</strong> is processed by the daily server job: each step goes out after its configured delay from the <em>last</em> message, and <strong>only to contacts who have not replied</strong>. Replies are detected from Gmail when you use <strong>Outreach → Pipeline → Sync inbox (Gmail)</strong> (and on a periodic server sync); you can still mark a thread replied manually. LinkedIn employees need <code className="text-[11px] bg-pale-sky/25 dark:bg-slate-700 px-1 rounded font-mono text-deep-navy dark:text-slate-200">APIFY_API_TOKEN</code>.
+                    Load employees for the companies you tick (generic inboxes like info@ are skipped). Write below, then save or send. Follow-ups run on the daily job only for people who have not replied — sync Gmail on Pipeline.
                   </p>
                   {companiesSummary.length === 0 ? (
                     <p className="text-xs text-amber-700 dark:text-amber-400">No companies in the database yet — scrape or import contacts first.</p>
