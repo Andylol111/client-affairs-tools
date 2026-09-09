@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
 import { YucgOutreachStack } from "../lib/yucg-outreach-stack";
-import { YucgPipelineStack } from "../lib/yucg-pipeline-stack";
 import { YucgGithubOidcStack } from "../lib/yucg-github-oidc-stack";
 
 const app = new cdk.App();
@@ -24,18 +23,3 @@ new YucgGithubOidcStack(app, `YucgGithubOidc-${envName}`, {
   githubRepo,
   env: awsEnv,
 });
-
-const connectionArn =
-  String(app.node.tryGetContext("githubConnectionArn") || "").match(
-    /arn:aws[a-zA-Z0-9-]*:code(?:connections|star-connections):[a-z0-9-]+:\d{12}:connection\/[0-9a-f-]+/i,
-  )?.[0] || "";
-if (connectionArn) {
-  new YucgPipelineStack(app, `YucgPipeline-${envName}`, {
-    envName,
-    connectionArn,
-    githubOwner,
-    githubRepo,
-    githubBranch: (app.node.tryGetContext("githubBranch") as string | undefined) || "yucg-outreach",
-    env: awsEnv,
-  });
-}

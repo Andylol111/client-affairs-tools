@@ -4,9 +4,9 @@ Operator notes for the live host. Members use [`README.md`](../README.md) and `A
 
 Stack: `YucgOutreach-dev` in `us-east-1`. Image: `docker/app.Dockerfile`. SQLite: `/data/clientreach.db` on a retained 8 GB volume. HTTPS: CloudFront VPC origin. No ALB, NAT, Amplify, or Aurora.
 
-**Do not** `cdk deploy YucgOutreach-dev`. User-data is baked into the instance (`userDataCausesReplacement: true`). A deploy mints a new box; CloudFront cannot rebind the VPC origin and the SQLite volume is already attached. Website updates are GitHub **verify and ship** (ECR + SSM restart).
+**Do not** `cdk deploy YucgOutreach-dev`. User-data is baked into the instance (`userDataCausesReplacement: true`). A deploy mints a new box; CloudFront cannot rebind the VPC origin and the SQLite volume is already attached. Website updates are GitHub **verify and ship** (ECR + SSM restart). Never CodeBuild.
 
-**Do not** recreate `YucgPipeline-dev`. That stack `cdk deploy`s the app stack and will double-ship or replace the instance. Actions replaced CodeBuild.
+**CodeBuild is not used.** Ship is GitHub Actions. If AWS is charging for CodeBuild, paste `infra/scripts/stop-codebuild.sh` in CloudShell now. That deletes `YucgPipeline-dev` and leftover Amplify apps. Do not recreate them.
 
 ## GitHub
 
