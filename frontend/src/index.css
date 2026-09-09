@@ -193,7 +193,8 @@ html.yucg-brand-redesign.dark .yucg-photo-banner {
   position: relative;
   z-index: 1;
   padding: 1.25rem 1.5rem;
-  max-width: 42rem;
+  max-width: min(42rem, 100%);
+  min-width: 0;
 }
 
 .yucg-photo-banner__title {
@@ -203,6 +204,7 @@ html.yucg-brand-redesign.dark .yucg-photo-banner {
   letter-spacing: -0.02em;
   color: var(--banner-ink);
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 @media (min-width: 640px) {
@@ -217,6 +219,7 @@ html.yucg-brand-redesign.dark .yucg-photo-banner {
   line-height: 1.45;
   color: var(--banner-ink-muted);
   font-weight: 400;
+  overflow-wrap: anywhere;
 }
 
 /* Login — full-viewport campus photo + Yale blue tint, centered frosted card */
@@ -1761,32 +1764,91 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   margin-top: 0.75rem;
 }
 
-.app-week-steps {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.75rem;
+.app-week-guide__title {
+  margin: 0 0 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--steel-blue);
 }
 
-@media (min-width: 768px) {
-  .app-week-steps {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+.app-week-guide__list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 2px solid var(--deep-navy);
+  background: var(--bg-card);
+}
+
+@media (min-width: 900px) {
+  .app-week-guide__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-.app-week-step {
-  display: block;
+.app-week-guide__item {
+  min-width: 0;
+}
+
+.app-week-guide__item + .app-week-guide__item {
+  border-top: 1px solid var(--border);
+}
+
+@media (min-width: 900px) {
+  .app-week-guide__item:nth-child(2) {
+    border-top: none;
+    border-left: 1px solid var(--border);
+  }
+
+  .app-week-guide__item:nth-child(3) {
+    border-top: 1px solid var(--border);
+  }
+
+  .app-week-guide__item:nth-child(4) {
+    border-top: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+  }
+}
+
+.app-week-guide__link {
+  display: flex;
+  gap: 0.85rem;
+  align-items: flex-start;
+  min-width: 0;
   padding: 1rem 1.1rem;
   text-decoration: none;
   color: var(--deep-navy);
-  background: var(--bg-card);
-  border: 2px solid var(--deep-navy);
 }
 
-.app-week-step:hover {
+.app-week-guide__link:hover {
   background: var(--pale-sky);
 }
 
-.app-week-step__n {
+.app-week-guide__n {
+  flex: 0 0 1.75rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--deep-navy);
+  font-size: 0.8rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.app-week-guide__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.app-week-guide__door {
   font-size: 0.65rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1794,36 +1856,23 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   color: var(--steel-blue);
 }
 
-.app-week-step__title {
-  margin: 0.2rem 0 0;
+.app-week-guide__name {
   font-size: 1rem;
   font-weight: 900;
-  text-transform: uppercase;
   letter-spacing: 0.02em;
 }
 
-.app-week-step__body {
-  margin: 0.35rem 0 0;
+.app-week-guide__how {
+  margin: 0.15rem 0 0;
   font-size: 0.8rem;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .app-stat-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
   gap: 0.75rem;
-}
-
-@media (min-width: 640px) {
-  .app-stat-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 1024px) {
-  .app-stat-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
 }
 
 .app-stat {
@@ -1872,6 +1921,58 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   color: var(--deep-navy);
   font-size: 0.8rem;
   font-weight: 700;
+}
+
+.app-ai-select-wrap--compact {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.email-studio-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.email-studio-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  flex: 1;
+}
+
+@media (min-width: 1280px) {
+  .email-studio-layout {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .email-studio-contacts {
+    max-width: 280px;
+  }
+
+  .email-studio-generator {
+    max-width: 26rem;
+  }
+
+  .email-studio-main {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+}
+
+.studio-generate-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.studio-generate-row__go {
+  flex: 1 1 10rem;
+  min-width: 0;
 }
 
 .app-auth-loading {

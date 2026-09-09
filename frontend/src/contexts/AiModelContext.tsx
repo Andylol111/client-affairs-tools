@@ -4,6 +4,7 @@ import {
   AI_MODEL_STORAGE_KEY,
   DEFAULT_AI_MODEL_ID,
   FALLBACK_AI_GROUPS,
+  catalogModelIds,
   type AiModelGroup,
 } from '../lib/aiModels';
 
@@ -19,19 +20,37 @@ export function AiModelProvider({ children }: { children: ReactNode }) {
   const [groups, setGroups] = useState<AiModelGroup[]>(FALLBACK_AI_GROUPS);
   const [modelId, setModelIdState] = useState(() => {
     try {
-      return localStorage.getItem(AI_MODEL_STORAGE_KEY) || DEFAULT_AI_MODEL_ID;
+      const stored = localStorage.getItem(AI_MODEL_STORAGE_KEY);
+      if (stored && catalogModelIds(FALLBACK_AI_GROUPS).has(stored)) return stored;
     } catch {
-      return DEFAULT_AI_MODEL_ID;
+      /* ignore */
     }
+    return DEFAULT_AI_MODEL_ID;
   });
 
   useEffect(() => {
     api.ai
       .models()
       .then((res) => {
-        if (res.groups?.length) setGroups(res.groups);
-        if (res.default && !localStorage.getItem(AI_MODEL_STORAGE_KEY)) {
-          setModelIdState(res.default);
+        const nextGroups = res.groups?.length ? res.groups : FALLBACK_AI_GROUPS;
+        setGroups(nextGroups);
+        const ids = catalogModelIds(nextGroups);
+        let stored: string | null = null;
+        try {
+          stored = localStorage.getItem(AI_MODEL_STORAGE_KEY);
+        } catch {
+          stored = null;
+        }
+        if (stored && ids.has(stored)) {
+          setModelIdState(stored);
+          return;
+        }
+        const next = res.default && ids.has(res.default) ? res.default : DEFAULT_AI_MODEL_ID;
+        setModelIdState(next);
+        try {
+          localStorage.setItem(AI_MODEL_STORAGE_KEY, next);
+        } catch {
+          /* ignore */
         }
       })
       .catch(() => {});

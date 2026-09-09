@@ -17,7 +17,7 @@ const PHASE_TYPICAL: Record<string, string> = {
   domain: 'Site crawl: often 30 seconds–2 minutes depending on pages and latency.',
   web: 'Web search: Tavily scans LinkedIn, press, and directories (30–90 seconds).',
   linkedin: 'LinkedIn step: Apify runs about 1–3 minutes; public page fallback is faster but yields fewer people.',
-  prepare: 'Inbox + AI agent pools run in parallel (6 threaded Ollama agents by default).',
+  prepare: 'Inbox + AI agent pools run in parallel (6 threaded Bedrock agents by default).',
   save: 'Database save: quick unless you are upserting hundreds of rows.',
 };
 
@@ -551,7 +551,7 @@ export default function Scraper() {
     <div className="max-w-7xl mx-auto px-4 pb-12">
       <PageHeader
         title="Find"
-        subtitle="Crawl, LinkedIn, Tavily. AI review uses the model in the header."
+        subtitle="Crawl, LinkedIn, Tavily. Rank uses Haiku on Bedrock."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
 
@@ -930,7 +930,7 @@ export default function Scraper() {
           {showDiscoveryLog && discoveryLog.length > 0 && (
             <div className="border-t border-pale-sky px-5 py-4 bg-pale-sky/15 max-h-80 overflow-y-auto">
               <p className="text-[12px] font-semibold text-deep-navy mb-2">
-                Ollama audit log {scrapeRunId ? `· run ${scrapeRunId.slice(0, 8)}…` : ''}
+                AI audit log {scrapeRunId ? `· run ${scrapeRunId.slice(0, 8)}…` : ''}
               </p>
               <ul className="space-y-2">
                 {discoveryLog.map((e, i) => (

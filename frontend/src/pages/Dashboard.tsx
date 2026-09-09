@@ -14,27 +14,31 @@ const DEFAULT_DATA = {
 
 const WEEK = [
   {
-    n: '01',
+    n: '1',
+    door: 'Week',
     title: 'Cut the slate',
-    body: 'Pick this week’s companies from the prospect list.',
+    body: 'Open Week. Tick this week’s companies from the prospect list.',
     to: '/yucgoutreach',
   },
   {
-    n: '02',
+    n: '2',
+    door: 'Week',
     title: 'Comb addresses',
-    body: 'Mint inferred inboxes, Keep or Drop. Never a verified-inbox badge.',
+    body: 'Mint inferred inboxes, then Keep or Drop. Do not treat MX as a verified-inbox badge.',
     to: '/yucgoutreach',
   },
   {
-    n: '03',
+    n: '3',
+    door: 'Studio',
     title: 'Write',
-    body: 'Draft in Studio against kept people. Pick Opus → Haiku in the header.',
+    body: 'Open a kept person. Generate, edit, save. Pick Opus, Sonnet, or Haiku next to Generate.',
     to: '/studio',
   },
   {
-    n: '04',
+    n: '4',
+    door: 'Send',
     title: 'Release',
-    body: 'Pace Gmail. Pause lives in Send. Bounces are the ground truth.',
+    body: 'Pace Gmail from Campaigns. Pause lives in Send. Bounces are the ground truth.',
     to: '/campaigns',
   },
 ];
@@ -76,7 +80,7 @@ export default function Dashboard() {
     <div className="max-w-[1920px] mx-auto">
       <PageHeader
         title="Client affairs"
-        subtitle="One week: slate, comb, write, release. Yale undergraduate consulting — not a generic CRM."
+        subtitle="Slate, comb, write, release. One club week — not a generic CRM."
         imageSrc="/yucg-bg/hero-campus.jpg"
       />
       {apiError && (
@@ -85,15 +89,27 @@ export default function Dashboard() {
         </p>
       )}
 
-      <div className="app-week-steps mb-8">
-        {WEEK.map((step) => (
-          <Link key={step.n} to={step.to} className="app-week-step">
-            <div className="app-week-step__n">Step {step.n}</div>
-            <h2 className="app-week-step__title">{step.title}</h2>
-            <p className="app-week-step__body">{step.body}</p>
-          </Link>
-        ))}
-      </div>
+      <section className="app-week-guide mb-8" aria-labelledby="week-guide-title">
+        <h2 id="week-guide-title" className="app-week-guide__title">
+          How a week works
+        </h2>
+        <ol className="app-week-guide__list">
+          {WEEK.map((step) => (
+            <li key={step.n} className="app-week-guide__item">
+              <Link to={step.to} className="app-week-guide__link">
+                <span className="app-week-guide__n" aria-hidden="true">
+                  {step.n}
+                </span>
+                <span className="app-week-guide__copy">
+                  <span className="app-week-guide__door">{step.door}</span>
+                  <span className="app-week-guide__name">{step.title}</span>
+                  <span className="app-week-guide__how">{step.body}</span>
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ol>
+      </section>
 
       <div className="app-stat-grid mb-8">
         {cards.map((c) => (

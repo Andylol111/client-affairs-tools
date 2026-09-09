@@ -177,7 +177,7 @@ export default function CampaignDetail() {
               disabled={selectedIds.size === 0 || generating}
               className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
             >
-              {generating ? 'Generating With Ollama...' : 'Generate & Add'}
+              {generating ? 'Generating…' : 'Generate & Add'}
             </button>
           </div>
         </div>
