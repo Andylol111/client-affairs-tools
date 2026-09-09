@@ -8,7 +8,7 @@ CloudShell is on/off, secrets, and one-time AWS bootstrap. Same process as local
 
 ## GitHub Actions runners
 
-No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). `main` requires verify + `build-image`. Do not require `ship` on PRs. Repo Admins may **Bypass rules**.
+No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow (**verify and ship**): [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). `main` requires verify + `build-image`. Do not require `ship` on PRs. Repo Admins may **Bypass rules**.
 
 ## Modes (one template)
 
