@@ -1,6 +1,6 @@
 # develop: no gates. feature: tests. main: tests + image build, then ship.
-# Only PRs: develop → feature, feature → main (repo Admins can Bypass rules on a PR).
-# Do not cdk deploy YucgOutreach-dev — that replaces the instance.
+# Allowed PRs: develop → feature, develop → main, feature → main.
+# Other heads are blocked (repo Admins can Bypass rules). Do not cdk deploy YucgOutreach-dev.
 name: ci
 
 on:
@@ -28,16 +28,16 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: develop → feature → main
+      - name: Allowed branch pairs
         run: |
           set -euo pipefail
           base="${{ github.base_ref }}"
           head="${{ github.head_ref }}"
           echo "PR ${head} → ${base}"
-          if [ "$base" = "feature" ] && [ "$head" = "develop" ]; then exit 0; fi
-          if [ "$base" = "main" ] && [ "$head" = "feature" ]; then exit 0; fi
-          echo "Only develop → feature or feature → main"
-          echo "Repo Admins can still merge via Bypass rules on the PR."
+          if [ "$head" = "develop" ] && [ "$base" = "feature" ]; then exit 0; fi
+          if [ "$head" = "develop" ] && [ "$base" = "main" ]; then exit 0; fi
+          if [ "$head" = "feature" ] && [ "$base" = "main" ]; then exit 0; fi
+          echo "Use develop or feature. Random branches cannot target feature/main."
           exit 1
 
   verify-backend:
@@ -148,3 +148,12 @@ jobs:
             }' > /tmp/ssm-send.json
           CMD_ID="$(aws ssm send-command --cli-input-json file:///tmp/ssm-send.json --query Command.CommandId --output text)"
           aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$ID"
+
+  sync-feature:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: git push origin HEAD:refs/heads/feature
