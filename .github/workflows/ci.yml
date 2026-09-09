@@ -1,5 +1,5 @@
 # develop: no gates. feature: tests. main: tests + image build, then ship.
-# Only PRs: develop → feature, feature → main.
+# Only PRs: develop → feature, feature → main (repo Admins can Bypass rules on a PR).
 # Do not cdk deploy YucgOutreach-dev — that replaces the instance.
 name: ci
 
@@ -37,6 +37,7 @@ jobs:
           if [ "$base" = "feature" ] && [ "$head" = "develop" ]; then exit 0; fi
           if [ "$base" = "main" ] && [ "$head" = "feature" ]; then exit 0; fi
           echo "Only develop → feature or feature → main"
+          echo "Repo Admins can still merge via Bypass rules on the PR."
           exit 1
 
   verify-backend:
