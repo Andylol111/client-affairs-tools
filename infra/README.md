@@ -2,13 +2,13 @@
 
 One HTTPS `AppUrl` (CloudFront) in front of the club app. **Nothing ships from a laptop.**
 
-**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `feature` (tests). PR `feature` → `main` (tests + Docker build). Live AppUrl updates when `main` moves (`ship` in [`ci.yml`](../.github/workflows/ci.yml), OIDC). You cannot merge straight to `main` unless a repo **Admin** uses **Bypass rules** on that PR (Write cannot).
+**Branches (only these three):** push anything to `develop` (no required checks). PR `develop` → `feature` for a test-only hop, or PR `develop` → `main` when you want to ship (tests + Docker build, then `ship`). `feature` → `main` also ships. Random other heads are blocked. Repo **Admins** can **Bypass rules** on a PR. After `main` moves, `feature` is fast-forwarded to match.
 
 CloudShell is on/off, secrets, and one-time AWS bootstrap. Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite on a retained 8 GB volume. No ALB, no Amplify, no NAT. Do not set `VITE_API_URL`.
 
 ## GitHub Actions runners
 
-No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Rulesets on `feature` and `main` require the sequence; repo Admins may **Bypass rules** on a PR. Do not require `ship` on PRs.
+No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. One workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). `main` requires verify + `build-image`. Do not require `ship` on PRs. Repo Admins may **Bypass rules**.
 
 ## Modes (one template)
 
@@ -86,8 +86,8 @@ No SSH. Session Manager if the box is up and sick. After a secret change: Sessio
 ## Ship a website change (no laptop)
 
 1. Push to `develop`.
-2. PR `develop` → `feature`. Wait for verify.
-3. PR `feature` → `main`. Wait for verify + `build-image`. Merge. The `ci` run on `main` continues to `ship`.
+2. Open `develop` → `main`. Wait for verify + `build-image`. Merge. `ship` runs on `main`.
+3. Optional: `develop` → `feature` first if you only want tests.
 
 ### Replace CodeBuild with Actions ship (CloudShell, once)
 
