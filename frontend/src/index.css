@@ -1874,20 +1874,6 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   font-weight: 700;
 }
 
-.app-ai-select--header {
-  max-width: 14rem;
-  font-size: 0.7rem;
-  padding: 0.35rem 0.5rem;
-  text-transform: none;
-  font-weight: 600;
-}
-
-@media (min-width: 1024px) {
-  .app-shell-header-actions .app-ai-select-wrap {
-    display: flex;
-  }
-}
-
 .app-auth-loading {
   min-height: 100vh;
   display: flex;
