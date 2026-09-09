@@ -1,8 +1,6 @@
 """
 Auth API - Google OAuth 2.0 + JWT
 """
-import hashlib
-import hmac
 import logging
 import os
 import secrets
@@ -30,73 +28,105 @@ GOOGLE_REDIRECT_URI = (
 FRONTEND_URL = (os.getenv("FRONTEND_URL") or "http://localhost:5173").strip()
 
 
-def _oauth_state_signing_key() -> bytes:
-    """HMAC key for OAuth `state` — must be stable across workers/restarts (unlike in-memory state)."""
-    raw = (os.getenv("OAUTH_STATE_SECRET") or JWT_SECRET or GOOGLE_CLIENT_SECRET or "").strip()
-    if not raw:
-        raw = "dev-oauth-state-not-for-production"
-        logger.warning(
-            "OAUTH_STATE_SECRET, JWT_SECRET, and GOOGLE_CLIENT_SECRET are unset; using insecure OAuth state signing. "
-            "Set JWT_SECRET (or OAUTH_STATE_SECRET) in backend/.env."
-        )
-    return raw.encode("utf-8")
-
-
-def _generate_oauth_state() -> str:
-    nonce = secrets.token_urlsafe(24)
-    sig = hmac.new(_oauth_state_signing_key(), nonce.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{nonce}.{sig}"
-
-
-def _verify_oauth_state(state: str | None) -> bool:
-    if not state or "." not in state:
-        return False
-    nonce, sig = state.split(".", 1)
-    if len(nonce) < 8 or len(sig) < 32:
-        return False
-    expected = hmac.new(_oauth_state_signing_key(), nonce.encode("utf-8"), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(sig, expected)
+async def _start_oauth(purpose: str = "identity", user_id: int | None = None, invitation: str | None = None):
+    import time
+    from app.routers.invitations import digest
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(503, "Google sign-in is not configured")
+    state, browser = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    db = await get_db()
+    try:
+        invite_id = None
+        if invitation:
+            row = await (await db.execute("SELECT id FROM membership_invitations WHERE token_hash=? AND state='pending' AND expires_at>?", (digest(invitation),int(time.time())))).fetchone()
+            if not row:
+                raise HTTPException(400, "Invitation expired, revoked or already accepted")
+            invite_id = row["id"]
+        await db.execute("DELETE FROM oauth_challenges WHERE expires_at<=?", (int(time.time()),))
+        await db.execute("INSERT INTO oauth_challenges(state_hash,browser_hash,purpose,user_id,invitation_id,expires_at) VALUES (?,?,?,?,?,?)", (digest(state),digest(browser),purpose,user_id,invite_id,int(time.time())+600))
+        await db.commit()
+    finally:
+        await db.close()
+    scope = "openid email profile"
+    if purpose == "gmail":
+        scope += " https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly"
+    params = {"client_id":GOOGLE_CLIENT_ID,"redirect_uri":GOOGLE_REDIRECT_URI,
+              "response_type":"code","scope":scope,"state":state}
+    if purpose == "gmail":
+        params.update(access_type="offline",prompt="consent")
+    response = RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    response.set_cookie("yucg_oauth_browser",browser,max_age=600,httponly=True,samesite="lax",secure=BACKEND_URL.startswith("https"),path="/api/auth")
+    return response
 
 
 @router.get("/google")
-async def google_login():
-    """Redirect to Google OAuth consent screen."""
-    if not GOOGLE_CLIENT_ID:
-        return RedirectResponse(url=f"{FRONTEND_URL}/login?error=oauth_not_configured")
-    state = _generate_oauth_state()
-    params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "openid email profile https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
-        "state": state,
-        "access_type": "offline",
-        "prompt": "consent",
-    }
-    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
-    return RedirectResponse(url=url)
+async def google_login(invitation: str | None = None):
+    return await _start_oauth(invitation=invitation)
+
+
+@router.get("/gmail/connect")
+async def connect_gmail(user: dict = Depends(get_current_user)):
+    # Return the URL and cookie together so fetch can initiate a browser-bound flow.
+    from fastapi.responses import JSONResponse
+    redirect = await _start_oauth("gmail", user["id"])
+    response = JSONResponse({"redirect_url":redirect.headers["location"]})
+    response.headers.append("set-cookie",redirect.headers["set-cookie"])
+    return response
+
+
+@router.get("/gmail/status")
+async def gmail_status(user: dict = Depends(get_current_user)):
+    db = await get_db()
+    try:
+        row = await (await db.execute("SELECT access_token,refresh_token FROM users WHERE id=?",(user["id"],))).fetchone()
+        return {"connected":bool(row and (row["access_token"] or row["refresh_token"]))}
+    finally:
+        await db.close()
+
+
+@router.delete("/gmail/disconnect")
+async def disconnect_gmail(user: dict = Depends(get_current_user)):
+    db = await get_db()
+    try:
+        await db.execute("UPDATE users SET access_token=NULL,refresh_token=NULL,token_expires_at=NULL WHERE id=?",(user["id"],))
+        await db.execute("INSERT INTO audit_log(user_id,action,resource_type,resource_id,details) VALUES (?,'gmail_disconnect','user',?,'Disconnected Gmail locally')",(user["id"],str(user["id"])))
+        await db.commit()
+        return {"ok":True}
+    finally:
+        await db.close()
 
 
 @router.get("/google/callback")
-async def google_callback(code: str | None = None, state: str | None = None, error: str | None = None):
-    """Handle Google OAuth callback, create/find user, return JWT."""
-    if error:
-        return RedirectResponse(url=f"{FRONTEND_URL}/login?error={error}")
-    if not code or not _verify_oauth_state(state):
-        logger.warning(
-            "Invalid Google OAuth callback: bad or missing state (wrong secret, tampered URL, or very old link)."
-        )
-        return RedirectResponse(url=f"{FRONTEND_URL}/login?error=invalid_callback")
-
+async def google_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    import time
+    from app.routers.invitations import digest
+    browser = request.cookies.get("yucg_oauth_browser", "")
+    challenge = None
+    db = await get_db()
     try:
-        return await _do_google_callback(code)
-    except Exception as e:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute("SELECT * FROM oauth_challenges WHERE state_hash=? AND browser_hash=? AND expires_at>?",(digest(state or ""),digest(browser),int(time.time())))).fetchone()
+        if row and browser:
+            challenge = dict(row)
+            await db.execute("DELETE FROM oauth_challenges WHERE state_hash=?",(row["state_hash"],))
+        await db.commit()
+    finally:
+        await db.close()
+    if not challenge or not code or error:
+        return RedirectResponse(f"{FRONTEND_URL}/login?error=invalid_callback")
+    try:
+        response = await _do_google_callback(code, challenge)
+    except Exception:
         logger.exception("Google callback failed")
-        err_msg = str(e).replace(" ", "%20")[:80]
-        return RedirectResponse(url=f"{FRONTEND_URL}/login?error=callback_failed&detail={err_msg}")
+        response = RedirectResponse(f"{FRONTEND_URL}/login?error=callback_failed")
+    response.delete_cookie("yucg_oauth_browser",path="/api/auth")
+    return response
 
 
-async def _do_google_callback(code: str):
+async def _do_google_callback(code: str, challenge: dict | None = None):
+    challenge = challenge or {"purpose": "identity"}
     async with httpx.AsyncClient(timeout=15.0) as client:
         token_res = await client.post(
             "https://oauth2.googleapis.com/token",
@@ -136,10 +166,16 @@ async def _do_google_callback(code: str):
             return RedirectResponse(url=f"{FRONTEND_URL}/login?error=userinfo_failed")
 
         user_info = user_res.json()
-        email = user_info.get("email") or ""
+        email = (user_info.get("email") or "").strip().lower()
         name = user_info.get("name")
         picture = user_info.get("picture")
         google_id = user_info.get("id")
+
+        if user_info.get("verified_email") is not True:
+            return RedirectResponse(url=f"{FRONTEND_URL}/login?error=email_not_verified")
+
+        if not google_id:
+            return RedirectResponse(f"{FRONTEND_URL}/login?error=identity_missing")
 
         if not email:
             return RedirectResponse(url=f"{FRONTEND_URL}/login?error=no_email")
@@ -155,35 +191,49 @@ async def _do_google_callback(code: str):
     totp_secret = None
     db = await get_db()
     try:
+        await db.execute("BEGIN IMMEDIATE")
         cursor = await db.execute(
-            "SELECT id, email, name, picture, role, is_active, totp_secret FROM users WHERE google_id = ? OR email = ?",
-            (google_id, email),
+            "SELECT id, email, name, picture, google_id, role, is_active, totp_secret FROM users WHERE email = ?",
+            (email,),
         )
         row = await cursor.fetchone()
+        invitation = None
+        if challenge.get("invitation_id"):
+            import time
+            invitation = await (await db.execute("SELECT * FROM membership_invitations WHERE id=? AND email=? AND state='pending' AND expires_at>?", (challenge["invitation_id"],email,int(time.time())))).fetchone()
+            if not invitation:
+                return RedirectResponse(f"{FRONTEND_URL}/login?error=invitation_invalid")
         if row:
             row = row_to_dict(row)
-            if row.get("is_active") == 0:
-                return RedirectResponse(url=f"{FRONTEND_URL}/login?error=account_deactivated")
-            user_id = row["id"]
-            role = row.get("role") or "standard"
-            if refresh_token:
-                await db.execute(
-                    """UPDATE users SET name = ?, picture = ?, google_id = ?, access_token = ?, refresh_token = ?, token_expires_at = ? WHERE id = ?""",
-                    (name, picture, google_id, stored_access, stored_refresh, token_expires_at, user_id),
-                )
-            else:
-                await db.execute(
-                    "UPDATE users SET name = ?, picture = ?, google_id = ?, access_token = ?, token_expires_at = ? WHERE id = ?",
-                    (name, picture, google_id, stored_access, token_expires_at, user_id),
-                )
-        else:
-            cursor = await db.execute(
-                """INSERT INTO users (email, name, picture, google_id, access_token, refresh_token, token_expires_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, 'standard')""",
-                (email, name, picture, google_id, stored_access, stored_refresh, token_expires_at),
-            )
-            user_id = cursor.lastrowid
-            role = "standard"
+            if not row.get("is_active"):
+                return RedirectResponse(f"{FRONTEND_URL}/login?error=account_deactivated")
+            if row.get("google_id") and row["google_id"] != google_id:
+                return RedirectResponse(f"{FRONTEND_URL}/login?error=identity_mismatch")
+            user_id, role = row["id"], row.get("role") or "standard"
+        elif invitation and challenge["purpose"] == "identity":
+            cursor = await db.execute("INSERT INTO users(email,name,role,google_id,picture) VALUES (?,?,?,?,?)",(email,name,'standard',google_id,picture))
+            user_id, role = cursor.lastrowid, 'standard'
             row = None
+        else:
+            return RedirectResponse(f"{FRONTEND_URL}/login?error=invitation_required")
+        if challenge["purpose"] == "gmail":
+            if challenge.get("user_id") != user_id:
+                return RedirectResponse(f"{FRONTEND_URL}/profile?error=gmail_account_mismatch")
+            required = {"https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"}
+            if not required.issubset(set(tokens.get("scope", "").split())):
+                return RedirectResponse(f"{FRONTEND_URL}/profile?error=gmail_scopes_required")
+            await db.execute("UPDATE users SET access_token=?,refresh_token=COALESCE(?,refresh_token),token_expires_at=? WHERE id=?",(stored_access,stored_refresh,token_expires_at,user_id))
+        await db.execute("UPDATE users SET name=?,picture=?,google_id=? WHERE id=?",(name,picture,google_id,user_id))
+        if invitation:
+            import json
+            import time
+            for project_id in json.loads(invitation["project_ids"]):
+                await db.execute("INSERT OR IGNORE INTO user_project_assignments(user_id,project_id,role_in_project) VALUES (?,?,'member')",(user_id,project_id))
+            await db.execute("UPDATE membership_invitations SET state='accepted',accepted_at=?,accepted_user_id=? WHERE id=?",(int(time.time()),user_id,invitation["id"]))
+        if invitation:
+            await db.execute("INSERT INTO audit_log(user_id,action,resource_type,resource_id,details) VALUES (?,'invitation_accept','invitation',?,'Verified invited Google identity accepted membership')",(user_id,str(invitation['id'])))
+        if challenge["purpose"] == "gmail":
+            await db.execute("INSERT INTO audit_log(user_id,action,resource_type,resource_id,details) VALUES (?,'gmail_connect','user',?,'Connected own verified Google account')",(user_id,str(user_id)))
         totp_secret = (row or {}).get("totp_secret")
         await db.execute(
             "INSERT INTO login_log (user_id, email, name) VALUES (?, ?, ?)",
@@ -192,6 +242,9 @@ async def _do_google_callback(code: str):
         await db.commit()
     finally:
         await db.close()
+
+    if challenge["purpose"] == "gmail":
+        return RedirectResponse(f"{FRONTEND_URL}/profile?tab=integrations")
 
     if totp_secret:
         pending = create_token(user_id, email, name, picture, role, extra={"2fa": "pending"}, expiry_hours=0.25)
@@ -246,7 +299,7 @@ async def complete_2fa_login(payload: TwoFactorLogin, request: Request):
     user_id = int(decoded["sub"])
     db = await get_db()
     try:
-        cur = await db.execute("SELECT totp_secret, email, name, picture, role FROM users WHERE id = ?", (user_id,))
+        cur = await db.execute("SELECT totp_secret, email, name, picture, role FROM users WHERE id = ? AND is_active=1", (user_id,))
         row = row_to_dict(await cur.fetchone())
     finally:
         await db.close()

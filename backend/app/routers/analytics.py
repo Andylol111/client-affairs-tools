@@ -32,13 +32,13 @@ async def get_dashboard():
         )
         active_campaigns = (await cursor.fetchone())["count"]
 
-        # Sent / opened / replied (mock for MVP - can add tracking later)
+        # Keep sent messages in totals after reply or bounce status changes.
         cursor = await db.execute(
             """SELECT 
                  COUNT(*) as total_sent,
                  SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
                  SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) as replied
-               FROM campaign_contacts WHERE status = 'sent'"""
+               FROM campaign_contacts WHERE sent_at IS NOT NULL"""
         )
         row = await cursor.fetchone()
         total_sent = row["total_sent"] or 0
@@ -69,7 +69,7 @@ async def get_campaign_metrics(campaign_id: int):
         cursor = await db.execute(
             """SELECT 
                  COUNT(*) as total,
-                 SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent,
+                 SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) as sent,
                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
                  SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
                  SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) as replied
@@ -143,7 +143,7 @@ async def get_time_series(days: int = 30):
                  SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
                  SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) as replied
                FROM campaign_contacts
-               WHERE status = 'sent' AND sent_at IS NOT NULL AND date(sent_at) >= date('now', '-{days} days')
+               WHERE sent_at IS NOT NULL AND date(sent_at) >= date('now', '-{days} days')
                GROUP BY date(sent_at)
                ORDER BY d"""
         )
@@ -181,7 +181,7 @@ async def export_analytics_csv():
             """SELECT COUNT(*) as total_sent,
                  SUM(CASE WHEN opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
                  SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) as replied
-               FROM campaign_contacts WHERE status = 'sent'"""
+               FROM campaign_contacts WHERE sent_at IS NOT NULL"""
         )
         row = await cursor.fetchone()
         total_sent = row["total_sent"] or 0

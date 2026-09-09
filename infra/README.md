@@ -12,11 +12,9 @@ Stack: `YucgOutreach-dev` in `us-east-1`. Image: `docker/app.Dockerfile`. SQLite
 
 Repo **Settings → Actions → General**: allow GitHub-hosted runners. Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
-- `develop` — no required checks
-- PR to `main` — `verify-backend`, `verify-frontend`, `verify-infra`, `gate-branch`, `build-image`
-- Merge to `main` — `ship` (needs `AWS_SHIP_ROLE_ARN`)
+The local workflow now runs validation on topic PRs and pushes, with `required-checks` as the aggregate gate. Configure required review and this check in repository settings; the old `gate-branch` check was removed. Production jobs reference the `production` environment, which must have verified reviewers and main-only deployment rules.
 
-OIDC role is `yucg-github-ship-dev` (stack `YucgGithubOidc-dev`). It may assume only `repo:…:ref:refs/heads/main`. If `cdk deploy YucgGithubOidc-dev` fails because the GitHub OIDC provider already exists, import or reuse that provider.
+The proposed ship-role trust expects `repo:Andylol111/client-affairs-tools:environment:production`. Verify and review the deployed IAM trust before shipping; do not assume the local CDK change has been applied. See [current implementation status](../docs/IMPLEMENTATION-STATUS.md) and [live cutover checks](../docs/LIVE-CUTOVER-CHECKS.md).
 
 ## On / off (CloudShell)
 
@@ -66,11 +64,7 @@ cd /tmp/yucg && git pull
 aws s3 cp data/YUCG_Prospect_List.xlsx "s3://$BUCKET/prospects/current.xlsx"
 ```
 
-SQLite backup (instance up, role can write the catalog bucket):
-
-```bash
-aws s3 cp /data/clientreach.db "s3://$BUCKET/exports/clientreach-$(date +%F).db"
-```
+For SQLite backups, use `infra/scripts/backup_sqlite.py` for an online consistent snapshot and isolated restore rehearsal. Do not copy only the running `.db` file: WAL transactions may be omitted. The optional approved S3 upload and timer sequence is documented in [Terraform operations](../terraform/README.md#opt-in-operational-scripts).
 
 ## First box (rare)
 

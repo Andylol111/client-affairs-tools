@@ -7,7 +7,7 @@ aiosqlite>=0.19
 python-multipart>=0.0.9
 pydantic>=2.10
 pydantic-settings>=2.6
-aiosmtplib==3.0.2
+aiosmtplib==5.1.2
 dnspython==2.6.1
 validators==0.22.0
 apify-client>=1.6

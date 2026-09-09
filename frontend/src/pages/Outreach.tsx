@@ -1,12 +1,15 @@
+import type { Contact, Template, Sequence, PipelineMetrics, ContactNote, ContactActivity, ContactProfile, Worklist } from '../api';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
 import PageHeader from '../components/PageHeader';
+import TrackingSync from '../components/TrackingSync';
+import { useUrlTab } from '../lib/useUrlTab';
 
 const PIPELINE_STATUSES = ['cold', 'contacted', 'replied', 'meeting', 'closed'];
 
-function groupContactsByCompany(contacts: any[]): { company: string; contacts: any[] }[] {
-  const byCompany = new Map<string, any[]>();
+function groupContactsByCompany(contacts: Contact[]): { company: string; contacts: Contact[] }[] {
+  const byCompany = new Map<string, Contact[]>();
   for (const c of contacts) {
     const key = (c.company || '').trim() || 'No company';
     if (!byCompany.has(key)) byCompany.set(key, []);
@@ -18,7 +21,7 @@ function groupContactsByCompany(contacts: any[]): { company: string; contacts: a
 }
 
 function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect, onUpdatePipeline, draggable }: {
-  c: any; selectedContact: any; selectedIds: Set<number>; onSelect: (c: any) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
+  c: Contact; selectedContact: Contact | null; selectedIds: Set<number>; onSelect: (c: Contact) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
 }) {
   return (
     <div
@@ -62,7 +65,7 @@ function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect
 }
 
 function CompanyFolder({ company, contacts, selectedContact, selectedIds, onSelect, onToggleSelect, onUpdatePipeline, draggable }: {
-  company: string; contacts: any[]; selectedContact: any; selectedIds: Set<number>; onSelect: (c: any) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
+  company: string; contacts: Contact[]; selectedContact: Contact | null; selectedIds: Set<number>; onSelect: (c: Contact) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   return (
@@ -87,16 +90,17 @@ function CompanyFolder({ company, contacts, selectedContact, selectedIds, onSele
 }
 
 export default function Outreach() {
-  const [activeTab, setActiveTab] = useState<'pipeline' | 'campaigns' | 'priorities' | 'templates' | 'sequences'>('pipeline');
+  const [activeTab, setActiveTab] = useUrlTab<'pipeline' | 'worklists' | 'resources'>(['pipeline', 'worklists', 'resources'], 'pipeline');
   const [groupByCompany, setGroupByCompany] = useState(false);
-  const [contacts, setContacts] = useState<any[]>([]);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [sequences, setSequences] = useState<any[]>([]);
-  const [pipelineMetrics, setPipelineMetrics] = useState<any>(null);
-  const [selectedContact, setSelectedContact] = useState<any>(null);
-  const [notes, setNotes] = useState<any[]>([]);
-  const [activities, setActivities] = useState<any[]>([]);
-  const [profile, setProfile] = useState<any>(null);
+  const [mobileStatus, setMobileStatus] = useState('cold');
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [sequences, setSequences] = useState<Sequence[]>([]);
+  const [pipelineMetrics, setPipelineMetrics] = useState<PipelineMetrics | null>(null);
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [notes, setNotes] = useState<ContactNote[]>([]);
+  const [activities, setActivities] = useState<ContactActivity[]>([]);
+  const [profile, setProfile] = useState<ContactProfile | null>(null);
   const [newNote, setNewNote] = useState('');
   const [newActivityType, setNewActivityType] = useState('email_sent');
   const [newActivityDetails, setNewActivityDetails] = useState('');
@@ -104,10 +108,10 @@ export default function Outreach() {
   const [templateForm, setTemplateForm] = useState({ name: '', subject: '', body: '', industry: '', use_case: '' });
   const [sequenceForm, setSequenceForm] = useState({ name: '', steps: [{ days_after: 3, subject: '', body: '' }] });
   const [loading, setLoading] = useState(false);
-  const [outreachCampaigns, setOutreachCampaigns] = useState<any[]>([]);
+  const [outreachCampaigns, setOutreachCampaigns] = useState<Worklist[]>([]);
   const [campaignForm, setCampaignForm] = useState({ name: '', type: 'individual' as 'community' | 'individual', description: '' });
-  const [selectedCampaign, setSelectedCampaign] = useState<any>(null);
-  const [campaignContacts, setCampaignContacts] = useState<any[]>([]);
+  const [selectedCampaign, setSelectedCampaign] = useState<Worklist | null>(null);
+  const [campaignContacts, setCampaignContacts] = useState<Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
   const [contactPipelineFilter, setContactPipelineFilter] = useState<string>('');
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
@@ -116,15 +120,15 @@ export default function Outreach() {
   const [inboxSyncBanner, setInboxSyncBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const refreshContactsAndMetrics = async () => {
-    const params: { q?: string; pipeline_status?: string } = {};
+    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 200 };
     if (contactSearch.trim()) params.q = contactSearch.trim();
     if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
     try {
-      const [list, metrics] = await Promise.all([
+      const [page, metrics] = await Promise.all([
         api.contacts.list(params),
         api.outreach.pipelineMetrics(),
       ]);
-      setContacts(list);
+      setContacts(page.items);
       setPipelineMetrics(metrics);
     } catch {
       setContacts([]);
@@ -133,10 +137,21 @@ export default function Outreach() {
   };
 
   useEffect(() => {
-    const params: { q?: string; pipeline_status?: string } = {};
+    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 200 };
     if (contactSearch.trim()) params.q = contactSearch.trim();
     if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
-    api.contacts.list(params).then(setContacts).catch(() => setContacts([]));
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      api.contacts.list(params, controller.signal)
+        .then((page) => setContacts(page.items))
+        .catch((error) => {
+          if (!(error instanceof DOMException && error.name === 'AbortError')) setContacts([]);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [contactSearch, contactPipelineFilter]);
 
   useEffect(() => {
@@ -176,7 +191,7 @@ export default function Outreach() {
       setContacts((prev) =>
         prev.map((c) => (c.id === contactId ? { ...c, pipeline_status: status } : c))
       );
-      if (selectedContact?.id === contactId) setSelectedContact((p: any) => (p ? { ...p, pipeline_status: status } : null));
+      if (selectedContact?.id === contactId) setSelectedContact((p: Contact | null) => (p ? { ...p, pipeline_status: status } : null));
     } catch (e) {
       alert((e as Error)?.message || 'Failed');
     }
@@ -216,6 +231,10 @@ export default function Outreach() {
             ? 'Sign in with Google. If you signed in before inbox sync existed, sign out and sign in again so the app can request inbox read access.'
             : r.message || 'Sync failed.';
         setInboxSyncBanner({ type: 'err', text: msg });
+        return;
+      }
+      if (r.in_progress) {
+        setInboxSyncBanner({ type: 'ok', text: 'Gmail sync started. Tracking will update when it finishes.' });
         return;
       }
       await refreshContactsAndMetrics();
@@ -277,10 +296,10 @@ export default function Outreach() {
       const res = await api.contacts.bulkDelete(ids);
       setSelectedContactIds(new Set());
       if (selectedContact?.id && ids.includes(selectedContact.id)) setSelectedContact(null);
-      const params: { q?: string; pipeline_status?: string } = {};
+      const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 200 };
       if (contactSearch.trim()) params.q = contactSearch.trim();
       if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
-      api.contacts.list(params).then(setContacts).catch(() => setContacts([]));
+      api.contacts.list(params).then((page) => setContacts(page.items)).catch(() => setContacts([]));
       if (res.skipped > 0) {
         alert(`Deleted ${res.deleted}. ${res.skipped} skipped (not allowed or missing).`);
       } else {
@@ -374,10 +393,11 @@ export default function Outreach() {
   };
 
   return (
-    <div className="w-full max-w-[1920px] mx-auto">
+    <div className="app-workspace w-full max-w-[1920px]">
+      <TrackingSync onSynced={refreshContactsAndMetrics} />
       <PageHeader
         title="Pipeline"
-        subtitle="Cold through closed. Follow-ups use the same send drain."
+        subtitle="Track relationships from first contact through completed engagements."
         imageSrc="/yucg-bg/pauli-murray-tower.jpg"
       />
 
@@ -385,31 +405,23 @@ export default function Outreach() {
         <AppTabMenu
           tabs={[
             { id: 'pipeline', label: 'Pipeline' },
-            { id: 'campaigns', label: 'Campaigns' },
-            { id: 'priorities', label: 'Club Priorities' },
-            { id: 'templates', label: 'Templates' },
-            { id: 'sequences', label: 'Sequences' },
+            { id: 'worklists', label: 'Worklists' },
+            { id: 'resources', label: 'Email resources' },
           ]}
           active={activeTab}
           onChange={(id) => setActiveTab(id as typeof activeTab)}
+          label="Pipeline views"
         />
-        {activeTab === 'templates' && (
+        {activeTab === 'resources' && (
           <p className="app-tab-panel text-sm text-slate-600 dark:text-slate-400">
-            <strong className="text-deep-navy dark:text-slate-200">Templates</strong> store reusable subject and body snippets you can paste or adapt in Email Studio and campaigns.
-            Prioritize a small set of sharp, role-specific templates over dozens of generic ones; keep subjects under ~60 characters and lead with one clear ask.
-          </p>
-        )}
-        {activeTab === 'sequences' && (
-          <p className="app-tab-panel text-sm text-slate-600 dark:text-slate-400">
-            <strong className="text-deep-navy dark:text-slate-200">Sequences (follow-ups)</strong> are timed steps after the first send: each step waits <em>days after the previous message</em> and only goes to contacts who have not replied.
-            Priority is to stay polite and spaced out—use sequences to nudge, not to spam; pair them with inbox sync so replied contacts drop out automatically.
+            Templates hold reusable copy. Sequences schedule polite follow-ups for contacts who have not replied.
           </p>
         )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: List (or full-width pipeline/priorities board) */}
-        <div className={activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : activeTab === 'campaigns' ? 'lg:col-span-2 space-y-4' : 'lg:col-span-1 space-y-4'}>
+        {/* List or full-width pipeline board */}
+        <div className={activeTab === 'pipeline' ? 'lg:col-span-3' : activeTab === 'worklists' ? 'lg:col-span-2 space-y-4' : 'lg:col-span-1 space-y-4'}>
           {activeTab === 'pipeline' && (
             <div className="space-y-6">
               <div className="flex flex-wrap items-center gap-3">
@@ -462,6 +474,18 @@ export default function Outreach() {
                   {pipelineSortBusy ? 'Sorting…' : 'Auto-sort pipeline'}
                 </button>
               </div>
+              <label className="md:hidden flex items-center gap-2 text-sm font-medium text-deep-navy">
+                Stage
+                <select
+                  value={mobileStatus}
+                  onChange={(event) => setMobileStatus(event.target.value)}
+                  className="min-h-11 flex-1 rounded-lg border border-[var(--border)] bg-white px-3"
+                >
+                  {PIPELINE_STATUSES.map((status) => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+              </label>
               {inboxSyncBanner && (
                 <p
                   className={`text-sm rounded-lg px-3 py-2 border ${
@@ -507,14 +531,14 @@ export default function Outreach() {
                 </div>
               )}
               {/* Full-width Kanban-style pipeline board */}
-              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 min-h-[420px]">
+              <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 min-h-[420px]">
                 {PIPELINE_STATUSES.map((status) => {
                   const inStatus = contacts.filter((c) => (c.pipeline_status || 'cold') === status);
-                  const count = pipelineMetrics?.by_status?.find((s: any) => s.pipeline_status === status)?.count ?? inStatus.length;
+                  const count = pipelineMetrics?.by_status?.find((s) => s.pipeline_status === status)?.count ?? inStatus.length;
                   return (
                     <div
                       key={status}
-                      className="surface-card rounded-xl flex flex-col overflow-hidden shadow-sm"
+                      className={`${status === mobileStatus ? 'flex' : 'hidden'} md:flex surface-card rounded-xl flex-col overflow-hidden shadow-sm`}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={handleColumnDrop(status)}
                     >
@@ -524,7 +548,7 @@ export default function Outreach() {
                           {count}
                         </span>
                       </div>
-                      <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-[320px]">
+                      <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-[320px] max-h-[60vh]">
                         {groupByCompany ? (
                           groupContactsByCompany(inStatus).map(({ company, contacts: companyContacts }) => (
                             <CompanyFolder
@@ -563,11 +587,11 @@ export default function Outreach() {
               </div>
             </div>
           )}
-          {activeTab === 'campaigns' && (
+          {activeTab === 'worklists' && (
             <div className="surface-card rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4 w-full">
               <h3 className="font-semibold text-deep-navy">Outreach work lists</h3>
               <p className="text-sm text-slate-600">
-                CRM work lists (who is on which effort). Mail send lives in Studio → Send — these rows are not the send ledger.
+                Organize contacts into shared or personal worklists. Prepare emails in Drafts and track sending in Campaigns.
               </p>
               <div className="flex gap-2 flex-wrap">
                 <input
@@ -634,64 +658,7 @@ export default function Outreach() {
               </div>
             </div>
           )}
-          {activeTab === 'priorities' && (
-            <div className="surface-card rounded-xl p-6 shadow-sm">
-              <h2 className="text-xl font-semibold text-deep-navy mb-2">Club Priorities & Communities</h2>
-              <p className="text-sm text-slate-600 mb-6">
-                What everyone is working on. Author = Google account. Community = institution focus; Individual = member outreach.
-              </p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-[600px]">
-                  <thead>
-                    <tr className="border-b border-pale-sky">
-                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Campaign</th>
-                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Author</th>
-                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Focus</th>
-                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Type</th>
-                      <th className="text-left py-3 px-3 font-semibold text-deep-navy">Contacts</th>
-                      <th className="text-left py-3 px-3 font-semibold text-deep-navy"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {outreachCampaigns.map((oc) => (
-                      <tr
-                        key={oc.id}
-                        className="border-b border-pale-sky/50 hover:bg-pale-sky/5"
-                      >
-                        <td className="py-3 px-3 font-medium text-slate-800">{oc.name}</td>
-                        <td className="py-3 px-3 text-slate-600">
-                          {oc.type === 'community'
-                            ? 'Community'
-                            : (oc.owner_email || oc.owner_name || '—')}
-                        </td>
-                        <td className="py-3 px-3 text-slate-600 max-w-[280px]" title={oc.description || ''}>
-                          {oc.description || '—'}
-                        </td>
-                        <td className="py-3 px-3">
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${oc.type === 'community' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
-                            {oc.type}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-slate-500">{oc.contact_count ?? 0}</td>
-                        <td className="py-3 px-3">
-                          <button
-                            onClick={() => { setSelectedCampaign(oc); setActiveTab('campaigns'); }}
-                            className="text-xs text-[var(--accent)] hover:underline font-medium"
-                          >
-                            View →
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {outreachCampaigns.length === 0 && (
-                  <p className="text-slate-500 text-sm py-8 text-center">No campaigns yet. Create one in the Campaigns tab.</p>
-                )}
-              </div>
-            </div>
-          )}
-          {activeTab === 'templates' && (
+          {activeTab === 'resources' && (
             <div className="surface-card rounded-xl p-4 max-h-96 overflow-y-auto">
               <h3 className="font-semibold text-deep-navy mb-1">Templates</h3>
               <p className="text-xs text-slate-600 mb-3 leading-relaxed">
@@ -722,7 +689,7 @@ export default function Outreach() {
               ))}
             </div>
           )}
-          {activeTab === 'sequences' && (
+          {activeTab === 'resources' && (
             <div className="surface-card rounded-xl p-4 max-h-96 overflow-y-auto">
               <h3 className="font-semibold text-deep-navy mb-1">Sequences (follow-ups)</h3>
               <p className="text-xs text-slate-600 mb-3 leading-relaxed">
@@ -738,9 +705,9 @@ export default function Outreach() {
           )}
         </div>
 
-        {/* Right: Detail / Form */}
-        <div className={`${activeTab === 'pipeline' || activeTab === 'priorities' ? 'lg:col-span-3' : activeTab === 'campaigns' ? 'lg:col-span-1' : 'lg:col-span-2'} space-y-6`}>
-          {activeTab === 'campaigns' && selectedCampaign && (
+        {/* Detail or editor */}
+        <div className={`${activeTab === 'pipeline' ? 'lg:col-span-3' : activeTab === 'worklists' ? 'lg:col-span-1' : 'lg:col-span-2'} space-y-6`}>
+          {activeTab === 'worklists' && selectedCampaign && (
             <div className="surface-card rounded-xl p-6">
               <div className="flex justify-between items-start mb-4">
                 <div>
@@ -825,7 +792,7 @@ export default function Outreach() {
               </div>
             </div>
           )}
-          {activeTab === 'campaigns' && !selectedCampaign && (
+          {activeTab === 'worklists' && !selectedCampaign && (
             <div className="surface-card rounded-xl p-12 text-center">
               <p className="text-slate-500">Select a campaign to view contacts and add more.</p>
             </div>
@@ -989,7 +956,7 @@ export default function Outreach() {
               </div>
             )
           )}
-          {activeTab === 'templates' && (
+          {activeTab === 'resources' && (
             <div className="surface-card rounded-xl p-6">
               <h3 className="font-semibold text-deep-navy mb-4">New Template</h3>
               <p className="text-sm text-slate-600 mb-4">
@@ -1031,7 +998,7 @@ export default function Outreach() {
               </div>
             </div>
           )}
-          {activeTab === 'sequences' && (
+          {activeTab === 'resources' && (
             <div className="surface-card rounded-xl p-6">
               <h3 className="font-semibold text-deep-navy mb-4">New Follow-up Sequence</h3>
               <p className="text-sm text-slate-600 mb-4">

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+from datetime import datetime, timezone
 import re
 from pathlib import Path
 from typing import Any
@@ -55,29 +57,41 @@ _DEFAULT_WEIGHTS = {
     "contact_type_match": 0.15,
 }
 
-_cache: dict[str, Any] = {"mtime": None, "rows": [], "path": None}
+_cache: dict[str, Any] = {
+    "mtime": None,
+    "rows": [],
+    "path": None,
+    "etag": None,
+    "source_updated_at": None,
+}
 
 
-def prospect_xlsx_path() -> Path:
-    import os
+def prospect_xlsx_path(*, force_refresh: bool = False) -> Path:
 
     env = (os.getenv("YUCG_PROSPECT_XLSX") or "").strip()
     if env:
         p = Path(env)
         return p if p.is_absolute() else _REPO_ROOT / env
     if (os.getenv("CATALOG_BUCKET") or "").strip():
-        return _xlsx_from_catalog()
+        return _xlsx_from_catalog(force_refresh=force_refresh)
     return DEFAULT_XLSX_PATH
 
 
-def _xlsx_from_catalog() -> Path:
+def _xlsx_from_catalog(*, force_refresh: bool = False) -> Path:
     cache = _REPO_ROOT / "data" / ".cache" / "current.xlsx"
     cache.parent.mkdir(parents=True, exist_ok=True)
-    if cache.exists():
+    if cache.exists() and not force_refresh:
         return cache
-    from app.services.object_catalog import get_bytes
+    from app.services.object_catalog import get_bytes, object_metadata
 
-    cache.write_bytes(get_bytes("prospects/current.xlsx"))
+    metadata = object_metadata("prospects/current.xlsx")
+    _cache["source_updated_at"] = metadata["updated"]
+    if cache.exists() and _cache.get("etag") == metadata["etag"]:
+        return cache
+    temporary = cache.with_suffix(".tmp")
+    temporary.write_bytes(get_bytes("prospects/current.xlsx"))
+    temporary.replace(cache)
+    _cache["etag"] = metadata["etag"]
     return cache
 
 
@@ -312,7 +326,7 @@ def invalidate_prospect_cache() -> None:
 
 
 def load_prospects(*, force_reload: bool = False) -> list[dict[str, Any]]:
-    path = prospect_xlsx_path()
+    path = prospect_xlsx_path(force_refresh=force_reload)
     mtime = path.stat().st_mtime if path.is_file() else None
     if (
         not force_reload
@@ -598,8 +612,14 @@ def prospects_meta() -> dict[str, Any]:
     rows = load_prospects()
     sectors = sorted({r["sector"] for r in rows if r.get("sector")})
     contact_types = sorted({r["contact_type"] for r in rows if r.get("contact_type")})
+    source_kind = "s3" if (os.getenv("CATALOG_BUCKET") or "").strip() and not (os.getenv("YUCG_PROSPECT_XLSX") or "").strip() else "file"
+    source_updated_at = _cache.get("source_updated_at")
+    if not source_updated_at and path.is_file():
+        source_updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
     return {
         "source_path": str(path),
+        "source_kind": source_kind,
+        "source_updated_at": source_updated_at,
         "source_exists": path.is_file(),
         "sheet": SHEET_NAME,
         "row_count": len(rows),

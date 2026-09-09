@@ -43,6 +43,19 @@ def get_bytes(key: str) -> bytes:
         raise RuntimeError("CATALOG_BUCKET is not set")
     return _client().get_object(Bucket=bucket, Key=key)["Body"].read()
 
+def object_metadata(key: str) -> dict[str, Any]:
+    """Return stable change metadata without downloading the object body."""
+    bucket = catalog_bucket()
+    if not bucket:
+        raise RuntimeError("CATALOG_BUCKET is not set")
+    obj = _client().head_object(Bucket=bucket, Key=key)
+    updated = obj.get("LastModified")
+    return {
+        "etag": str(obj.get("ETag") or "").strip('"'),
+        "size": int(obj.get("ContentLength") or 0),
+        "updated": updated.isoformat() if updated else None,
+    }
+
 
 def list_prefix(prefix: str, max_keys: int = 50) -> list[dict[str, Any]]:
     bucket = catalog_bucket()

@@ -16,29 +16,29 @@ const WEEK = [
   {
     n: '1',
     door: 'Week',
-    title: 'Cut the slate',
-    body: 'Open Week. Tick this week’s companies from the prospect list.',
+    title: 'Choose companies',
+    body: 'Choose this week’s companies from the prospect list.',
     to: '/yucgoutreach',
   },
   {
     n: '2',
     door: 'Week',
-    title: 'Comb addresses',
-    body: 'Mint inferred inboxes, then Keep or Drop. Do not treat MX as a verified-inbox badge.',
-    to: '/yucgoutreach',
+    title: 'Review contacts',
+    body: 'Review suggested addresses and keep relevant contacts. A working domain does not confirm a mailbox exists.',
+    to: '/yucgoutreach?view=comb',
   },
   {
     n: '3',
-    door: 'Studio',
+    door: 'Drafts',
     title: 'Write',
-    body: 'Open a kept person. Generate, edit, save. Pick Opus, Sonnet, or Haiku next to Generate.',
+    body: 'Select a contact, prepare an email, and save your draft.',
     to: '/studio',
   },
   {
     n: '4',
-    door: 'Send',
-    title: 'Release',
-    body: 'Pace Gmail from Campaigns. Pause lives in Send. Bounces are the ground truth.',
+    door: 'Campaigns',
+    title: 'Review and send',
+    body: 'Review your sender account and recipients in Campaigns. Monitor replies and delivery failures after sending.',
     to: '/campaigns',
   },
 ];
@@ -69,7 +69,7 @@ export default function Dashboard() {
 
   const cards = [
     { label: 'Found today', value: data.contacts_discovered_today ?? 0, to: '/scraper' },
-    { label: 'In queue', value: data.emails_in_queue ?? 0, to: '/studio' },
+    { label: 'In queue', value: data.emails_in_queue ?? 0, to: '/campaigns' },
     { label: 'Active sends', value: data.active_campaigns ?? 0, to: '/campaigns' },
     { label: 'Follow-ups due', value: dueFollowUps, to: '/campaigns' },
     { label: 'Sent', value: data.total_sent ?? 0, to: '/analytics' },
@@ -77,15 +77,17 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="max-w-[1920px] mx-auto">
+    <div className="app-workspace max-w-[1920px]">
       <PageHeader
-        title="Client affairs"
-        subtitle="Slate, comb, write, release. One club week — not a generic CRM."
+        hero
+        title="Home"
+        subtitle="Your club’s projects, contacts, and outreach activity in one place."
         imageSrc="/yucg-bg/hero-campus.jpg"
+        actions={<Link to="/yucgoutreach" className="ui-button ui-button--primary">Open this week</Link>}
       />
       {apiError && (
-        <p className="text-amber-800 text-sm mb-4">
-          API not responding. From the project folder run <code className="px-1 border border-pale-sky">./start-all.sh</code>
+        <p className="ui-notice ui-notice--warning mb-4">
+          Live metrics are temporarily unavailable. The work pages remain usable.
         </p>
       )}
 

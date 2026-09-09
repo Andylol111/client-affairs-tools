@@ -1,6 +1,6 @@
 """
 Follow-up sequence job: send due follow-up emails for campaigns that have a sequence attached.
-Run daily (e.g. via APScheduler or cron). Uses the sequence owner's Gmail to send.
+Run daily. Uses the explicitly bound original sender and durable step claims.
 
 Skips contacts who have already replied (replied_at set or status = 'replied'), so follow-ups
 only go to recipients who have not responded. Replies can be recorded via the mark-replied API
@@ -16,13 +16,13 @@ async def run_follow_up_sequences() -> dict:
     Returns {"sent": count, "errors": [...]}.
     """
     from app.services.gmail_api import send_via_gmail_api_with_tracking
-    from app.services.settings_service import get_setting
+    from app.services.settings_service import get_member_setting
 
     db = await get_db()
     try:
         # Campaigns with a sequence attached
         cursor = await db.execute(
-            "SELECT id, sequence_id FROM campaigns WHERE sequence_id IS NOT NULL AND status = 'sent'"
+            "SELECT id, sequence_id, owner_user_id, sender_user_id FROM campaigns WHERE sequence_id IS NOT NULL AND status = 'sent'"
         )
         campaigns = await cursor.fetchall()
         if not campaigns:
@@ -35,46 +35,39 @@ async def run_follow_up_sequences() -> dict:
         for camp in campaigns:
             cid = camp["id"]
             seq_id = camp["sequence_id"]
-            # Load steps ordered by step_order, days_after
-            cursor = await db.execute(
-                "SELECT id, days_after, subject, body FROM follow_up_steps WHERE sequence_id = ? ORDER BY step_order, days_after",
-                (seq_id,),
-            )
-            steps = await cursor.fetchall()
-            if not steps:
+            # Templates never delegate the creator's mailbox.
+            sender_user_id = camp["sender_user_id"]
+            if not sender_user_id or camp["owner_user_id"] != sender_user_id:
+                errors.append({"campaign_id": cid, "error": "Sender ownership requires reconciliation"})
                 continue
 
-            # Sequence owner (for Gmail)
-            cursor = await db.execute(
-                "SELECT user_id FROM follow_up_sequences WHERE id = ?", (seq_id,)
-            )
-            seq_row = await cursor.fetchone()
-            if not seq_row:
-                continue
-            sender_user_id = seq_row["user_id"]
-            if not sender_user_id:
-                continue
-
-            signature = await get_setting("signature") or ""
-            signature_image_url = await get_setting("signature_image_url") or None
+            signature = await get_member_setting(sender_user_id, "signature") or ""
+            signature_image_url = await get_member_setting(sender_user_id, "signature_image_url") or None
 
             # Campaign contacts: initial send done, sequence not finished, no reply yet
             cursor = await db.execute(
-                """SELECT cc.id, cc.contact_id, cc.sequence_step_sent, cc.last_sequence_sent_at
+                """SELECT cc.id, cc.contact_id, cc.sequence_step_sent, cc.last_sequence_sent_at, cc.sent_by_user_id
                    FROM campaign_contacts cc
                    JOIN contacts c ON c.id = cc.contact_id
                    WHERE cc.campaign_id = ? AND cc.status = 'sent'
-                     AND cc.sequence_step_sent < ?
                      AND cc.last_sequence_sent_at IS NOT NULL
                      AND cc.replied_at IS NULL""",
-                (cid, len(steps)),
+                (cid,),
             )
             contacts = await cursor.fetchall()
 
             for cc in contacts:
+                if cc["sent_by_user_id"] != sender_user_id:
+                    errors.append({"campaign_contact_id": cc["id"], "error": "Original sender does not match campaign"})
+                    continue
                 step_idx = cc["sequence_step_sent"]
-                step = steps[step_idx]
-                days_after = step["days_after"] or 0
+                step = await (await db.execute(
+                    "SELECT * FROM outreach_dispatches WHERE dispatch_key=? AND sender_user_id=? AND state='ready'",
+                    (f"followup:{cc['id']}:{step_idx}", sender_user_id),
+                )).fetchone()
+                if not step:
+                    continue
+                days_after = step["delay_days"] or 0
                 last_sent = cc["last_sequence_sent_at"]
                 if last_sent is None:
                     continue
@@ -102,15 +95,52 @@ async def run_follow_up_sequences() -> dict:
                 subject = step["subject"] or "Following up"
                 body = step["body"] or ""
 
+                from app.services.dispatch_service import begin_write, snapshot, claim, finish
+                key = f"followup:{cc['id']}:{step_idx}"
+                await begin_write(db)
+                current = await (await db.execute(
+                    """SELECT cc.id FROM campaign_contacts cc JOIN campaigns camp ON camp.id=cc.campaign_id
+                    JOIN users u ON u.id=camp.sender_user_id
+                    WHERE cc.id=? AND cc.sequence_step_sent=? AND cc.status='sent' AND cc.replied_at IS NULL
+                    AND cc.sent_by_user_id=? AND camp.sender_user_id=? AND camp.owner_user_id=?
+                    AND camp.status='sent' AND camp.sequence_id=? AND u.is_active=1""",
+                    (cc["id"], step_idx, sender_user_id, sender_user_id, sender_user_id, seq_id),
+                )).fetchone()
+                if not current:
+                    await db.commit()
+                    continue
+                original = await (await db.execute(
+                    "SELECT recipient FROM outreach_dispatches WHERE dispatch_key=? AND state='sent'",
+                    (f"initial:{cc['id']}",),
+                )).fetchone()
+                if original:
+                    to_email = original["recipient"]
+                else:
+                    # Never silently retarget a follow-up after shared contact edits.
+                    history = await (await db.execute(
+                        "SELECT recipient FROM outreach_messages WHERE campaign_contact_id=? AND sender_id=? AND sent_at IS NOT NULL ORDER BY id LIMIT 1",
+                        (cc["id"], sender_user_id),
+                    )).fetchone()
+                    if not history:
+                        await db.commit()
+                        errors.append({"campaign_contact_id": cc["id"], "error": "Original recipient requires reconciliation"})
+                        continue
+                    to_email = history["recipient"]
+                await snapshot(db, key, cc["id"], sender_user_id, to_email, subject, body, signature, signature_image_url)
+                intent = await claim(db, key, sender_user_id)
+                await db.commit()
+                if not intent:
+                    continue
                 try:
                     send_meta = await send_via_gmail_api_with_tracking(
                         user_id=sender_user_id,
-                        to_email=to_email,
-                        subject=subject,
-                        body=body,
+                        to_email=intent["recipient"],
+                        subject=intent["subject"],
+                        body=intent["body"],
                         campaign_contact_id=cc["id"],
-                        signature=signature,
-                        signature_image_url=signature_image_url,
+                        signature=intent["signature"],
+                        signature_image_url=intent["signature_image_url"],
+                        dispatch_key=key,
                     )
                     tid = send_meta.get("thread_id")
                     mid = send_meta.get("message_id")
@@ -122,9 +152,12 @@ async def run_follow_up_sequences() -> dict:
                            WHERE id = ?""",
                         (step_idx + 1, sender_user_id, tid, mid, cc["id"]),
                     )
+                    await finish(db, key, send_meta)
                     await db.commit()
                     sent += 1
                 except Exception as e:
+                    await finish(db, key, error=e)
+                    await db.commit()
                     errors.append({"campaign_contact_id": cc["id"], "error": str(e)})
 
         return {"sent": sent, "errors": errors}

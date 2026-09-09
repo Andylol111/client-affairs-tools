@@ -3,7 +3,7 @@
  * White in light mode, dark in dark mode. Smooth bar and line animations.
  */
 import { useEffect, useState } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/useTheme';
 
 type Aggregates = { by_event_type?: { event_type: string; count: number }[]; by_resource_type?: { resource_type: string; count: number }[]; days?: number };
 

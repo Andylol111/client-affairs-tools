@@ -17,10 +17,11 @@ os.environ["JWT_SECRET"] = "p-drain-test-secret-not-a-known-default-xx"
 os.environ["CAMPAIGN_SEND_DELAY_SEC"] = "0"
 
 from app.database import get_db, init_db  # noqa: E402
-from app.routers.campaigns import drain_campaign  # noqa: E402
+from app.routers.campaigns import drain_campaign, release_campaign  # noqa: E402
 
 
 async def _seed(n: int = 10) -> int:
+    os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
     await init_db()
     db = await get_db()
     try:
@@ -28,7 +29,7 @@ async def _seed(n: int = 10) -> int:
             "INSERT INTO users (id, email) VALUES (1, 'sender@yale.edu')"
         )
         cur = await db.execute(
-            "INSERT INTO campaigns (name, status) VALUES ('week', 'releasing')"
+            "INSERT INTO campaigns (name, status, owner_user_id, sender_user_id) VALUES ('week', 'releasing', 1, 1)"
         )
         cid = cur.lastrowid
         for i in range(n):
@@ -68,6 +69,7 @@ async def _run() -> None:
     gmail_api.send_via_gmail_api_with_tracking = fake_send  # type: ignore[method-assign]
 
     cid = await _seed(10)
+    await release_campaign(cid, {"id": 1})
     t1 = asyncio.create_task(drain_campaign(cid, 1, limit=5))
     t2 = asyncio.create_task(drain_campaign(cid, 1, limit=5))
     await asyncio.sleep(0.05)

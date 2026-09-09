@@ -1,6 +1,6 @@
+import type { Release, ReleasePerson, InboxItem } from '../api';
 /**
- * Outreach Coordinator — spreadsheet prospect board + rules/Ollama recommendations,
- * plus company discovery runs (legacy YUCGoutreach pipeline).
+ * Outreach week: choose the shared company slate, then keep or drop people.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -8,41 +8,15 @@ import {
   type YucgProspectRow,
   type YucgRecommendation,
   type YucgVerifiability,
+  type YucgProspectsMeta,
 } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
 import PageHeader from '../components/PageHeader';
-import { useAiModel } from '../contexts/AiModelContext';
+import { useAiModel } from '../contexts/useAiModel';
+import { useUrlTab } from '../lib/useUrlTab';
 
-type PageTab = 'coordinator' | 'comb' | 'discovery';
+type PageTab = 'slate' | 'comb';
 
-type RunRow = {
-  id: number;
-  company_name: string;
-  status: string;
-  progress_pct?: number;
-  progress_message?: string;
-  prospects_count?: number;
-  max_prospects?: number;
-  error_message?: string;
-  created_at?: string;
-};
-
-type DiscoveryProspectRow = {
-  id: number;
-  first_name?: string;
-  last_name?: string;
-  email?: string;
-  title?: string;
-  score?: number;
-  yucgoutreach_score?: number;
-  fit_status?: string;
-  verified?: number;
-  contact_source?: string;
-  email_verification_status?: string;
-  ai_verdict?: string;
-  ai_reason?: string;
-  linkedin_url?: string;
-};
 
 type RecommendMode = 'rules' | 'ai';
 
@@ -60,31 +34,6 @@ const OTHER_CONTACT_TYPE_CHIPS = [
   'Marketing Director',
 ] as const;
 
-function inboxLabel(s?: string | null): string {
-  switch (s) {
-    case 'valid':
-      return 'Verified';
-    case 'likely_valid':
-      return 'Likely';
-    case 'invalid':
-      return 'Invalid';
-    default:
-      return 'Unknown';
-  }
-}
-
-function aiLabel(v?: string | null): string {
-  switch (v) {
-    case 'real':
-      return 'Real';
-    case 'suspicious':
-      return 'Suspicious';
-    case 'junk':
-      return 'Junk';
-    default:
-      return '—';
-  }
-}
 
 function VerifiabilityDrawer({
   open,
@@ -241,10 +190,12 @@ function CoordinatorPanel() {
   const [exporting, setExporting] = useState(false);
   const [boardError, setBoardError] = useState<string | null>(null);
   const [boardTotal, setBoardTotal] = useState<number | null>(null);
+  const [sourceMeta, setSourceMeta] = useState<YucgProspectsMeta | null>(null);
 
   const loadMeta = useCallback(async () => {
     try {
       const meta = await api.yucg.prospectsMeta();
+      setSourceMeta(meta);
       if (meta.sectors?.length) setSectors([...meta.sectors].sort());
     } catch {
       /* meta optional — sectors fall back from board rows */
@@ -265,9 +216,9 @@ function CoordinatorPanel() {
       const rows = res.prospects ?? [];
       setProspects(rows);
       setBoardTotal(res.count ?? rows.length);
-      if (!sectors.length) {
+      {
         const uniq = [...new Set(rows.map((r) => r.sector).filter(Boolean) as string[])].sort();
-        if (uniq.length) setSectors(uniq);
+        if (uniq.length) setSectors(previous => previous.length ? previous : uniq);
       }
     } catch (e) {
       setBoardError(e instanceof Error ? e.message : 'Failed to load prospects');
@@ -276,6 +227,20 @@ function CoordinatorPanel() {
       setLoadingBoard(false);
     }
   }, [sector, contactType, minIncentive, searchQ]);
+
+  const refreshBoard = useCallback(async () => {
+    setLoadingBoard(true);
+    setBoardError(null);
+    try {
+      const meta = await api.yucg.refreshProspects();
+      setSourceMeta(meta);
+      if (meta.sectors?.length) setSectors([...meta.sectors].sort());
+      await loadBoard();
+    } catch (requestError) {
+      setBoardError(requestError instanceof Error ? requestError.message : 'Failed to refresh the live workbook');
+      setLoadingBoard(false);
+    }
+  }, [loadBoard]);
 
   useEffect(() => {
     loadMeta();
@@ -416,20 +381,20 @@ function CoordinatorPanel() {
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-deep-navy">Prospect Board</h2>
+            <h2 className="text-lg font-semibold text-deep-navy">Shared company slate</h2>
             <p className="text-sm text-slate-600 mt-1 max-w-2xl">
-              Filter the synced spreadsheet (`data/YUCG_Prospect_List.xlsx`). Prioritize high-incentive contact types
-              for outreach week.
+              Filter the live {sourceMeta?.source_kind === 's3' ? 'catalog workbook' : 'workbook'} and choose companies for this week.
               {boardTotal != null && !loadingBoard && (
                 <span className="block mt-1 text-slate-500">
                   Showing {prospects.length} of {boardTotal} matching companies.
+                  {sourceMeta?.source_updated_at && ` Source updated ${new Date(sourceMeta.source_updated_at).toLocaleString()}.`}
                 </span>
               )}
             </p>
           </div>
           <button
             type="button"
-            onClick={loadBoard}
+            onClick={refreshBoard}
             disabled={loadingBoard}
             className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
           >
@@ -444,7 +409,7 @@ function CoordinatorPanel() {
         <div className="flex flex-wrap gap-3 items-end">
           <div className="min-w-[140px] flex-1">
             <label className="block text-xs font-medium text-slate-600 mb-1">Sector</label>
-            <select
+            <select aria-label="Sector"
               className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm bg-white"
               value={sector}
               onChange={(e) => setSector(e.target.value)}
@@ -461,6 +426,7 @@ function CoordinatorPanel() {
             <label className="block text-xs font-medium text-slate-600 mb-1">Min incentive</label>
             <input
               type="number"
+              aria-label="Minimum incentive score"
               min={0}
               max={100}
               className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
@@ -506,7 +472,7 @@ function CoordinatorPanel() {
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-pale-sky/80 max-h-[420px] overflow-y-auto yucg-coordinator-table-wrap">
-          <table className="min-w-full text-sm yucg-coordinator-table">
+          <table className="min-w-full text-sm yucg-coordinator-table slate-table">
             <thead className="sticky top-0 z-[1]">
               <tr className="bg-[#1F4E79] text-white text-left">
                 <th className="px-2 py-2 w-10">
@@ -674,316 +640,6 @@ function CoordinatorPanel() {
   );
 }
 
-function DiscoveryPanel() {
-  const [companyName, setCompanyName] = useState('');
-  const [domain, setDomain] = useState('');
-  const [linkedinUrl, setLinkedinUrl] = useState('');
-  const [maxProspects, setMaxProspects] = useState(100);
-  const [submitting, setSubmitting] = useState(false);
-  const [runs, setRuns] = useState<RunRow[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [prospects, setProspects] = useState<DiscoveryProspectRow[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [importing, setImporting] = useState(false);
-
-  const loadRuns = useCallback(async () => {
-    try {
-      const list = await api.yucgoutreach.listRuns(40);
-      setRuns(list as RunRow[]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load runs');
-    }
-  }, []);
-
-  useEffect(() => {
-    loadRuns();
-  }, [loadRuns]);
-
-  const refreshSelected = useCallback(async () => {
-    if (selectedId == null) return;
-    try {
-      const [run, pros] = await Promise.all([
-        api.yucgoutreach.getRun(selectedId),
-        api.yucgoutreach.listProspects(selectedId, 500),
-      ]);
-      setRuns((prev) => {
-        const others = prev.filter((r) => r.id !== selectedId);
-        return [run as RunRow, ...others].sort((a, b) => b.id - a.id);
-      });
-      setProspects(pros as DiscoveryProspectRow[]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load run');
-    }
-  }, [selectedId]);
-
-  useEffect(() => {
-    if (selectedId == null) return;
-    refreshSelected();
-    const t = setInterval(refreshSelected, 3000);
-    return () => clearInterval(t);
-  }, [selectedId, refreshSelected]);
-
-  useEffect(() => {
-    const hasActive = runs.some((r) => r.status === 'running' || r.status === 'queued');
-    if (!hasActive) return;
-    const t = setInterval(loadRuns, 4000);
-    return () => clearInterval(t);
-  }, [runs, loadRuns]);
-
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setInfo(null);
-    if (!companyName.trim()) {
-      setError('Company name is required.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await api.yucgoutreach.createRun({
-        company_name: companyName.trim(),
-        company_domain: domain.trim() || undefined,
-        linkedin_company_url: linkedinUrl.trim() || undefined,
-        max_prospects: maxProspects,
-      });
-      setSelectedId(res.id);
-      await loadRuns();
-      setInfo(`Run #${res.id} started — fetching sources in parallel.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Start failed');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const selected = selectedId != null ? runs.find((r) => r.id === selectedId) || null : null;
-
-  return (
-    <div className="space-y-8" data-section="yucgoutreach-discovery">
-      <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-deep-navy mb-3">Company discovery pipeline</h2>
-        <ol className="list-decimal list-inside text-sm text-slate-700 space-y-2">
-          <li>
-            <strong>Parallel sources</strong> — website, LinkedIn (Apify), Tavily search.
-          </li>
-          <li>
-            <strong>Merge + verify</strong> — MX inbox check and Ollama AI verdict.
-          </li>
-          <li>
-            <strong>Export or import</strong> — Excel or main Contacts.
-          </li>
-        </ol>
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-6">
-        <form
-          onSubmit={onSubmit}
-          className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4"
-        >
-          <h2 className="text-lg font-semibold text-deep-navy">Start a run</h2>
-          {error && (
-            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
-          )}
-          {info && (
-            <div className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-              {info}
-            </div>
-          )}
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Company name *</label>
-            <input
-              className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
-              value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="Apple"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Domain (recommended)</label>
-            <input
-              className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              placeholder="apple.com"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">LinkedIn company URL (optional)</label>
-            <input
-              className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
-              value={linkedinUrl}
-              onChange={(e) => setLinkedinUrl(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Max prospects (up to 500)</label>
-            <input
-              type="number"
-              min={1}
-              max={500}
-              className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
-              value={maxProspects}
-              onChange={(e) => setMaxProspects(Number(e.target.value) || 100)}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-deep-navy text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
-          >
-            {submitting ? 'Starting…' : 'Run discovery'}
-          </button>
-        </form>
-
-        <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-deep-navy mb-3">Recent runs</h2>
-          <div className="max-h-[420px] overflow-auto space-y-2">
-            {runs.length === 0 && <p className="text-sm text-slate-500">No runs yet.</p>}
-            {runs.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => {
-                  setSelectedId(r.id);
-                  setError(null);
-                }}
-                className={`w-full text-left rounded-xl border px-3 py-2.5 text-sm transition-colors ${
-                  selectedId === r.id
-                    ? 'border-deep-navy bg-white shadow-sm'
-                    : 'border-pale-sky/80 hover:bg-slate-50/80'
-                }`}
-              >
-                <div className="font-medium text-deep-navy truncate">{r.company_name}</div>
-                <div className="text-xs text-slate-600 mt-0.5">
-                  #{r.id} · {r.status}
-                  {typeof r.progress_pct === 'number' ? ` · ${Math.round(r.progress_pct)}%` : ''}
-                  {r.prospects_count != null ? ` · ${r.prospects_count} saved` : ''}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {selected && (
-        <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
-          <div className="flex flex-wrap items-center gap-3 justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-deep-navy">
-                Run #{selected.id}: {selected.company_name}
-              </h2>
-              <p className="text-sm text-slate-600 mt-1">{selected.progress_message || selected.status}</p>
-              {selected.error_message && <p className="text-sm text-red-700 mt-2">{selected.error_message}</p>}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={exporting || selected.status === 'running'}
-                className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
-                onClick={async () => {
-                  setExporting(true);
-                  setError(null);
-                  try {
-                    await api.yucgoutreach.exportExcel(selected.id);
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : 'Export failed');
-                  } finally {
-                    setExporting(false);
-                  }
-                }}
-              >
-                {exporting ? 'Exporting…' : 'Export Excel'}
-              </button>
-              <button
-                type="button"
-                disabled={importing || !prospects.length}
-                className="px-3 py-2 rounded-lg border border-emerald-300 text-sm font-medium text-emerald-900 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50"
-                onClick={async () => {
-                  if (!confirm(`Import ${prospects.length} prospect(s) into main Contacts?`)) return;
-                  setImporting(true);
-                  setError(null);
-                  try {
-                    const res = await api.yucgoutreach.importContacts(selected.id);
-                    setInfo(`Imported: ${res.created} new, ${res.updated} updated, ${res.skipped} skipped.`);
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : 'Import failed');
-                  } finally {
-                    setImporting(false);
-                  }
-                }}
-              >
-                {importing ? 'Importing…' : 'Import to Contacts'}
-              </button>
-              <button
-                type="button"
-                className="px-3 py-2 rounded-lg border border-red-200 text-sm font-medium text-red-800 bg-white hover:bg-red-50"
-                onClick={async () => {
-                  if (!confirm('Delete this run and all prospect rows?')) return;
-                  try {
-                    await api.yucgoutreach.deleteRun(selected.id);
-                    setSelectedId(null);
-                    setProspects([]);
-                    loadRuns();
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : 'Delete failed');
-                  }
-                }}
-              >
-                Delete run
-              </button>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto rounded-xl border border-pale-sky/80">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="bg-[#1F4E79] text-white text-left">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Email</th>
-                  <th className="px-3 py-2 font-medium">Title</th>
-                  <th className="px-3 py-2 font-medium">Source</th>
-                  <th className="px-3 py-2 font-medium">Inbox</th>
-                  <th className="px-3 py-2 font-medium">AI</th>
-                  <th className="px-3 py-2 font-medium">Score</th>
-                  <th className="px-3 py-2 font-medium">Fit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {prospects.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
-                      {selected.status === 'running' || selected.status === 'queued'
-                        ? 'Discovery in progress…'
-                        : 'No verified prospects (junk filtered).'}
-                    </td>
-                  </tr>
-                )}
-                {prospects.map((p) => (
-                  <tr key={p.id} className="border-t border-pale-sky/60 bg-white">
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      {[p.first_name, p.last_name].filter(Boolean).join(' ') || '—'}
-                    </td>
-                    <td className="px-3 py-2 max-w-[200px] truncate">{p.email || '—'}</td>
-                    <td className="px-3 py-2 max-w-[180px] truncate">{p.title || '—'}</td>
-                    <td className="px-3 py-2 text-xs">{p.contact_source || '—'}</td>
-                    <td className="px-3 py-2 text-xs">{inboxLabel(p.email_verification_status)}</td>
-                    <td className="px-3 py-2 text-xs" title={p.ai_reason || ''}>
-                      {aiLabel(p.ai_verdict)}
-                    </td>
-                    <td className="px-3 py-2 tabular-nums">{p.score != null ? Math.round(p.score) : '—'}</td>
-                    <td className="px-3 py-2">{p.fit_status || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function keptLabel(kept: number) {
   if (kept === 1) return 'kept';
@@ -992,10 +648,10 @@ function keptLabel(kept: number) {
 }
 
 function CombPanel() {
-  const [releases, setReleases] = useState<any[]>([]);
+  const [releases, setReleases] = useState<Release[]>([]);
   const [releaseId, setReleaseId] = useState<number | ''>('');
-  const [release, setRelease] = useState<any | null>(null);
-  const [inbox, setInbox] = useState<any[]>([]);
+  const [release, setRelease] = useState<Release | null>(null);
+  const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [mintName, setMintName] = useState('');
@@ -1037,10 +693,10 @@ function CombPanel() {
     if (first && mintTargetId === '') setMintTargetId(first);
   }, [release, mintTargetId]);
 
-  const people: any[] = release?.people || [];
-  const targets: any[] = release?.targets || [];
+  const people = useMemo(() => release?.people || [], [release]);
+  const targets: NonNullable<Release["targets"]> = release?.targets || [];
   const grouped = useMemo(() => {
-    const map = new Map<string, any[]>();
+    const map = new Map<string, ReleasePerson[]>();
     for (const p of people) {
       const key = (p.company_domain || p.company || 'unknown').toLowerCase();
       if (!map.has(key)) map.set(key, []);
@@ -1083,7 +739,7 @@ function CombPanel() {
     <div className="space-y-6">
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
-          <select
+          <select aria-label="Outreach week"
             value={releaseId}
             onChange={(e) => setReleaseId(e.target.value ? Number(e.target.value) : '')}
             className="px-3 py-2 rounded-lg border border-pale-sky text-sm bg-white"
@@ -1116,7 +772,7 @@ function CombPanel() {
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-slate-600">
               Company
-              <select
+              <select aria-label="Target company"
                 value={mintTargetId}
                 onChange={(e) => setMintTargetId(e.target.value ? Number(e.target.value) : '')}
                 className="block mt-1 px-3 py-2 rounded-lg border border-pale-sky text-sm bg-white"
@@ -1155,7 +811,7 @@ function CombPanel() {
       {grouped.map(([domain, rows]) => (
         <div key={domain} className="surface-card rounded-2xl border border-[var(--border)] overflow-hidden">
           <div className="px-4 py-3 bg-[#1F4E79] text-white text-sm font-medium">{domain}</div>
-          <table className="min-w-full text-sm">
+          <table className="min-w-full text-sm ingestion-table">
             <thead>
               <tr className="text-left bg-slate-50">
                 <th className="px-3 py-2">Name</th>
@@ -1197,7 +853,7 @@ function CombPanel() {
           {inbox.length === 0 ? (
             <p className="text-sm text-slate-600">No campaign rows for kept people yet.</p>
           ) : (
-            <table className="min-w-full text-sm">
+            <table className="min-w-full text-sm ingestion-table">
               <thead>
                 <tr className="text-left bg-slate-50">
                   <th className="px-3 py-2">Name</th>
@@ -1226,27 +882,27 @@ function CombPanel() {
 }
 
 export default function YucgOutreach() {
-  const [pageTab, setPageTab] = useState<PageTab>('coordinator');
+  const [pageTab, setPageTab] = useUrlTab<PageTab>(['slate', 'comb'], 'slate');
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 px-4 pb-12" data-section="yucgoutreach">
+    <div className="app-workspace space-y-6 pb-12" data-section="yucgoutreach">
       <PageHeader
         title="Outreach week"
-        subtitle="Cut a slate, comb people by domain, then send from Studio."
+        subtitle="Choose this week’s companies, then keep the right people."
         imageSrc="/yucg-bg/team-banner.jpg"
       />
 
       <AppTabMenu
         tabs={[
-          { id: 'coordinator', label: 'Coordinator' },
+          { id: 'slate', label: 'Slate' },
           { id: 'comb', label: 'Comb' },
-          { id: 'discovery', label: 'Company discovery' },
         ]}
         active={pageTab}
         onChange={(id) => setPageTab(id as PageTab)}
+        label="Outreach week views"
       />
 
-      {pageTab === 'coordinator' ? <CoordinatorPanel /> : pageTab === 'comb' ? <CombPanel /> : <DiscoveryPanel />}
+      {pageTab === 'slate' ? <CoordinatorPanel /> : <CombPanel />}
     </div>
   );
 }

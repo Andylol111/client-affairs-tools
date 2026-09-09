@@ -1,28 +1,29 @@
+import GmailConnection from '../components/GmailConnection';
+import PageHeader from '../components/PageHeader';
+import type { MemberProfile, Project, CustomFormat, LogEntry, Attachment } from '../api';
 /**
  * Profile page - projects, experience, role, handles + Settings (moved from nav)
  */
 import { useEffect, useState } from 'react';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/useTheme';
 import { SignatureEditor } from '../components/SignatureEditor';
 import AppTabMenu from '../components/AppTabMenu';
 import AppSubnav from '../components/AppSubnav';
+import SlackIntegration from '../components/SlackIntegration';
+import { useUrlTab } from '../lib/useUrlTab';
 import { getStoredPreferences, savePreferences, applyUserPreferences, resetPreferencesToDefault, type UserPreferences } from '../lib/userPreferences';
 
 export default function Profile() {
   const { user } = useOutletContext<{ user: { email: string; name?: string; picture?: string; role?: string } }>();
   const { theme, setTheme } = useTheme();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tabParam = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<'profile' | 'settings'>(
-    tabParam === 'settings' ? 'settings' : 'profile'
+  const [activeTab, setActiveTab] = useUrlTab<'profile' | 'integrations' | 'settings'>(
+    ['profile', 'integrations', 'settings'],
+    'profile',
+    'tab',
   );
-
-  useEffect(() => {
-    if (tabParam === 'settings') setActiveTab('settings');
-    else if (tabParam === 'profile' || !tabParam) setActiveTab('profile');
-  }, [tabParam]);
 
   useEffect(() => {
     const slack = searchParams.get('slack');
@@ -32,9 +33,9 @@ export default function Profile() {
       setSearchParams(next, { replace: true });
       window.dispatchEvent(new CustomEvent('slack-integration-updated'));
     }
-  }, [searchParams]);
-  const [, setProfile] = useState<any>({});
-  const [assignedProjects, setAssignedProjects] = useState<any[]>([]);
+  }, [searchParams, setSearchParams]);
+  const [, setProfile] = useState<MemberProfile>({});
+  const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
   const [saved, setSaved] = useState(false);
 
   // Profile fields
@@ -50,22 +51,19 @@ export default function Profile() {
   const [signature, setSignature] = useState('');
   const [signatureImageUrl, setSignatureImageUrl] = useState('');
   const [attachmentsEnabled, setAttachmentsEnabled] = useState(false);
-  const [customFormats, setCustomFormats] = useState<any[]>([]);
-  const [loginLog, setLoginLog] = useState<any[]>([]);
+  const [customFormats, setCustomFormats] = useState<CustomFormat[]>([]);
+  const [loginLog, setLoginLog] = useState<LogEntry[]>([]);
   const [notifPrefs, setNotifPrefs] = useState({ admin_digest: true, campaign_summary: false });
   const [newFormatName, setNewFormatName] = useState('');
   const [newFormatPattern, setNewFormatPattern] = useState('');
-  const [attachmentLibrary, setAttachmentLibrary] = useState<any[]>([]);
+  const [attachmentLibrary, setAttachmentLibrary] = useState<Attachment[]>([]);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [formatAdded, setFormatAdded] = useState(false);
   const [error, setError] = useState('');
   const [accentColor, setAccentColor] = useState(() => getStoredPreferences().accent);
   const [compactMode, setCompactMode] = useState(() => getStoredPreferences().compact);
   const [uiFontSize, setUiFontSize] = useState<UserPreferences['fontSize']>(() => getStoredPreferences().fontSize);
-  const [, setSidebarCollapsed] = useState(() => getStoredPreferences().sidebarCollapsed);
   const [reduceMotion, setReduceMotion] = useState(() => getStoredPreferences().reduceMotion);
-  const [borderRadius, setBorderRadius] = useState<UserPreferences['borderRadius']>(() => getStoredPreferences().borderRadius);
-  const [checklistBadge, setChecklistBadge] = useState(() => getStoredPreferences().checklistBadge);
 
   useEffect(() => {
     api.auth.profile.get().then((p) => {
@@ -86,11 +84,8 @@ export default function Profile() {
       setAccentColor(prefs.accent);
       setCompactMode(prefs.compact);
       setUiFontSize(prefs.fontSize);
-      setSidebarCollapsed(prefs.sidebarCollapsed);
       setReduceMotion(prefs.reduceMotion);
-      setBorderRadius(prefs.borderRadius);
-      setChecklistBadge(prefs.checklistBadge);
-      api.settings.get().then((s: any) => {
+      api.settings.get().then((s) => {
         setSignature(s.signature || '');
         setSignatureImageUrl(s.signature_image_url || '');
         setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
@@ -124,19 +119,21 @@ export default function Profile() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to save');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Failed to save');
     }
   };
 
   const saveSettings = async () => {
     setError('');
     try {
-      if (isAdmin) await api.settings.update({ signature, signature_image_url: signatureImageUrl || undefined, attachments_enabled: attachmentsEnabled });
+      await api.settings.update({ signature, signature_image_url: signatureImageUrl, ...(isAdmin ? { attachments_enabled: attachmentsEnabled } : {}) });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to save');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Failed to save');
     }
   };
 
@@ -146,8 +143,9 @@ export default function Profile() {
       await api.auth.notificationPrefs.update(notifPrefs);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to save');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Failed to save');
     }
   };
 
@@ -161,8 +159,9 @@ export default function Profile() {
       setNewFormatPattern('');
       setFormatAdded(true);
       setTimeout(() => setFormatAdded(false), 2000);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to add format');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Failed to add format');
     }
   };
 
@@ -170,31 +169,26 @@ export default function Profile() {
     try {
       await api.settings.customFormats.delete(id);
       setCustomFormats(await api.settings.customFormats.list());
-    } catch (e: any) {
-      setError(e?.message || 'Failed to remove');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Failed to remove');
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <h1 className="text-2xl font-bold text-deep-navy mb-6">My Profile</h1>
+    <div className="app-workspace max-w-3xl">
+      <PageHeader title="Profile & preferences" subtitle="Manage your identity, connected accounts, and personal preferences." />
 
       <AppTabMenu
         className="mb-6"
         tabs={[
           { id: 'profile', label: 'Profile' },
-          { id: 'settings', label: 'Settings' },
+          { id: 'integrations', label: 'Integrations' },
+          { id: 'settings', label: 'Preferences' },
         ]}
         active={activeTab}
-        onChange={(id) => {
-          if (id === 'profile') {
-            setActiveTab('profile');
-            setSearchParams({});
-          } else {
-            setActiveTab('settings');
-            setSearchParams({ tab: 'settings' });
-          }
-        }}
+        onChange={(id) => setActiveTab(id as typeof activeTab)}
+        label="Profile views"
       />
 
       {activeTab === 'profile' && (
@@ -276,6 +270,8 @@ export default function Profile() {
         </div>
       )}
 
+      {activeTab === 'integrations' && <><GmailConnection /><SlackIntegration /></>}
+
       {activeTab === 'settings' && (
         <div className="space-y-8">
           <div className="surface-card shadow-sm rounded-xl p-6">
@@ -335,23 +331,6 @@ export default function Profile() {
                   <option value="large">Large</option>
                 </select>
               </div>
-              <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">Corner Radius</label>
-                <select
-                  value={borderRadius}
-                  onChange={(e) => {
-                    const v = e.target.value as UserPreferences['borderRadius'];
-                    setBorderRadius(v);
-                    savePreferences({ borderRadius: v });
-                    applyUserPreferences({ ...getStoredPreferences(), borderRadius: v });
-                  }}
-                  className="px-3 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
-                >
-                  <option value="sharp">Sharp</option>
-                  <option value="medium">Medium</option>
-                  <option value="round">Round</option>
-                </select>
-              </div>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -365,18 +344,6 @@ export default function Profile() {
                 />
                 <span className="text-sm text-deep-navy dark:text-[var(--text-primary)]">Reduce Motion</span>
               </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={checklistBadge}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setChecklistBadge(v);
-                    savePreferences({ checklistBadge: v });
-                  }}
-                />
-                <span className="text-sm text-deep-navy dark:text-[var(--text-primary)]">Show Checklist Badge (pending count)</span>
-              </label>
             </div>
             <div className="mt-6 pt-4 border-t border-pale-sky dark:border-slate-600">
               <button
@@ -386,10 +353,7 @@ export default function Profile() {
                   setAccentColor(def.accent);
                   setCompactMode(def.compact);
                   setUiFontSize(def.fontSize);
-                  setSidebarCollapsed(def.sidebarCollapsed);
                   setReduceMotion(def.reduceMotion);
-                  setBorderRadius(def.borderRadius);
-                  setChecklistBadge(def.checklistBadge);
                 }}
                 className="px-4 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)] font-medium hover:bg-slate-50 dark:hover:bg-slate-600"
               >
@@ -410,6 +374,15 @@ export default function Profile() {
             </label>
             <button onClick={saveNotifPrefs} className="mt-4 px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">Save Preferences</button>
           </div>
+              <div className="surface-card shadow-sm rounded-xl p-6">
+                <h2 className="font-semibold text-deep-navy mb-4">Email Signature</h2>
+                <p className="text-sm text-slate-600 mb-2">This signature is used only for emails sent from your account. Type text and paste or insert images (e.g. logo) directly in the box below.</p>
+                <SignatureEditor value={signature} onChange={setSignature} placeholder="Best regards,&#10;Your Name&#10;YUCG" minHeight="140px" />
+                <label className="block text-sm text-slate-600 mt-3 mb-1">Extra signature image URL (optional)</label>
+                <input type="url" value={signatureImageUrl} onChange={(e) => setSignatureImageUrl(e.target.value)} placeholder="https://example.com/logo.png" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800" />
+                {signatureImageUrl && <img src={signatureImageUrl} alt="Signature" className="mt-2 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />}
+              </div>
+          <button onClick={saveSettings} className="ui-button">{saved ? "Saved" : "Save signature"}</button>
           {isAdmin && (
             <>
               <div className="surface-card shadow-sm rounded-xl p-6">
@@ -442,7 +415,8 @@ export default function Profile() {
                         try {
                           await api.attachments.upload(f, f.name);
                           setAttachmentLibrary(await api.attachments.list());
-                        } catch (err: any) { alert(err?.message); } finally { setAttachmentUploading(false); e.target.value = ''; }
+                        } catch (err) {
+      const errMessage = err instanceof Error ? err.message : 'Request failed'; alert(errMessage); } finally { setAttachmentUploading(false); e.target.value = ''; }
                       }} />
                     <label htmlFor="att-upload" className={`inline-block px-4 py-2 rounded-lg border text-sm cursor-pointer ${attachmentUploading ? 'opacity-50' : ''}`}>+ Upload</label>
                     {attachmentLibrary.length > 0 && (
@@ -450,21 +424,14 @@ export default function Profile() {
                         {attachmentLibrary.map((a) => (
                           <li key={a.id} className="flex justify-between text-sm">
                             <span className="truncate">{a.display_name || a.filename}</span>
-                            <button onClick={async () => { try { await api.attachments.delete(a.id); setAttachmentLibrary(await api.attachments.list()); } catch (e: any) { alert(e?.message); } }} className="text-red-600 text-xs">Remove</button>
+                            <button onClick={async () => { try { await api.attachments.delete(a.id); setAttachmentLibrary(await api.attachments.list()); } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed'; alert(eMessage); } }} className="text-red-600 text-xs">Remove</button>
                           </li>
                         ))}
                       </ul>
                     )}
                   </div>
                 )}
-              </div>
-              <div className="surface-card shadow-sm rounded-xl p-6">
-                <h2 className="font-semibold text-deep-navy mb-4">Email Signature</h2>
-                <p className="text-sm text-slate-600 mb-2">This signature is appended to all outgoing emails. Type text and paste or insert images (e.g. logo) directly in the box below.</p>
-                <SignatureEditor value={signature} onChange={setSignature} placeholder="Best regards,&#10;Your Name&#10;YUCG" minHeight="140px" />
-                <label className="block text-sm text-slate-600 mt-3 mb-1">Extra signature image URL (optional)</label>
-                <input type="url" value={signatureImageUrl} onChange={(e) => setSignatureImageUrl(e.target.value)} placeholder="https://example.com/logo.png" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800" />
-                {signatureImageUrl && <img src={signatureImageUrl} alt="Signature" className="mt-2 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />}
               </div>
               <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Custom Email Formats</h2>
