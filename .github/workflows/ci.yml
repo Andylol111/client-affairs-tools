@@ -148,12 +148,3 @@ jobs:
             }' > /tmp/ssm-send.json
           CMD_ID="$(aws ssm send-command --cli-input-json file:///tmp/ssm-send.json --query Command.CommandId --output text)"
           aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$ID"
-
-  sync-feature:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - run: git push origin HEAD:refs/heads/feature
