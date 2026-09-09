@@ -1,12 +1,12 @@
 # Proposed GitHub protection migration
 
-These payloads are review artifacts, not applied settings. The repository is public, current caller has administrator access, and only Andylol111 is listed as a collaborator. The user has deferred a second maintainer. The current proposal supports one maintainer; the future independent-review policy is retained separately.
+The production environment and main-only deployment policy are now applied and verified. Topic branch restrictions are disabled. Main/feature aggregate-gate payloads are being activated only after passing hosted checks. The repository is public, current caller has administrator access, and only Andylol111 is listed as a collaborator. The user has deferred a second maintainer. The current proposal supports one maintainer; the future independent-review policy is retained separately.
 
 Fresh inspection on 2026-09-09:
 
 - Main uses active ruleset 22605433, not legacy branch protection. It requires five old checks including `gate-branch`, zero approvals, and allows administrator PR bypass.
 - Ruleset 22605072 blocks ordinary topic-branch creation. The proposed disabled payload permits topic branches; main and feature retain their separate protections.
-- `production` does not exist. Only unprotected `copilot` exists; leave it unchanged.
+- `production` now requires owner Andylol111 approval, allows self-review for the sole maintainer, disables administrator bypass, and permits only branch main. Existing copilot is unchanged.
 - Actions defaults to read-only tokens and cannot approve PRs. Preserve these settings.
 - AWS_SHIP_ROLE_ARN points to `yucg-github-ship-dev`; no static deployment variables are present.
 - Recent develop run 34351025174 succeeded only in `develop-open`; all verification jobs were skipped. It is not evidence for the current local changes.
@@ -26,3 +26,5 @@ Do not run these API updates on an unreviewed revision. Save the previous rulese
 ## Later: second maintainer
 
 When another maintainer is available, review `main-ruleset.future-reviewers.json` to require one fresh independent PR approval and last-push approval. Add the authorized deployment reviewer and enable prevention of self-review. Until then, this future policy must not block the current workflow. No collaborator invitation is requested or sent.
+
+Both promotion branches use the same aggregate gate: `feature-ruleset.proposed.json` targets ruleset 22605434 and `main-ruleset.proposed.json` targets 22605433. Activate after the candidate passes real hosted checks. Branch progression remains develop → feature → main, with topic PRs also permitted.

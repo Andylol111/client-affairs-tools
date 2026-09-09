@@ -6,7 +6,7 @@
 - `YucgOutreach-dev` remains `UPDATE_ROLLBACK_COMPLETE`. Existing instance output is `i-09a071e22270b027c`.
 - CloudFront `E35QVGFDWHVOPG` is deployed/enabled, with one VPC origin (`vo_1cUN7wIxTWcCDPYkk4dLaX`) at `ip-172-31-14-232.ec2.internal`. Read timeout is 120 seconds, keepalive 5 seconds. There are no ordered cache behaviors. Static origin cutover has not happened.
 - Existing catalog bucket `yucgoutreach-dev-catalog742f25fd-y8qmakbekdds` returns `NoSuchCORSConfiguration`. Browser uploads through the compatibility bucket are not ready.
-- GitHub authentication now works with repository administrator access. Main is protected by ruleset 22605433, but still requires obsolete `gate-branch`, permits zero approvals and administrator PR bypass. There is no `production` environment. Only Andylol111 is listed as a collaborator. Latest inspected develop run skipped all verification jobs. See [reviewable protection payloads](../infra/github/README.md).
+- GitHub authentication now works with repository administrator access. Main is protected by ruleset 22605433, but still requires obsolete `gate-branch`, permits zero approvals and administrator PR bypass. The production environment is now configured with owner approval and main-only deployment; self-review is allowed while the user is the sole maintainer. Only Andylol111 is listed as a collaborator. Latest inspected develop run skipped all verification jobs. See [reviewable protection payloads](../infra/github/README.md).
 
 These reads do not verify host filesystem mounts, runtime settings, database health, IAM permissions or Google consent configuration. No secret values or club records were fetched.
 
