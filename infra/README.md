@@ -1,8 +1,14 @@
 # YUCG Outreach AWS
 
-One HTTPS `AppUrl` (CloudFront) in front of the club app. **Nothing ships from a laptop.** GitHub is the source; **CodeBuild** builds the image; the box runs it; CloudShell is only on/off, secrets, and the first pipeline bootstrap.
+One HTTPS `AppUrl` (CloudFront) in front of the club app. **Nothing ships from a laptop.**
 
-Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite on a retained 8 GB volume. No ALB, no Amplify, no NAT. Do not set `VITE_API_URL`.
+**Branches:** work on `develop`. Open a PR into `main`. GitHub Actions (`verify-backend`, `verify-frontend`, `verify-infra`) must pass. Live AppUrl updates when `main` moves (CodeBuild today; later a GitHub Actions `ship` job via AWS OIDC — no Andre-only CodeStar connection).
+
+CloudShell is on/off, secrets, and one-time AWS bootstrap. Same process as localhost: Vite SPA + FastAPI in `docker/app.Dockerfile`. SQLite on a retained 8 GB volume. No ALB, no Amplify, no NAT. Do not set `VITE_API_URL`.
+
+## GitHub Actions runners
+
+No self-hosted runner. Repo **Settings → Actions → General**: allow Actions and GitHub-hosted runners. [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) starts three `ubuntu-latest` jobs on push/PR to `develop` or `main`. Confirm under the **Actions** tab. Protect `main` so those three checks are required.
 
 ## Modes (one template)
 
@@ -22,12 +28,14 @@ No Docker on your laptop. CloudShell deploys the **pipeline** stack (no `DockerI
 
 ```bash
 cd /tmp
-git clone -b yucg-outreach https://github.com/Andylol111/client-affairs-tools.git yucg
+git clone -b develop https://github.com/Andylol111/client-affairs-tools.git yucg
 cd yucg/infra
 npm install
 npx cdk bootstrap
 npx cdk deploy YucgPipeline-dev -c env=dev -c githubConnectionArn=<arn-from-step-1>
 ```
+
+Do not retarget that pipeline to `main` if an Actions `ship` job is about to replace it — two ships at once.
 
 3. Pipeline runs: build image → deploy app stack (`YucgOutreach-dev`) → outputs `AppUrl`.
 4. Google + Bedrock as below. `curl -sS "$AppUrl/api/health"`.
@@ -77,7 +85,11 @@ No SSH. Session Manager if the box is up and sick. After a secret change: Sessio
 
 ## Ship a website change (no laptop)
 
-Push to `yucg-outreach` (or the branch the pipeline tracks). CodeBuild builds and deploys. CloudShell is not in that loop.
+1. PR `develop` → `main`. Wait for the three verify jobs.
+2. Merge. Until Actions `ship` exists, CodeBuild deploys if the pipeline still watches that branch.
+3. Later: `.github/workflows/ship.yml` on `main` assumes an AWS OIDC role and runs `cdk deploy YucgOutreach-dev`. Then disable or delete `YucgPipeline-dev` so only Actions deploys.
+
+CloudShell is not in the daily loop.
 
 Workbook / corpus live in **S3**, not in the image (`data/` is docker-excluded). From CloudShell, copy **from the clone on AWS**, not from a laptop upload:
 
@@ -123,3 +135,16 @@ ALB is billed while “off.” RDS/Aurora 24/7 costs more than SQLite on this di
 | CodeBuild | cents per ship | $0 |
 
 No NAT, WAF, Multi-AZ, Bedrock Knowledge Bases.
+
+## Leave-the-club transfer
+
+Personal GitHub (`Andylol111/client-affairs-tools`) and a personal AWS account are temporary. The next officer should not need your laptop, your Pro card, or a CodeStar connection only your GitHub user can refresh.
+
+**Now (this semester):** add a second AWS IAM user (next officer) who can use CloudShell for on/off and secrets.
+
+**When you leave:**
+
+1. **GitHub** — Settings → Transfer repository to a YUCG org with **two Owners**. Personal Pro is not required if the repo is public or the org is Team. GitHub Enterprise is not a free club toggle (Yale CIO Campus Program only).
+2. **AWS** — create a **club** account (root email the club owns). Invite the successor as IAM admin. Move `YucgOutreach-dev`, secret `yucg-outreach/dev/app`, catalog bucket, CloudFront, retained EBS (SQLite). Do not make your personal root the forever host.
+3. **Google OAuth** — transfer the Google Cloud project to a club Google account, or recreate the Web client and merge the new id/secret into Secrets Manager. **Keep `JWT_SECRET`.**
+4. **Ship** — prefer Actions + AWS OIDC (org Admin + one IAM role). CodePipeline’s GitHub Connection dies with your login.
