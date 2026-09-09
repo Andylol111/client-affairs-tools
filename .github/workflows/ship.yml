@@ -4,6 +4,7 @@ name: ship
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ship-main
