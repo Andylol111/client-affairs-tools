@@ -14,6 +14,6 @@ This repo is **one website** members use over time, not a batch pipeline and not
 - **Live catalog:** `contacts`, `campaigns` + `campaign_contacts`. Pipeline/Studio/Stats are views. Company = group by domain/name. Staging Find/Week promote via import/Keep.
 - **Mail campaign is the registered campaign.** `outreach_campaigns` is not a parallel send ledger.
 - **Hosted AI:** `LLM_PROVIDER=bedrock` via `llm.py`. Rank = Haiku-class JSON; Studio may use the UI model.
-- **Instance:** t3.small, `INBOX_VERIFY_MODE=mx`. Gate HTML crawl only. No P9. Andre commits; never Cursor as author.
+- **Instance:** t3.small, `INBOX_VERIFY_MODE=mx`. Gate HTML crawl only. No P9. Andre commits; no extra co-authors.
 
 If a change would make two members see different databases, require a laptop to deploy, or make Studio wait on a week loop, it is the wrong change.
