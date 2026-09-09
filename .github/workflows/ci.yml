@@ -1,7 +1,7 @@
 # develop: no gates. feature: tests. main: tests + image build, then ship.
 # Allowed PRs: develop → feature, develop → main, feature → main.
 # Other heads are blocked (repo Admins can Bypass rules). Do not cdk deploy YucgOutreach-dev.
-name: ci
+name: verify and ship
 
 on:
   pull_request:
