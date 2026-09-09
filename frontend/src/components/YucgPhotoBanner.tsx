@@ -26,12 +26,11 @@ export default function YucgPhotoBanner({
     <div
       className={`yucg-photo-banner ${variantClass} ${className}`.trim()}
       style={{ ['--yucg-banner-image' as string]: `url(${imageSrc})` }}
-      role={title ? 'region' : 'presentation'}
-      aria-label={title || undefined}
+      role={!title ? 'presentation' : undefined}
     >
       {(title || subtitle) && (
         <div className="yucg-photo-banner__content">
-          {title && <h2 className="yucg-photo-banner__title">{title}</h2>}
+          {title && <h1 className="yucg-photo-banner__title">{title}</h1>}
           {subtitle && <p className="yucg-photo-banner__subtitle">{subtitle}</p>}
         </div>
       )}

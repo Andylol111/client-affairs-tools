@@ -1,6 +1,6 @@
-import { NavLink } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import type { NavItem } from '../../lib/navConfig';
-import AiModelSelect from '../AiModelSelect';
 import AppNavLink from './AppNavLink';
 
 type AppShellHeaderProps = {
@@ -10,6 +10,18 @@ type AppShellHeaderProps = {
 };
 
 export default function AppShellHeader({ user, navItems, onLogout }: AppShellHeaderProps) {
+  const dropdown = useRef<HTMLDetailsElement>(null);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      if (dropdown.current && event.target instanceof Node && !dropdown.current.contains(event.target)) dropdown.current.open = false;
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    return () => document.removeEventListener('pointerdown', closeOutside);
+  }, []);
+  const outreachIds = ['yucgoutreach', 'studio', 'campaigns', 'outreach', 'scraper', 'analytics'];
+  const outreach = navItems.filter(item => outreachIds.includes(item.id));
+  const primary = navItems.filter(item => !outreachIds.includes(item.id) && item.id !== 'admin').sort((a, b) => ['dashboard', 'projects', 'documents'].indexOf(a.id) - ['dashboard', 'projects', 'documents'].indexOf(b.id));
   return (
     <header className="app-shell-header app-top-nav sticky top-0 z-50">
       <div className="app-shell-header-inner">
@@ -22,13 +34,19 @@ export default function AppShellHeader({ user, navItems, onLogout }: AppShellHea
         </div>
 
         <nav className="app-nav-menu app-shell-desktop-nav" aria-label="Main navigation">
-          {navItems.map((item) => (
+          {primary.map((item) => (
             <AppNavLink key={item.id} item={item} variant="desktop" />
           ))}
+          <details key={pathname} ref={dropdown} className="app-nav-group" onKeyDown={event => { if (event.key === 'Escape' && dropdown.current) { dropdown.current.open = false; dropdown.current.querySelector('summary')?.focus(); } }}>
+            <summary className={`app-nav-link ${outreach.some(item => pathname === item.to || pathname.startsWith(item.to + '/')) ? 'app-nav-link--active' : ''}`}>Outreach ▾</summary>
+            <div className="app-nav-group-panel" onClick={() => { if (dropdown.current) dropdown.current.open = false; }}>
+              {outreach.map(item => <AppNavLink key={item.id} item={item} variant="desktop" />)}
+            </div>
+          </details>
+          {navItems.filter(item => item.id === 'admin').map(item => <AppNavLink key={item.id} item={item} variant="desktop" />)}
         </nav>
 
         <div className="app-shell-header-actions">
-          <AiModelSelect variant="header" id="header-ai-model" className="hidden lg:flex" />
           {user.picture && (
             <img
               src={user.picture}

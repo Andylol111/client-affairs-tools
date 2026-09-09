@@ -1,0 +1,21 @@
+[Unit]
+Description=YUCG verified SQLite backup to private S3
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/etc/yucg/backup.env
+ConditionPathIsMountPoint=/data
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/yucg/backup.env
+ExecStart=/usr/bin/flock -n /run/lock/yucg-backup.lock /bin/bash /opt/yucg/backup/backup-to-s3.sh /data/clientreach.db
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data /run/lock
+RestrictSUIDSGID=true

@@ -1,231 +1,268 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../api';
+import DispatchRecovery from '../components/campaigns/DispatchRecovery';
+import { canManageCampaign } from '../lib/campaignAccess';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useOutletContext } from 'react-router-dom';
+import { api, type Campaign, type Contact } from '../api';
+import TrackingSync from '../components/TrackingSync';
+import CampaignRecipients from '../components/campaigns/CampaignRecipients';
+import { Button, ConfirmDialog, Notice, StatusBadge } from '../components/ui/Primitives';
+
+type FollowUpSequence = { id: number; name: string };
+
+function statusTone(status: string): 'neutral' | 'info' | 'warning' | 'success' | 'danger' {
+  if (status === 'sent') return 'success';
+  if (status === 'releasing') return 'info';
+  if (status === 'needs_attention') return 'danger';
+  if (status === 'paused') return 'warning';
+  return 'neutral';
+}
 
 export default function CampaignDetail() {
   const { id } = useParams();
+  const { user } = useOutletContext<{ user: { id: number } }>();
   const navigate = useNavigate();
-  const [campaign, setCampaign] = useState<any>(null);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const campaignId = Number(id);
+  const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [addContactSearch, setAddContactSearch] = useState('');
-  const [sequences, setSequences] = useState<any[]>([]);
+  const [sequences, setSequences] = useState<FollowUpSequence[]>([]);
+  const [error, setError] = useState('');
+  const [contactOffset, setContactOffset] = useState(0);
+  const [contactTotal, setContactTotal] = useState(0);
+  const [contactLoading, setContactLoading] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!Number.isInteger(campaignId)) return;
+    setCampaign(await api.campaigns.get(campaignId));
+  }, [campaignId]);
 
   useEffect(() => {
-    if (!id) return;
-    const cid = parseInt(id, 10);
-    Promise.all([api.campaigns.get(cid), api.contacts.list({}), api.outreach.sequences.list()])
-      .then(([c, contacts, seqs]) => {
-        setCampaign(c);
-        setContacts(contacts);
-        setSequences(seqs || []);
-      })
-      .catch(() => navigate('/campaigns'))
+    if (!Number.isInteger(campaignId)) {
+      navigate('/campaigns', { replace: true });
+      return;
+    }
+    Promise.all([refresh(), api.outreach.sequences.list().then(setSequences)])
+      .catch((requestError) => setError((requestError as Error).message))
       .finally(() => setLoading(false));
-  }, [id, navigate]);
+  }, [campaignId, navigate, refresh]);
 
-  const [generating, setGenerating] = useState(false);
+  useEffect(() => {
+    if (campaign?.status !== 'releasing') return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [campaign?.status, refresh]);
 
-  const addSelected = async (generateEmails = false) => {
-    if (!id || selectedIds.size === 0) return;
-    setGenerating(true);
-    try {
-      const ids = Array.from(selectedIds);
-      let subjects: Record<string, string> = {};
-      let bodies: Record<string, string> = {};
-      if (generateEmails) {
-        for (const cid of ids) {
-          try {
-            const res = await api.emails.generate({ contact_id: cid });
-            subjects[String(cid)] = res.subject;
-            bodies[String(cid)] = res.body;
-          } catch {
-            // fallback empty
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setContactLoading(true);
+      api.contacts.list({ q: addContactSearch, limit: 50, offset: contactOffset }, controller.signal)
+        .then((page) => {
+          setContacts(page.items);
+          setContactTotal(page.total);
+        })
+        .catch((requestError) => {
+          if (!(requestError instanceof DOMException && requestError.name === 'AbortError')) {
+            setError((requestError as Error).message);
           }
-        }
-      }
-      await api.campaigns.addContacts(parseInt(id, 10), {
-        contact_ids: ids,
-        email_subjects: Object.keys(subjects).length ? subjects : undefined,
-        email_bodies: Object.keys(bodies).length ? bodies : undefined,
-      });
-      setSelectedIds(new Set());
-      setCampaign(await api.campaigns.get(parseInt(id, 10)));
-    } catch (e) {
-      alert(e);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setContactLoading(false);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [addContactSearch, contactOffset]);
+
+  const runAction = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    setError('');
+    try {
+      await action();
+      await refresh();
+    } catch (requestError) {
+      setError((requestError as Error).message);
     } finally {
-      setGenerating(false);
+      setBusy(false);
     }
   };
 
-  const toggleSelect = (contactId: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(contactId)) next.delete(contactId);
-      else next.add(contactId);
-      return next;
-    });
+  const addSelected = async () => {
+    if (selectedIds.size === 0) return;
+    await runAction(() => api.campaigns.addContacts(campaignId, { contact_ids: [...selectedIds] }));
+    setSelectedIds(new Set());
   };
 
+  if (!loading && !campaign) return <div className="app-workspace"><Notice tone="danger">{error || 'Campaign unavailable.'}</Notice><Link to="/campaigns" className="ui-button mt-4">Back to campaigns</Link></div>;
   if (loading || !campaign) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-pulse text-slate-500">Loading...</div>
-      </div>
-    );
+    return <div className="flex min-h-[60vh] items-center justify-center text-slate-500">Loading campaign…</div>;
   }
 
-  const existingIds = new Set((campaign.contacts || []).map((c: any) => c.contact_id));
-  const addContactSearchLower = addContactSearch.trim().toLowerCase();
-  const contactsToAdd = contacts
-    .filter((c) => !existingIds.has(c.id))
-    .filter((c) => !addContactSearchLower || [c.name, c.email, c.company, c.title].some((v) => (v || '').toLowerCase().includes(addContactSearchLower)));
+  const existingIds = new Set((campaign.contacts || []).map((contact) => contact.contact_id));
+  const contactsToAdd = contacts.filter((contact) => !existingIds.has(contact.id));
+  const readiness = campaign.readiness || { ready: false, issues: ['Loading readiness…'] };
+  const counts = campaign.counts || {};
+  const canManage = canManageCampaign(campaign, user.id);
+  const canEdit = canManage && !['releasing', 'sent'].includes(campaign.status);
 
   return (
-    <div className="max-w-7xl mx-auto">
-      <div className="flex items-center justify-between gap-4 mb-6">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/campaigns')}
-            className="text-slate-500 hover:text-deep-navy"
-          >
-            ← Back
-          </button>
-          <h1 className="text-2xl font-bold text-deep-navy">{campaign.name}</h1>
-          <span className="px-2 py-1 rounded text-sm bg-slate-100 text-slate-600">{campaign.status}</span>
-          {campaign.status === 'draft' && sequences.length > 0 && (
-            <select
-              value={campaign.sequence_id ?? ''}
-              onChange={async (e) => {
-                const val = e.target.value;
-                const seqId = val ? parseInt(val, 10) : null;
-                try {
-                  await api.campaigns.update(campaign.id, { sequence_id: seqId ?? undefined });
-                  setCampaign((p: any) => ({ ...p, sequence_id: seqId }));
-                } catch (err) {
-                  alert((err as Error)?.message);
-                }
-              }}
-              className="px-3 py-1.5 rounded-lg border border-pale-sky text-sm"
-              title="Follow-up sequence"
-            >
-              <option value="">No Follow-Up Sequence</option>
-              {sequences.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+    <div className="app-workspace max-w-6xl">
+      <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <Link to="/campaigns" className="text-sm font-semibold text-[var(--accent)] hover:underline">← All campaigns</Link>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-bold text-deep-navy">{campaign.name}</h1>
+            <StatusBadge tone={statusTone(campaign.status)}>{campaign.status.replace('_', ' ')}</StatusBadge>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">
+            {counts.sent || 0} sent · {counts.pending || 0} queued · {counts.failed || 0} failed
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {canManage && campaign.status === 'releasing' && (
+            <Button variant="secondary" disabled={busy} onClick={() => runAction(() => api.campaigns.pause(campaignId))}>Pause</Button>
+          )}
+          {canManage && campaign.status === 'needs_attention' && (
+            <Button variant="secondary" disabled={busy} onClick={() => runAction(() => api.campaigns.retryFailed(campaignId))}>Retry failed</Button>
+          )}
+          {canManage && ['draft', 'paused'].includes(campaign.status) && (
+            <Button disabled={busy || !readiness.ready} onClick={() => setConfirmRelease(true)}>Review & release</Button>
+          )}
+          {canManage && campaign.status !== 'releasing' && (
+            <Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete</Button>
           )}
         </div>
-        <button
-          onClick={async () => {
-            if (!confirm(`Delete campaign "${campaign.name}"? This cannot be undone.`)) return;
-            try {
-              await api.campaigns.delete(campaign.id);
-              navigate('/campaigns');
-            } catch (e: any) {
-              alert(e?.message || 'Failed to delete campaign');
-            }
-          }}
-          className="px-4 py-2 rounded-lg text-sm border border-red-200 text-red-600 hover:bg-red-50"
-          title="Delete campaign"
-        >
-          Delete campaign
-        </button>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="surface-card rounded-xl p-6 shadow-sm">
-          <h2 className="font-semibold text-deep-navy mb-4">Add Contacts</h2>
-          <p className="text-slate-500 text-sm mb-4">Select contacts to add. Generate emails in Email Studio first, then add them here.</p>
-          <input
-            type="search"
-            placeholder="Search name, email, company... (press /)"
-            value={addContactSearch}
-            onChange={(e) => setAddContactSearch(e.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-pale-sky text-sm mb-3"
-            aria-label="Search contacts to add"
-            data-search-input
-          />
-          <div className="max-h-[300px] overflow-y-auto space-y-2 mb-4">
-            {contactsToAdd.map((c) => (
-              <label key={c.id} className="flex items-center gap-2 p-2 rounded bg-white hover:bg-slate-50 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(c.id)}
-                  onChange={() => toggleSelect(c.id)}
-                />
-                <span className="text-slate-800">{c.name || c.email}</span>
-                <span className="text-slate-500 text-sm">{c.company}</span>
-              </label>
-            ))}
-            {contactsToAdd.length === 0 && (
-              <p className="text-slate-500 text-sm">
-                {addContactSearch.trim() ? 'No contacts match your search.' : 'All contacts already in campaign.'}
-              </p>
-            )}
+      </header>
+
+      {error && <Notice tone="danger" className="mb-4">{error}</Notice>}
+      {!readiness.ready && (
+        <Notice tone="warning" className="mb-4">
+          <strong>Not ready to release.</strong>
+          <ul className="mt-1 list-disc pl-5">
+            {readiness.issues.map((issue) => <li key={issue}>{issue}</li>)}
+          </ul>
+        </Notice>
+      )}
+      {canManage && campaign.status === 'releasing' && (
+        <Notice tone="info" className="mb-4">The server is sending this campaign in paced batches. You can leave this page.</Notice>
+      )}
+
+      {canEdit && sequences.length > 0 && (
+        <label className="mb-5 block max-w-sm text-sm font-semibold text-deep-navy">
+          Follow-up sequence
+          <select
+            value={campaign.sequence_id ?? ''}
+            onChange={(event) => {
+              const sequenceId = event.target.value ? Number(event.target.value) : null;
+              void runAction(() => api.campaigns.update(campaignId, { sequence_id: sequenceId }));
+            }}
+            className="mt-1 min-h-11 w-full rounded-lg border border-[var(--border)] bg-white px-3"
+          >
+            <option value="">No follow-up sequence</option>
+            {sequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
+          </select>
+        </label>
+      )}
+
+      {canManage && <DispatchRecovery campaignId={campaignId} onReconciled={refresh} />}
+      {canManage && <TrackingSync onSynced={refresh} />}
+      <CampaignRecipients
+        readOnly={!canManage}
+        contacts={campaign.contacts || []}
+        onMarkReplied={async (campaignContactId) => {
+          await api.outreach.markReplied(campaignContactId);
+          await refresh();
+        }}
+      />
+
+      {canEdit && (
+        <details className="surface-card mt-6 rounded-xl p-4 sm:p-6" open={(campaign.contacts?.length || 0) === 0}>
+          <summary className="cursor-pointer font-semibold text-deep-navy">Add recipients</summary>
+          <div className="mt-4">
+            <p className="mb-4 text-sm text-slate-600">Your latest drafts are attached automatically. Complete each email before sending.</p>
+            <input
+              type="search"
+              placeholder="Search contacts by name, email, or company"
+              value={addContactSearch}
+              onChange={(event) => {
+                setAddContactSearch(event.target.value);
+                setContactOffset(0);
+              }}
+              className="mb-3 min-h-11 w-full rounded-lg border border-[var(--border)] px-3 text-sm"
+              data-search-input
+            />
+            <div className="mb-4 max-h-80 space-y-1 overflow-y-auto">
+              {contactsToAdd.map((contact) => (
+                <label key={contact.id} className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg px-3 hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(contact.id)}
+                    onChange={() => setSelectedIds((previous) => {
+                      const next = new Set(previous);
+                      if (next.has(contact.id)) next.delete(contact.id);
+                      else next.add(contact.id);
+                      return next;
+                    })}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-slate-800">{contact.name || contact.email}</span>
+                  <span className="hidden truncate text-sm text-slate-500 sm:block">{contact.company}</span>
+                </label>
+              ))}
+              {!contactLoading && contactsToAdd.length === 0 && <p className="py-6 text-center text-sm text-slate-500">No available contacts on this page.</p>}
+              {contactLoading && <p className="py-6 text-center text-sm text-slate-500">Loading contacts…</p>}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-xs text-slate-600">{contactTotal} contacts in results</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" disabled={contactLoading || contactOffset === 0} onClick={() => setContactOffset(Math.max(0, contactOffset - 50))}>Previous</Button>
+                <Button size="sm" variant="secondary" disabled={contactLoading || contactOffset + 50 >= contactTotal} onClick={() => setContactOffset(contactOffset + 50)}>Next</Button>
+                <Button size="sm" disabled={busy || selectedIds.size === 0} onClick={addSelected}>Add {selectedIds.size || ''} recipient{selectedIds.size === 1 ? '' : 's'}</Button>
+              </div>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => addSelected(false)}
-              disabled={selectedIds.size === 0 || generating}
-              className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-medium disabled:opacity-50"
-            >
-              Add {selectedIds.size} Contact(s)
-            </button>
-            <button
-              onClick={() => addSelected(true)}
-              disabled={selectedIds.size === 0 || generating}
-              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-            >
-              {generating ? 'Generating With Ollama...' : 'Generate & Add'}
-            </button>
-          </div>
-        </div>
-        <div className="surface-card rounded-xl overflow-hidden shadow-sm">
-          <div className="px-6 py-4 border-b border-pale-sky">
-            <h2 className="font-semibold text-deep-navy">Campaign Contacts ({campaign.contacts?.length ?? 0})</h2>
-          </div>
-          <div className="max-h-[400px] overflow-y-auto">
-            {(campaign.contacts || []).length === 0 ? (
-              <p className="p-4 text-slate-500 text-sm">No contacts yet. Add some above.</p>
-            ) : (
-              (campaign.contacts || []).map((cc: any) => (
-                <div
-                  key={cc.id}
-                  className="px-6 py-3 border-b border-pale-sky/50 flex items-center justify-between gap-4"
-                >
-                  <div>
-                    <div className="font-medium text-slate-800">{cc.name} ({cc.email})</div>
-                    <div className="text-sm text-slate-500">
-                      {cc.status}
-                      {cc.opened_at && <span className="ml-2 text-green-600">• Opened</span>}
-                      {cc.replied_at && <span className="ml-2 text-steel-blue">• Replied</span>}
-                    </div>
-                    {cc.email_subject && (
-                      <div className="text-xs text-slate-500 mt-1">Subject: {cc.email_subject}</div>
-                    )}
-                  </div>
-                  {cc.status === 'sent' && !cc.replied_at && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          await api.outreach.markReplied(cc.id);
-                          setCampaign(await api.campaigns.get(parseInt(id!, 10)));
-                        } catch (e) {
-                          alert((e as Error)?.message);
-                        }
-                      }}
-                      className="px-3 py-1 rounded text-sm bg-pale-sky/50 hover:bg-pale-sky text-deep-navy"
-                    >
-                      Mark replied
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
+        </details>
+      )}
+
+      <ConfirmDialog
+        open={confirmRelease}
+        title="Release this campaign?"
+        body={`${campaign.contacts?.length || 0} recipients will enter the paced send queue. You can pause future batches from this page.`}
+        confirmLabel="Release campaign"
+        busy={busy}
+        onClose={() => setConfirmRelease(false)}
+        onConfirm={async () => {
+          await runAction(() => api.campaigns.release(campaignId));
+          setConfirmRelease(false);
+        }}
+      />
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete campaign?"
+        body="This permanently removes the campaign and its recipient queue."
+        confirmLabel="Delete campaign"
+        danger
+        busy={busy}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={async () => {
+          setBusy(true);
+          try {
+            await api.campaigns.delete(campaignId);
+            navigate('/campaigns');
+          } catch (requestError) {
+            setError((requestError as Error).message);
+            setBusy(false);
+          }
+        }}
+      />
     </div>
   );
 }

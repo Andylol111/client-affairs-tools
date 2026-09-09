@@ -52,6 +52,16 @@ class ExportShortlistRequest(BaseModel):
     )
 
 
+@router.post("/prospects/refresh")
+async def refresh_prospects(user: dict = Depends(get_current_user)):
+    """Check the live catalog and reload the workbook only when its object changed."""
+    try:
+        load_prospects(force_reload=True)
+        return prospects_meta()
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.get("/prospects/meta")
 async def get_prospects_meta(user: dict = Depends(get_current_user)):
     """Spreadsheet source info and distinct filter values."""

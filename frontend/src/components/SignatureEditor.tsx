@@ -1,3 +1,4 @@
+import { sanitizeRichText, insertSafeTransfer } from '../lib/richText';
 import { useRef, useEffect } from 'react';
 
 type SignatureEditorProps = {
@@ -19,7 +20,7 @@ export function SignatureEditor({ value, onChange, placeholder = 'Best regards,\
   useEffect(() => {
     if (ref.current == null) return;
     const current = ref.current.innerHTML;
-    const normalized = (value || '').trim();
+    const normalized = sanitizeRichText((value || '').trim());
     // Avoid overwriting while user is typing (same content)
     if (normalized === '' && current === '') return;
     if (normalized !== '' && current === normalized) return;
@@ -29,14 +30,15 @@ export function SignatureEditor({ value, onChange, placeholder = 'Best regards,\
   }, [value]);
 
   const handleInput = () => {
-    if (ref.current) onChange(ref.current.innerHTML);
+    if (ref.current) onChange(sanitizeRichText(ref.current.innerHTML));
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
-      if (item.type.indexOf('image') !== -1) {
+      if (/^image\/(png|jpeg|gif|webp)$/.test(item.type)) {
         e.preventDefault();
         const file = item.getAsFile();
         if (!file) return;
@@ -45,31 +47,32 @@ export function SignatureEditor({ value, onChange, placeholder = 'Best regards,\
           const dataUrl = reader.result as string;
           const img = document.createElement('img');
           img.src = dataUrl;
-          img.style.maxWidth = '200px';
-          img.style.height = 'auto';
+          img.width = 200;
           img.alt = 'Signature';
-          document.execCommand('insertHTML', false, img.outerHTML);
-          if (ref.current) onChange(ref.current.innerHTML);
+          document.execCommand('insertHTML', false, sanitizeRichText(img.outerHTML));
+          if (ref.current) onChange(sanitizeRichText(ref.current.innerHTML));
         };
         reader.readAsDataURL(file);
         return;
       }
     }
+    insertSafeTransfer(e.clipboardData);
+    handleInput();
   };
 
   const insertImageFromFile = (file: File) => {
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return;
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
       const img = document.createElement('img');
       img.src = dataUrl;
-      img.style.maxWidth = '200px';
-      img.style.height = 'auto';
+      img.width = 200;
       img.alt = 'Signature';
       if (ref.current) {
         ref.current.focus();
-        document.execCommand('insertHTML', false, img.outerHTML);
-        onChange(ref.current.innerHTML);
+        document.execCommand('insertHTML', false, sanitizeRichText(img.outerHTML));
+        onChange(sanitizeRichText(ref.current.innerHTML));
       }
     };
     reader.readAsDataURL(file);
@@ -90,7 +93,7 @@ export function SignatureEditor({ value, onChange, placeholder = 'Best regards,\
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/png,image/jpeg,image/gif,image/webp"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -105,6 +108,10 @@ export function SignatureEditor({ value, onChange, placeholder = 'Best regards,\
         suppressContentEditableWarning
         onInput={handleInput}
         onPaste={handlePaste}
+        onDrop={event => { event.preventDefault(); insertSafeTransfer(event.dataTransfer); handleInput(); }}
+        role="textbox"
+        aria-label="Email signature"
+        aria-multiline="true"
         className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-800 overflow-auto ${className}`}
         style={{ minHeight }}
       />

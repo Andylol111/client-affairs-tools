@@ -29,21 +29,6 @@ async def _user_from_db(user_id: int) -> dict | None:
             "picture": row.get("picture"),
             "role": row.get("role") or "standard",
         }
-    except Exception:
-        cursor = await db.execute(
-            "SELECT id, email, name, picture FROM users WHERE id = ?",
-            (user_id,),
-        )
-        row = row_to_dict(await cursor.fetchone())
-        if not row:
-            return None
-        return {
-            "id": row["id"],
-            "email": row["email"],
-            "name": row.get("name"),
-            "picture": row.get("picture"),
-            "role": "standard",
-        }
     finally:
         await db.close()
 

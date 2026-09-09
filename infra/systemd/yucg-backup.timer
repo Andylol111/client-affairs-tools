@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily YUCG SQLite backup schedule (opt-in)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+Unit=yucg-backup.service
+
+[Install]
+WantedBy=timers.target

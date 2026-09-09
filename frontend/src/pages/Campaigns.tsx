@@ -1,154 +1,166 @@
+import { canManageCampaign, campaignAccessLabel } from '../lib/campaignAccess';
+import CampaignOwnershipReview from '../components/campaigns/CampaignOwnershipReview';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
+import { Link, useNavigate, useOutletContext } from 'react-router-dom';
+import { api, type Campaign } from '../api';
 import PageHeader from '../components/PageHeader';
+import { Button, ConfirmDialog, EmptyState, Notice, StatusBadge } from '../components/ui/Primitives';
+
+function campaignTone(status: string): 'neutral' | 'info' | 'warning' | 'success' | 'danger' {
+  if (status === 'sent') return 'success';
+  if (status === 'releasing') return 'info';
+  if (status === 'needs_attention') return 'danger';
+  if (status === 'paused') return 'warning';
+  return 'neutral';
+}
 
 export default function Campaigns() {
   const navigate = useNavigate();
-  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const { user } = useOutletContext<{ user: { id: number; role: string } }>();
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [newName, setNewName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
+
+  const refresh = async () => {
+    try {
+      setCampaigns(await api.campaigns.list());
+      setError('');
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    }
+  };
 
   useEffect(() => {
-    api.campaigns.list().then(setCampaigns).catch(() => setCampaigns([]));
+    void refresh();
   }, []);
+
+  useEffect(() => {
+    if (!campaigns.some((campaign) => campaign.status === 'releasing')) return;
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => window.clearInterval(timer);
+  }, [campaigns]);
 
   const createCampaign = async () => {
     if (!newName.trim()) return;
     setLoading(true);
+    setError('');
     try {
-      await api.campaigns.create(newName.trim());
+      const campaign = await api.campaigns.create(newName.trim());
       setNewName('');
-      setCampaigns(await api.campaigns.list());
+      navigate(`/campaigns/${campaign.id}`);
+    } catch (requestError) {
+      setError((requestError as Error).message);
     } finally {
       setLoading(false);
     }
   };
 
-  const sendCampaign = async (id: number) => {
-    if (!confirm('Send this campaign?')) return;
+  const deleteCampaign = async () => {
+    if (!deleteTarget) return;
+    setLoading(true);
     try {
-      await api.campaigns.send(id);
-      setCampaigns(await api.campaigns.list());
-    } catch (e) {
-      alert(e);
-    }
-  };
-
-  const deleteCampaign = async (id: number, name: string) => {
-    if (!confirm(`Delete campaign "${name}"? This cannot be undone.`)) return;
-    try {
-      await api.campaigns.delete(id);
-      setCampaigns(await api.campaigns.list());
-    } catch (e: any) {
-      alert(e?.message || 'Failed to delete campaign');
+      await api.campaigns.delete(deleteTarget.id);
+      setDeleteTarget(null);
+      await refresh();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="app-workspace max-w-6xl">
       <PageHeader
-        title="Send"
-        subtitle="Release mail on a clock. One click is a drain tick, not the whole list."
+        title="Campaigns"
+        subtitle="Prepare and send from your own account. Shared summaries show the club’s outreach activity."
         imageSrc="/yucg-bg/texture-panel.jpg"
-        actions={
-          <button
-            onClick={async () => {
-              const name = window.prompt('Campaign name:');
-              if (!name?.trim()) return;
-              setLoading(true);
-              try {
-                await api.campaigns.create(name.trim());
-                setCampaigns(await api.campaigns.list());
-              } catch (e: any) {
-                alert(e?.message || 'Failed to create campaign');
-              } finally {
-                setLoading(false);
-              }
-            }}
-            disabled={loading}
-            className="px-4 py-2 bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium whitespace-nowrap disabled:opacity-50"
-          >
-            + Create campaign
-          </button>
-        }
       />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="surface-card shadow-sm rounded-xl p-6">
-          <h2 className="font-semibold text-deep-navy mb-4">Create Campaign</h2>
-          <div className="flex gap-1">
+
+      {error && <Notice tone="danger" className="mb-5">{error}</Notice>}
+
+      <section className="surface-card rounded-xl p-5 mb-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="flex-1 text-sm font-semibold text-deep-navy">
+            New campaign
             <input
               id="create-campaign-input"
               type="text"
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={(event) => setNewName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void createCampaign();
+              }}
               placeholder="Campaign name"
-              className="flex-1 px-4 py-3 rounded-lg bg-white border border-slate-300 text-slate-800 placeholder-slate-400"
+              className="mt-1 min-h-11 w-full rounded-lg border border-[var(--border)] bg-white px-3 text-slate-800"
             />
-            <button
-              onClick={createCampaign}
-              disabled={loading}
-              className="px-6 py-3 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-medium disabled:opacity-50 transition-all"
-            >
-              Create
-            </button>
-          </div>
+          </label>
+          <Button onClick={createCampaign} disabled={loading || !newName.trim()}>
+            {loading ? 'Creating…' : 'Create campaign'}
+          </Button>
         </div>
-        <div className="lg:col-span-2">
-          <h2 className="font-semibold text-deep-navy mb-4">Your Campaigns</h2>
-          <div className="space-y-3">
-            {campaigns.length === 0 ? (
-              <div className="bg-white border border-pale-sky rounded-xl p-8 text-center">
-                <p className="text-slate-600 mb-2">No campaigns yet.</p>
-                <p className="text-sm text-slate-500 mb-4">Create a campaign, add contacts from Email Studio or Scraper, then send.</p>
-                <button
-                  onClick={() => document.getElementById('create-campaign-input')?.focus()}
-                  className="px-4 py-2 rounded-lg bg-pale-sky/50 text-deep-navy font-medium hover:bg-pale-sky"
-                >
-                  Create your first campaign
-                </button>
-              </div>
-            ) : (
-              campaigns.map((c) => (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between p-4 surface-card shadow-sm rounded-xl"
-                >
-                  <div>
-                    <div className="font-medium text-deep-navy">{c.name}</div>
-                    <div className="text-sm text-slate-500">
-                      {c.contact_count ?? 0} contacts • {c.sent_count ?? 0} sent • {c.status}
+      </section>
+
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="app-section-title">Mail campaigns</h2>
+        <Button variant="secondary" onClick={refresh}>Refresh</Button>
+      </div>
+
+      {campaigns.length === 0 ? (
+        <EmptyState
+          title="No mail campaigns"
+          body="Prepare a draft, select recipients, and create a campaign for review."
+          action={<Link className="ui-button ui-button--primary" to="/studio">Open Drafts</Link>}
+        />
+      ) : (
+        <div className="space-y-3">
+          {campaigns.map((campaign) => {
+            const sent = campaign.sent_count ?? 0;
+            const total = campaign.contact_count ?? 0;
+            const progress = total ? Math.round((sent / total) * 100) : 0;
+            return (
+              <article key={campaign.id} className="surface-card rounded-xl p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <button disabled={!canManageCampaign(campaign, user.id)} className="min-w-0 flex-1 text-left disabled:cursor-default" onClick={() => navigate(`/campaigns/${campaign.id}`)}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold text-deep-navy">{campaign.name}</h3>
+                      <StatusBadge>{campaignAccessLabel(campaign, user.id)}</StatusBadge>
+                      <StatusBadge tone={campaignTone(campaign.status)}>{campaign.status.replace('_', ' ')}</StatusBadge>
                     </div>
-                  </div>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {total} recipients · {sent} sent · {campaign.pending_count ?? 0} queued
+                      {(campaign.failed_count ?? 0) > 0 ? ` · ${campaign.failed_count} failed` : ''}
+                    </p>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200" aria-label={`${progress}% sent`}>
+                      <div className="h-full bg-[var(--accent)]" style={{ width: `${progress}%` }} />
+                    </div>
+                  </button>
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => navigate(`/campaigns/${c.id}`)}
-                      className="px-4 py-2 rounded-lg text-sm border border-slate-300 text-slate-700 hover:bg-slate-50"
-                    >
-                      View
-                    </button>
-                    {c.status === 'draft' && (
-                      <button
-                        onClick={() => sendCampaign(c.id)}
-                        className="px-4 py-2 rounded-lg text-sm bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)]"
-                      >
-                        Send
-                      </button>
+                    {canManageCampaign(campaign, user.id) && <Button variant="secondary" onClick={() => navigate(`/campaigns/${campaign.id}`)}>Review</Button>}
+                    {canManageCampaign(campaign, user.id) && campaign.status !== 'releasing' && (
+                      <Button variant="danger" onClick={() => setDeleteTarget(campaign)}>Delete</Button>
                     )}
-                    <button
-                      onClick={() => deleteCampaign(c.id, c.name)}
-                      className="px-4 py-2 rounded-lg text-sm border border-red-200 text-red-600 hover:bg-red-50"
-                      title="Delete campaign"
-                    >
-                      Delete
-                    </button>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
+                {user.role === 'admin' && !campaign.owner_user_id && !campaign.sender_user_id && <CampaignOwnershipReview campaignId={campaign.id} onResolved={refresh} />}
+              </article>
+            );
+          })}
         </div>
-      </div>
+      )}
+
+      <ConfirmDialog
+        open={deleteTarget != null}
+        title="Delete campaign?"
+        body={deleteTarget ? `“${deleteTarget.name}” and its recipient queue will be permanently deleted.` : ''}
+        confirmLabel="Delete campaign"
+        danger
+        busy={loading}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={deleteCampaign}
+      />
     </div>
   );
 }

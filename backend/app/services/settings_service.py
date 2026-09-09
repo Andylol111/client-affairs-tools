@@ -39,10 +39,23 @@ async def get_all_settings() -> dict[str, str]:
         rows = await cursor.fetchall()
         result = {}
         for r in rows:
-            result[r["key"]] = r["value"] or ""
+            if r["key"] in {"signature", "signature_image_url", "attachments_enabled"}:
+                result[r["key"]] = r["value"] or ""
         # Defaults for optional keys
         if "attachments_enabled" not in result:
             result["attachments_enabled"] = "0"
         return result
     finally:
         await db.close()
+
+
+async def get_member_setting(user_id: int, key: str) -> str | None:
+    if key not in {"signature", "signature_image_url"}:
+        raise ValueError("Unsupported member setting")
+    return await get_setting(f"member:{user_id}:{key}")
+
+
+async def set_member_setting(user_id: int, key: str, value: str | None) -> None:
+    if key not in {"signature", "signature_image_url"}:
+        raise ValueError("Unsupported member setting")
+    await set_setting(f"member:{user_id}:{key}", value)

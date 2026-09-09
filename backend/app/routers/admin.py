@@ -163,26 +163,9 @@ async def export_users_excel(admin: dict = Depends(get_current_admin)):
 
 @router.post("/users/invite")
 async def invite_user(payload: UserInvite, admin: dict = Depends(get_current_admin)):
-    """Create a placeholder user by email. They get role=standard when they first log in. Admin only."""
-    email = payload.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(400, "Invalid email")
-    if not email.endswith("@yale.edu"):
-        raise HTTPException(400, "Only @yale.edu emails allowed")
-    db = await get_db()
-    try:
-        cursor = await db.execute("SELECT id FROM users WHERE email = ?", (email,))
-        if await cursor.fetchone():
-            raise HTTPException(400, "User already exists")
-        await db.execute(
-            "INSERT INTO users (email, name, role) VALUES (?, '', 'standard')",
-            (email,),
-        )
-        await db.commit()
-        await log_audit(admin["id"], "user_invite", "user", email, f"Invited {email}")
-        return {"ok": True, "email": email}
-    finally:
-        await db.close()
+    """Compatibility endpoint: create an expiring invitation, never grant access directly."""
+    from app.routers.invitations import create_invitation, InvitationCreate
+    return await create_invitation(InvitationCreate(email=payload.email), admin)
 
 
 @router.patch("/users/{user_id}/role")

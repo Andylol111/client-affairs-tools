@@ -22,21 +22,23 @@ if [ -n "$DATA_DEV" ]; then
   grep -q " $DATA_DIR " /etc/fstab || echo "$DATA_DEV $DATA_DIR xfs defaults,nofail 0 2" >> /etc/fstab
   mount -a
 else
-  DATA_DIR=/var/lib/yucg
-  install -d -m 0755 "$DATA_DIR"
-  echo "no extra EBS; SQLite on root volume"
+  echo "Retained data volume missing; refusing root-volume fallback"
+  exit 1
 fi
+
+mountpoint -q /data || { echo "Retained data mount failed"; exit 1; }
 
 aws ecr get-login-password --region "$YUCG_REGION" | docker login --username AWS --password-stdin "$YUCG_ECR"
 docker pull "$YUCG_IMAGE"
 
 PUBLIC_URL=""
-for _ in $(seq 1 36); do
+# VPC origin + distribution often land 10–15 min after the instance starts.
+for _ in $(seq 1 90); do
   PUBLIC_URL=$(aws ssm get-parameter --region "$YUCG_REGION" --name "$YUCG_PUBLIC_PARAM" --query Parameter.Value --output text 2>/dev/null || true)
   if [ -n "$PUBLIC_URL" ] && [ "$PUBLIC_URL" != "None" ]; then
     break
   fi
-  sleep 10
+  sleep 15
 done
 if [ -z "$PUBLIC_URL" ] || [ "$PUBLIC_URL" = "None" ]; then
   echo "public URL parameter missing; Google OAuth needs the CloudFront HTTPS name"
@@ -66,7 +68,7 @@ cat > /usr/local/bin/yucg-run.sh <<EOS
 #!/bin/bash
 set -euo pipefail
 docker rm -f yucg >/dev/null 2>&1 || true
-docker run --name yucg --restart unless-stopped \\
+docker run -d --name yucg --restart unless-stopped \\
   --env-file /etc/yucg/app.env \\
   -p 80:8000 \\
   -v $DATA_DIR:/data \\

@@ -1,9 +1,12 @@
+import type { Contact } from '../api';
 import { useState, useRef, useEffect } from 'react';
 import { api, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
+import CompanyDiscovery from '../components/discovery/CompanyDiscovery';
+import { useUrlTab } from '../lib/useUrlTab';
 
-type ScraperTab = 'import' | 'scrape' | 'find';
+type ScraperTab = 'company' | 'scrape' | 'find' | 'import';
 
 type ScrapeProgressState = {
   phase: string;
@@ -17,7 +20,7 @@ const PHASE_TYPICAL: Record<string, string> = {
   domain: 'Site crawl: often 30 seconds–2 minutes depending on pages and latency.',
   web: 'Web search: Tavily scans LinkedIn, press, and directories (30–90 seconds).',
   linkedin: 'LinkedIn step: Apify runs about 1–3 minutes; public page fallback is faster but yields fewer people.',
-  prepare: 'Inbox + AI agent pools run in parallel (6 threaded Ollama agents by default).',
+  prepare: 'Inbox + AI agent pools run in parallel (6 threaded Bedrock agents by default).',
   save: 'Database save: quick unless you are upserting hundreds of rows.',
 };
 
@@ -107,8 +110,7 @@ function formatEtaSeconds(sec: number | null): string {
 /** `tick` bumps on an interval so elapsed/ETA refresh while backend progress is sparse (e.g. Apify). */
 function elapsedSecondsSince(startedAt: number | null, tick: number): number {
   if (!startedAt) return 0;
-  void tick;
-  return Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  return Math.max(0, Math.round((tick - startedAt) / 1000));
 }
 
 function ScrapeProgressPanel({
@@ -123,7 +125,7 @@ function ScrapeProgressPanel({
   const pct = progress?.pct ?? 0;
   let etaSec: number | null = null;
   if (startedAt && pct >= 4 && pct < 98) {
-    const el = (Date.now() - startedAt) / 1000;
+    const el = Math.max(0, (tick - startedAt) / 1000);
     if (el >= 1.2) {
       etaSec = el * (100 / pct - 1);
     }
@@ -254,14 +256,14 @@ function ScrapeResultsSkeleton() {
 }
 
 export default function Scraper() {
-  const [activeTab, setActiveTab] = useState<ScraperTab>('scrape');
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['company', 'scrape', 'find', 'import'], 'company');
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
   const [linkedinUrl, setLinkedinUrl] = useState('');
   const [linkedinMaxEmployees, setLinkedinMaxEmployees] = useState(50);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -292,7 +294,7 @@ export default function Scraper() {
 
   useEffect(() => {
     if (!loading || activeTab !== 'scrape') return;
-    const id = window.setInterval(() => setScrapeTick((t) => t + 1), 450);
+    const id = window.setInterval(() => setScrapeTick(Date.now()), 450);
     return () => clearInterval(id);
   }, [loading, activeTab]);
 
@@ -331,8 +333,9 @@ export default function Scraper() {
       setInfoMessage(
         `Identity pass: ${res.fixed} fixed, ${res.removed} removed, ${res.unchanged} unchanged.`
       );
-    } catch (e: any) {
-      setError(e.message || 'Reconcile failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Reconcile failed');
     } finally {
       setReconciling(false);
     }
@@ -346,8 +349,9 @@ export default function Scraper() {
     try {
       const res = await api.contacts.purgeJunkContacts(domain.trim() || undefined);
       setInfoMessage(`Removed ${res.removed} junk contact(s) from the database.`);
-    } catch (e: any) {
-      setError(e.message || 'Purge failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Purge failed');
     } finally {
       setPurging(false);
     }
@@ -393,8 +397,9 @@ export default function Scraper() {
             ? `, ${res.patterns_deleted} email pattern(s), ${res.discovery_logs_deleted} discovery log row(s).`
             : '.')
       );
-    } catch (e: any) {
-      setError(e.message || 'Clear failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Clear failed');
     } finally {
       setClearing(false);
     }
@@ -491,8 +496,9 @@ export default function Scraper() {
       } else {
         setInfoMessage('');
       }
-    } catch (e: any) {
-      setError(e.message || 'Scrape failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Scrape failed');
     } finally {
       scrapeAbortRef.current = null;
       setLoading(false);
@@ -515,8 +521,9 @@ export default function Scraper() {
       const res = await api.contacts.searchPerson({ name, company: findCompany.trim() || undefined });
       setFindResult(res);
       setError('');
-    } catch (e: any) {
-      setError(e.message || 'Search failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Search failed');
     } finally {
       setFindLoading(false);
     }
@@ -539,8 +546,9 @@ export default function Scraper() {
       } else {
         setInfoMessage('');
       }
-    } catch (e: any) {
-      setError(e.message || 'Import failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setError(eMessage || 'Import failed');
     } finally {
       setImporting(false);
       e.target.value = '';
@@ -548,19 +556,20 @@ export default function Scraper() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 pb-12">
+    <div className="app-workspace pb-12">
       <PageHeader
-        title="Find"
-        subtitle="Crawl, LinkedIn, Tavily. AI review uses the model in the header."
+        title="Prospects"
+        subtitle="Discover prospective contacts, review their sources, and save relevant people for outreach."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
 
       <AppSubnav
         className="mb-8"
         items={[
-          { id: 'scrape', label: 'Scrape Website' },
-          { id: 'find', label: 'Find Contact' },
-          { id: 'import', label: 'Import Spreadsheet' },
+          { id: 'company', label: 'Company discovery' },
+          { id: 'scrape', label: 'Quick scrape' },
+          { id: 'find', label: 'Person lookup' },
+          { id: 'import', label: 'Import' },
         ]}
         active={activeTab}
         onChange={(id) => {
@@ -568,7 +577,10 @@ export default function Scraper() {
           setError('');
           if (id !== 'find') setFindResult(null);
         }}
+        label="Find methods"
       />
+
+      {activeTab === 'company' && <CompanyDiscovery />}
 
       {activeTab === 'scrape' && (
         <div className="space-y-6">
@@ -848,7 +860,7 @@ export default function Scraper() {
             )}
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full">
+            <table className="w-full ingestion-table">
               <thead>
                 <tr className="text-left text-[12px] text-slate-blue font-medium bg-pale-sky/40">
                   <th className="px-4 py-3">Name</th>
@@ -869,7 +881,7 @@ export default function Scraper() {
                   >
                     <td className="px-4 py-3 text-[14px] text-deep-navy">{c.name}</td>
                     <td className="px-4 py-3 text-[14px] text-steel-blue">{c.email}</td>
-                    <td className="px-4 py-3 text-[14px] text-deep-navy max-w-[12rem] truncate" title={c.title}>{c.title || '—'}</td>
+                    <td className="px-4 py-3 text-[14px] text-deep-navy max-w-[12rem] truncate" title={c.title || undefined}>{c.title || '—'}</td>
                     <td className="px-4 py-3 text-[12px] text-slate-600 max-w-[10rem]">
                       <div>{c.contact_source || c.scrape_source || '—'}</div>
                       {(c.source_url || c.scrape_source_url) && (
@@ -930,7 +942,7 @@ export default function Scraper() {
           {showDiscoveryLog && discoveryLog.length > 0 && (
             <div className="border-t border-pale-sky px-5 py-4 bg-pale-sky/15 max-h-80 overflow-y-auto">
               <p className="text-[12px] font-semibold text-deep-navy mb-2">
-                Ollama audit log {scrapeRunId ? `· run ${scrapeRunId.slice(0, 8)}…` : ''}
+                AI audit log {scrapeRunId ? `· run ${scrapeRunId.slice(0, 8)}…` : ''}
               </p>
               <ul className="space-y-2">
                 {discoveryLog.map((e, i) => (

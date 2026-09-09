@@ -1,15 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import Dashboard from './pages/Dashboard';
-import Scraper from './pages/Scraper';
-import EmailStudio from './pages/EmailStudio';
-import Campaigns from './pages/Campaigns';
-import CampaignDetail from './pages/CampaignDetail';
-import Analytics from './pages/Analytics';
-import Outreach from './pages/Outreach';
-import YucgOutreach from './pages/YucgOutreach';
-import Admin from './pages/Admin';
-import Profile from './pages/Profile';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import LoginPage from './pages/LoginPage';
 import MainApp from './pages/MainApp';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -17,6 +7,18 @@ import { ToastProvider } from './contexts/ToastContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AiModelProvider } from './contexts/AiModelContext';
 import { API_BASE } from './api';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Scraper = lazy(() => import('./pages/Scraper'));
+const EmailStudio = lazy(() => import('./pages/EmailStudio'));
+const Campaigns = lazy(() => import('./pages/Campaigns'));
+const CampaignDetail = lazy(() => import('./pages/CampaignDetail'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const Outreach = lazy(() => import('./pages/Outreach'));
+const YucgOutreach = lazy(() => import('./pages/YucgOutreach'));
+const Admin = lazy(() => import('./pages/Admin'));
+const Profile = lazy(() => import('./pages/Profile'));
+const Documents = lazy(() => import('./pages/Documents'));
 
 function AppContent() {
   const [user, setUser] = useState<{ id?: number; email: string; name?: string; picture?: string; role?: string } | null>(null);
@@ -63,23 +65,21 @@ function AppContent() {
     setUser(null);
   };
 
-  // Loading: show spinner while checking auth
+  useEffect(() => {
+    const onUnauthorized = () => {
+      localStorage.removeItem('yucg_token');
+      localStorage.removeItem('yucg_token_time');
+      setUser(null);
+    };
+    window.addEventListener('yucg:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('yucg:unauthorized', onUnauthorized);
+  }, []);
+
   if (authLoading) {
-    return (
-      <div className="app-auth-loading">
-        <div className="text-center max-w-md px-6">
-          <div className="animate-spin w-10 h-10 border-2 border-white border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-white font-bold uppercase tracking-wide">YUCG Outreach</p>
-          <p className="text-white/80 text-sm mt-2">Loading…</p>
-          <p className="text-white/70 text-xs mt-4">
-            If this hangs, the API is not running. From the project folder: <code className="bg-black/30 px-1">./start-all.sh</code>
-          </p>
-        </div>
-      </div>
-    );
+    return <AppLoading label="Opening your workspace…" />;
   }
 
-  return (
+  const routes = (
     <Routes>
       {/* Login page - only when NOT authenticated */}
       <Route
@@ -114,9 +114,24 @@ function AppContent() {
         <Route path="yucgoutreach" element={<YucgOutreach />} />
         <Route path="admin" element={<Admin />} />
         <Route path="profile" element={<Profile />} />
+        <Route path="documents" element={<Documents />} />
+        <Route path="projects" element={<Documents projectsOnly />} />
         <Route path="settings" element={<Navigate to="/profile?tab=settings" replace />} />
       </Route>
     </Routes>
+  );
+  return <Suspense fallback={<AppLoading label="Loading section…" />}>{routes}</Suspense>;
+}
+
+function AppLoading({ label }: { label: string }) {
+  return (
+    <div className="app-auth-loading" role="status" aria-live="polite">
+      <div className="text-center max-w-md px-6">
+        <div className="animate-spin w-10 h-10 border-2 border-white border-t-transparent rounded-full mx-auto mb-4" />
+        <p className="text-white font-bold uppercase tracking-wide">YUCG Outreach</p>
+        <p className="text-white/80 text-sm mt-2">{label}</p>
+      </div>
+    </div>
   );
 }
 

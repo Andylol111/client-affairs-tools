@@ -257,7 +257,7 @@ async def ai_recommend_prospects(
             "count": 0,
             "recommendations": [],
             "model": model,
-            "ollama_error": "Model returned no parseable JSON. Try another Claude size, or Ollama on the laptop.",
+            "ollama_error": "Model returned no parseable JSON. Try another Claude size.",
         }
 
     by_row = _row_by_index(candidates)

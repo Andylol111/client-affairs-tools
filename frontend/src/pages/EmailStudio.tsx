@@ -1,11 +1,13 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { sanitizeRichText, insertSafeTransfer, safeImageUrl } from '../lib/richText';
+import type { Sentiment, Attachment, Release, OneDriveItem, Sequence } from '../api';
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
-import { api } from '../api';
-import { loadDrafts, saveDraft, deleteDraft, type EmailDraft } from '../lib/emailDrafts';
+import { api, type Contact, type GeneratedEmail } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import AiModelSelect from '../components/AiModelSelect';
-import { useAiModel } from '../contexts/AiModelContext';
+import { useAiModel } from '../contexts/useAiModel';
+import { useUrlTab } from '../lib/useUrlTab';
 
 function lastSendHint(c: { last_sent_at?: string | null; last_campaign_name?: string | null }) {
   if (!c.last_sent_at) return '';
@@ -13,8 +15,24 @@ function lastSendHint(c: { last_sent_at?: string | null; last_campaign_name?: st
   return c.last_campaign_name ? `Last send: ${c.last_campaign_name} · ${when}` : `Last send ${when}`;
 }
 
-function groupContactsByCompany(contacts: any[]): { company: string; contacts: any[] }[] {
-  const byCompany = new Map<string, any[]>();
+async function loadCompanyEmployees(companies: string[]): Promise<Contact[]> {
+  const items: Contact[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await api.contacts.list({
+      companies: companies.join(','),
+      employee_only: true,
+      limit: 500,
+      offset,
+    });
+    items.push(...page.items);
+    offset += page.limit;
+    if (offset >= page.total) return items;
+  }
+}
+
+function groupContactsByCompany(contacts: Contact[]): { company: string; contacts: Contact[] }[] {
+  const byCompany = new Map<string, Contact[]>();
   for (const c of contacts) {
     const key = (c.company || '').trim() || 'No company';
     if (!byCompany.has(key)) byCompany.set(key, []);
@@ -27,12 +45,12 @@ function groupContactsByCompany(contacts: any[]): { company: string; contacts: a
 
 function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds, onToggleBulk, onToggleAllInCompany }: {
   company: string;
-  contacts: any[];
-  selected: any;
-  onSelect: (c: any) => void;
+  contacts: Contact[];
+  selected: Contact | null;
+  onSelect: (c: Contact) => void;
   bulkSelectedIds: Set<number>;
   onToggleBulk: (id: number) => void;
-  onToggleAllInCompany: (companyContacts: any[]) => void;
+  onToggleAllInCompany: (companyContacts: Contact[]) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -121,8 +139,8 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
 export default function EmailStudio() {
   const { user } = useOutletContext<{ user: { email: string; name?: string } }>();
   const { modelId } = useAiModel();
-  const [contacts, setContacts] = useState<any[]>([]);
-  const [selected, setSelected] = useState<any>(null);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [selected, setSelected] = useState<Contact | null>(null);
   const [email, setEmail] = useState<{ subject: string; body: string } | null>(null);
   const [signature, setSignature] = useState('');
   const [signatureImageUrl, setSignatureImageUrl] = useState('');
@@ -133,37 +151,39 @@ export default function EmailStudio() {
   const [angle, setAngle] = useState('pain_point');
   const [valueProp, setValueProp] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
-  const [generatedEmails, setGeneratedEmails] = useState<any[]>([]);
+  const [generatedEmails, setGeneratedEmails] = useState<GeneratedEmail[]>([]);
   const [sortBy, setSortBy] = useState('created_desc');
-  const [activeTab, setActiveTab] = useState<'editor' | 'cache'>('editor');
+  const [activeTab, setActiveTab] = useUrlTab<'editor' | 'cache'>(['editor', 'cache'], 'editor', 'panel');
   const [quickCompose, setQuickCompose] = useState({ name: '', company: '', title: '', email: '' });
   const [emailFontSize, setEmailFontSize] = useState(14);
-  const [drafts, setDrafts] = useState<EmailDraft[]>([]);
-  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [draftMessage, setDraftMessage] = useState('');
+  const [mobileStep, setMobileStep] = useState<'contacts' | 'generate' | 'edit'>('contacts');
   const [draftDescription, setDraftDescription] = useState('');
   const [draftTargetAudience, setDraftTargetAudience] = useState('');
   const [draftCompany, setDraftCompany] = useState('');
-  const [sentimentAnalysis, setSentimentAnalysis] = useState<any>(null);
+  const [sentimentAnalysis, setSentimentAnalysis] = useState<Sentiment | null>(null);
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [sentimentIndustry, setSentimentIndustry] = useState('');
   const [attachmentsEnabled, setAttachmentsEnabled] = useState(false);
-  const [attachmentLibrary, setAttachmentLibrary] = useState<any[]>([]);
+  const [attachmentLibrary, setAttachmentLibrary] = useState<Attachment[]>([]);
   const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<Set<number>>(new Set());
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [contactsPanelExpanded, setContactsPanelExpanded] = useState(true);
   const [aiGeneratorExpanded, setAiGeneratorExpanded] = useState(true);
   const [contactSearch, setContactSearch] = useState('');
   const [releaseFilter, setReleaseFilter] = useState('');
-  const [releases, setReleases] = useState<any[]>([]);
+  const [releases, setReleases] = useState<Release[]>([]);
   const [onedriveOpen, setOnedriveOpen] = useState(false);
   const [onedriveConfigured, setOnedriveConfigured] = useState(false);
-  const [onedriveItems, setOnedriveItems] = useState<any[]>([]);
+  const [onedriveItems, setOnedriveItems] = useState<OneDriveItem[]>([]);
   const [onedriveBusy, setOnedriveBusy] = useState(false);
   const [companiesSummary, setCompaniesSummary] = useState<{ company: string; company_domain?: string; contact_count: number }[]>([]);
   const [selectedCompanyNames, setSelectedCompanyNames] = useState<Set<string>>(new Set());
-  const [studioCampaignContacts, setStudioCampaignContacts] = useState<any[]>([]);
+  const [studioCampaignContacts, setStudioCampaignContacts] = useState<Contact[]>([]);
   const [selectedCampaignContactIds, setSelectedCampaignContactIds] = useState<Set<number>>(new Set());
-  const [sequences, setSequences] = useState<any[]>([]);
+  const [sequences, setSequences] = useState<Sequence[]>([]);
   const [campaignSequenceId, setCampaignSequenceId] = useState('');
   const [campaignName, setCampaignName] = useState('');
   const [campaignBusy, setCampaignBusy] = useState(false);
@@ -177,22 +197,33 @@ export default function EmailStudio() {
   const [generatedClearBusy, setGeneratedClearBusy] = useState(false);
 
   useEffect(() => {
-    api.settings.get().then((s: any) => {
+    api.settings.get().then((s) => {
       setSignature(s.signature || '');
       setSignatureImageUrl(s.signature_image_url || '');
       setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
     }).catch(() => {});
-    setDrafts(loadDrafts());
   }, []);
 
-  const contactListParams = () => ({
+  const contactListParams = useCallback(() => ({
     ...(contactSearch.trim() ? { q: contactSearch.trim() } : {}),
     ...(releaseFilter ? { release_id: Number(releaseFilter) } : {}),
-  });
+    limit: 100,
+  }), [contactSearch, releaseFilter]);
 
   useEffect(() => {
-    api.contacts.list(contactListParams()).then(setContacts).catch(() => setContacts([]));
-  }, [contactSearch, releaseFilter]);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      api.contacts.list(contactListParams(), controller.signal)
+        .then((page) => setContacts(page.items))
+        .catch((error) => {
+          if (!(error instanceof DOMException && error.name === 'AbortError')) setContacts([]);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [contactListParams]);
 
   useEffect(() => {
     api.yucg.listReleases().then(setReleases).catch(() => setReleases([]));
@@ -225,16 +256,15 @@ export default function EmailStudio() {
 
   useEffect(() => {
     api.emails.generated({ sort: sortBy }).then(setGeneratedEmails).catch(() => setGeneratedEmails([]));
-  }, [sortBy, email]);
+  }, [sortBy]);
 
   // Sync contentEditable body when email.body is set externally (e.g. Generate, Load Draft)
   useEffect(() => {
     if (bodyRef.current != null && email?.body !== undefined && bodyRef.current.innerHTML !== email.body) {
-      bodyRef.current.innerHTML = email.body;
+      bodyRef.current.innerHTML = sanitizeRichText(email.body);
     }
   }, [email?.body]);
 
-  const refreshDrafts = () => setDrafts(loadDrafts());
 
   const generateEmail = async () => {
     setLoading(true);
@@ -256,7 +286,10 @@ export default function EmailStudio() {
           model: modelId,
         });
         setEmail({ subject: res.subject, body: res.body });
-        api.emails.generated({ sort: sortBy }).then(setGeneratedEmails).catch(() => []);
+        setMobileStep('edit');
+        const savedDrafts = await api.emails.generated({ sort: sortBy });
+        setGeneratedEmails(savedDrafts);
+        setSelectedDraftId(savedDrafts.find((draft) => draft.contact_id === selected.id && draft.subject === res.subject)?.id ?? null);
       } else {
         const instructions = [
           draftDescription && `Email purpose: ${draftDescription}`,
@@ -276,50 +309,61 @@ export default function EmailStudio() {
           model: modelId,
         });
         setEmail({ subject: res.subject, body: res.body });
+        setMobileStep('edit');
         setSelected({
-          id: res.contact_id ?? null,
+          id: res.contact_id ?? 0,
           name: quickCompose.name || 'Recipient',
           email: quickCompose.email || '',
           company: draftCompany || quickCompose.company,
         });
+        const savedDrafts = await api.emails.generated({ sort: sortBy });
+        setGeneratedEmails(savedDrafts);
+        setSelectedDraftId(savedDrafts.find((draft) => draft.contact_id === res.contact_id && draft.subject === res.subject)?.id ?? null);
       }
     } catch (e) {
       console.error(e);
-      setEmail({ subject: 'Error', body: 'Failed to generate. Is Ollama running? Try: ollama run llama3.2' });
+      setEmail({ subject: 'Error', body: 'Failed to generate. Check Bedrock model access for the selected Claude model.' });
     } finally {
       setLoading(false);
     }
   };
 
-  const saveCurrentAsDraft = () => {
+  const saveCurrentAsDraft = async () => {
     if (!email?.subject && !email?.body) return;
-    saveDraft({
-      description: draftDescription || 'Untitled draft',
-      targetAudience: draftTargetAudience,
-      company: draftCompany || (selected?.company ?? quickCompose.company),
-      subject: email.subject,
-      body: email.body,
-      recipientName: selected?.name ?? quickCompose.name,
-      recipientEmail: selected?.email ?? quickCompose.email,
-      recipientTitle: selected?.title ?? quickCompose.title,
-    });
-    refreshDrafts();
-    setSelectedDraftId(null);
+    if (!selected?.id) {
+      setDraftMessage('Choose a contact, or add a recipient email and generate once, before saving.');
+      return;
+    }
+    setDraftSaving(true);
+    setDraftMessage('');
+    try {
+      if (selectedDraftId) {
+        await api.emails.updateDraft(selectedDraftId, email);
+      } else {
+        const saved = await api.emails.saveDraft({ contact_id: selected.id, ...email });
+        setSelectedDraftId(saved.id);
+      }
+      setGeneratedEmails(await api.emails.generated({ sort: sortBy }));
+      setDraftMessage('Draft saved to your account.');
+    } catch (requestError) {
+      setDraftMessage((requestError as Error).message);
+    } finally {
+      setDraftSaving(false);
+    }
   };
 
-  const loadDraftIntoEditor = (d: EmailDraft) => {
-    setSelectedDraftId(d.id);
-    setEmail({ subject: d.subject, body: d.body });
-    setDraftDescription(d.description);
-    setDraftTargetAudience(d.targetAudience);
-    setDraftCompany(d.company);
+  const loadDraftIntoEditor = (draft: GeneratedEmail) => {
+    setSelectedDraftId(draft.id);
+    setEmail({ subject: draft.subject, body: draft.body });
+    setDraftCompany(draft.company || '');
     setQuickCompose({
-      name: d.recipientName,
-      company: d.company,
-      title: d.recipientTitle,
-      email: d.recipientEmail,
+      name: draft.name || '',
+      company: draft.company || '',
+      title: '',
+      email: draft.email || '',
     });
-    setSelected(d.recipientEmail ? { id: null, name: d.recipientName, email: d.recipientEmail, company: d.company } : null);
+    setSelected({ id: draft.contact_id, name: draft.name, email: draft.email || '', company: draft.company });
+    setActiveTab('editor');
   };
 
   const analyzeSentiment = async () => {
@@ -354,8 +398,9 @@ export default function EmailStudio() {
         attachment_ids: selectedAttachmentIds.size > 0 ? Array.from(selectedAttachmentIds) : undefined,
       });
       alert(`Test email sent to ${toEmail}. Check your inbox to verify delivery.`);
-    } catch (e: any) {
-      alert(e?.message || 'Failed to send. Try signing out and back in to re-authorize Gmail.');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      alert(eMessage || 'Failed to send. Try signing out and back in to re-authorize Gmail.');
     } finally {
       setTestSending(false);
     }
@@ -380,16 +425,12 @@ export default function EmailStudio() {
       return;
     }
     try {
-      const list = await api.contacts.list({
-        companies: names.join(','),
-        employee_only: true,
-        limit: 2500,
-      });
-      setStudioCampaignContacts(list);
-      setSelectedCampaignContactIds(new Set(list.map((c: any) => c.id)));
-    } catch (e: any) {
+      const items = await loadCompanyEmployees(names);
+      setStudioCampaignContacts(items);
+      setSelectedCampaignContactIds(new Set(items.map((contact) => contact.id)));
+    } catch (requestError) {
       setStudioCampaignContacts([]);
-      setCampaignMessage(e?.message || 'Failed to load contacts');
+      setCampaignMessage((requestError as Error).message || 'Failed to load contacts');
     }
   };
 
@@ -401,14 +442,10 @@ export default function EmailStudio() {
       return;
     }
     try {
-      const list = await api.contacts.list({
-        companies: names.join(','),
-        employee_only: true,
-        limit: 2500,
-      });
-      setStudioCampaignContacts(list);
+      const items = await loadCompanyEmployees(names);
+      setStudioCampaignContacts(items);
       setSelectedCampaignContactIds((prev) => {
-        const allowed = new Set(list.map((c: any) => c.id));
+        const allowed = new Set(items.map((contact) => contact.id));
         const next = new Set<number>();
         prev.forEach((id) => {
           if (allowed.has(id)) next.add(id);
@@ -437,8 +474,8 @@ export default function EmailStudio() {
     setCampaignMessage(null);
     try {
       const res = await api.contacts.bulkDelete(ids);
-      const list = await api.contacts.list(contactListParams());
-      setContacts(list);
+      const page = await api.contacts.list(contactListParams());
+      setContacts(page.items);
       api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
       await refreshStudioCampaignContacts();
       if (res.skipped > 0) {
@@ -448,14 +485,15 @@ export default function EmailStudio() {
       } else {
         setCampaignMessage(`Deleted ${res.deleted} contact(s) from the database.`);
       }
-    } catch (e: any) {
-      setCampaignMessage(e?.message || 'Delete failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setCampaignMessage(eMessage || 'Delete failed');
     } finally {
       setStudioListDeleting(false);
     }
   };
 
-  const buildCampaignFromStudio = async (sendNow: boolean) => {
+  const buildCampaignFromStudio = async () => {
     if (!email?.subject?.trim() || !email?.body?.trim()) {
       setCampaignMessage('Compose subject and body in the editor first.');
       return;
@@ -484,16 +522,10 @@ export default function EmailStudio() {
       if (campaignSequenceId) {
         await api.campaigns.update(camp.id, { sequence_id: Number(campaignSequenceId) });
       }
-      if (sendNow) {
-        const res = await api.campaigns.send(camp.id);
-        setCampaignMessage(
-          `Campaign #${camp.id}: sent ${res.sent ?? 0}.${(res.errors?.length ?? 0) > 0 ? ` ${res.errors.length} error(s).` : ''} Sends are paced on the server (CAMPAIGN_SEND_DELAY_SEC in backend .env).`
-        );
-      } else {
-        setCampaignMessage(`Draft campaign #${camp.id} saved. Send from here or open Campaigns.`);
-      }
-    } catch (e: any) {
-      setCampaignMessage(e?.message || 'Campaign failed');
+      setCampaignMessage(`Draft campaign #${camp.id} saved. Review and release it from Send.`);
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      setCampaignMessage(eMessage || 'Campaign failed');
     } finally {
       setCampaignBusy(false);
     }
@@ -502,6 +534,7 @@ export default function EmailStudio() {
   const startNewEmail = () => {
     setSelected(null);
     setEmail({ subject: '', body: '' });
+    setMobileStep('contacts');
     setQuickCompose({ name: '', company: '', title: '', email: '' });
     setDraftDescription('');
     setDraftTargetAudience('');
@@ -530,7 +563,7 @@ export default function EmailStudio() {
     });
   };
 
-  const toggleSidebarBulkForCompany = (companyContacts: any[]) => {
+  const toggleSidebarBulkForCompany = (companyContacts: Contact[]) => {
     const ids = companyContacts.map((c) => c.id).filter((id): id is number => typeof id === 'number');
     if (!ids.length) return;
     setSidebarBulkIds((prev) => {
@@ -562,14 +595,15 @@ export default function EmailStudio() {
         setEmail(null);
       }
       setCompaniesSummary([]);
-      const list = await api.contacts.list(contactListParams());
-      setContacts(list);
+      const page = await api.contacts.list(contactListParams());
+      setContacts(page.items);
       api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
       if (res.skipped > 0) {
         window.alert(`Deleted ${res.deleted}. ${res.skipped} could not be removed (permission or not found).`);
       }
-    } catch (e: any) {
-      window.alert(e?.message || 'Bulk delete failed');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      window.alert(eMessage || 'Bulk delete failed');
     } finally {
       setSidebarDeleting(false);
     }
@@ -584,8 +618,9 @@ export default function EmailStudio() {
       if (res.deleted === 0) {
         window.alert('No cached generated emails to clear.');
       }
-    } catch (e: any) {
-      window.alert(e?.message || 'Failed to clear cache');
+    } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+      window.alert(eMessage || 'Failed to clear cache');
     } finally {
       setGeneratedClearBusy(false);
     }
@@ -600,19 +635,35 @@ export default function EmailStudio() {
       ? `<br><br>--<br><br>${signature}`
       : `<br><br>--<br><br>${signature.replace(/\n/g, '<br>')}`;
   const previewBodyHtml = email?.body
-    ? email.body + signatureHtmlPart + (signatureImageUrl ? `<br><img src="${signatureImageUrl}" alt="" style="max-width:200px;height:auto;" />` : '')
+    ? email.body + signatureHtmlPart + (signatureImageUrl ? `<br><img src="${signatureImageUrl}" alt="" width="200" />` : '')
     : '';
   const bodyRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="email-studio w-full max-w-[1920px] mx-auto">
+    <div className="email-studio app-workspace w-full max-w-[1920px]">
       <PageHeader
-        title="Studio"
-        subtitle="Draft against kept people. Model is Opus → Haiku in the header — or the picker below."
+        title="Drafts"
+        subtitle="Select a contact, prepare a personalized email, and save it for campaign review."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
-      <div className="flex flex-col xl:flex-row gap-4">
-        <div className={`surface-card shadow-sm rounded-xl overflow-hidden flex-shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none ${contactsPanelExpanded ? 'w-full xl:w-[312px]' : 'w-full xl:w-14'}`}>
+      <nav className="studio-mobile-steps" aria-label="Studio workflow">
+        {([
+          ['contacts', '1. Contact'],
+          ['generate', '2. Generate'],
+          ['edit', '3. Edit'],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            aria-current={mobileStep === id ? 'step' : undefined}
+            onClick={() => setMobileStep(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="email-studio-layout">
+        <div className={`studio-step ${mobileStep === 'contacts' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex-shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none ${contactsPanelExpanded ? 'w-full xl:w-[280px] email-studio-contacts' : 'w-full xl:w-14'}`}>
           {contactsPanelExpanded ? (
             <>
               <div className="px-4 py-3 border-b border-[var(--border)] flex gap-2 flex-wrap items-stretch bg-white dark:bg-[var(--bg-card)]">
@@ -628,10 +679,11 @@ export default function EmailStudio() {
                   className="app-subnav--stretch min-w-0"
                   items={[
                     { id: 'editor', label: 'Contacts' },
-                    { id: 'cache', label: 'Generated' },
+                    { id: 'cache', label: 'Drafts' },
                   ]}
                   active={activeTab}
                   onChange={(id) => setActiveTab(id as 'editor' | 'cache')}
+                  label="Studio contact sources"
                 />
                 <button
                   onClick={startNewEmail}
@@ -640,15 +692,14 @@ export default function EmailStudio() {
                   + New
                 </button>
               </div>
-              <div className="max-h-[calc(100vh-14rem)] overflow-y-auto">
+              <div className="min-w-0">
             {activeTab === 'editor' ? (
               <>
                 <div className="px-4 py-2 border-b border-slate-200 space-y-2">
-                  <select
+                  <select aria-label="Outreach week"
                     value={releaseFilter}
                     onChange={(e) => setReleaseFilter(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-slate-200 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-slate-200"
-                    aria-label="Filter contacts by week slate"
                   >
                     <option value="">All contacts</option>
                     {releases.map((r) => (
@@ -768,7 +819,7 @@ export default function EmailStudio() {
               <div className="p-4">
                 <div className="flex flex-wrap items-center gap-2 mb-3">
                   <label className="text-sm text-[var(--text-muted)]">Sort:</label>
-                  <select
+                  <select aria-label="Draft order"
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value)}
                     className="text-sm px-2 py-1 rounded bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-100"
@@ -783,25 +834,21 @@ export default function EmailStudio() {
                     disabled={generatedClearBusy}
                     className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-700 hover:bg-pale-sky/20 dark:hover:bg-slate-600 disabled:opacity-50"
                   >
-                    {generatedClearBusy ? 'Clearing…' : 'Clear generated cache'}
+                    {generatedClearBusy ? 'Clearing…' : 'Delete all drafts'}
                   </button>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">
-                  Clearing cache removes AI history from this list only; use tick boxes on the Contacts tab to delete real contacts.
+                  Drafts are stored in the shared app database and remain private to your account.
                 </p>
                 {generatedEmails.length === 0 ? (
-                  <p className="text-slate-600 text-sm">No cached emails yet.</p>
+                  <p className="text-slate-600 text-sm">No saved drafts yet.</p>
                 ) : (
                   <ul className="space-y-2">
                     {generatedEmails.map((ge) => (
                       <li
                         key={ge.id}
                         className="p-2 rounded border border-pale-sky bg-white dark:bg-transparent hover:bg-pale-sky/15 dark:hover:bg-slate-700/50 cursor-pointer"
-                        onClick={() => {
-                          setSelected({ id: ge.contact_id, name: ge.name, email: ge.email, company: ge.company });
-                          setEmail({ subject: ge.subject, body: ge.body });
-                          setActiveTab('editor');
-                        }}
+                        onClick={() => loadDraftIntoEditor(ge)}
                       >
                         <div className="font-medium text-sm">{ge.name || ge.email}</div>
                         <div className="text-xs text-slate-500 truncate">{ge.subject}</div>
@@ -829,10 +876,10 @@ export default function EmailStudio() {
             </div>
           )}
         </div>
-        <div className="flex-1 flex min-w-0 gap-4">
+        <div className="email-studio-main">
           <div
             id="email-generator-section"
-            className={`surface-card shadow-sm rounded-xl overflow-hidden flex-shrink-0 flex flex-col transition-[width] duration-300 ease-out motion-reduce:transition-none ${aiGeneratorExpanded ? 'w-full xl:min-w-[380px] xl:w-[42%]' : 'w-full xl:w-14'}`}
+            className={`studio-step ${mobileStep === 'generate' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex-shrink-0 flex flex-col min-w-0 ${aiGeneratorExpanded ? 'w-full email-studio-generator' : 'w-full xl:w-14'}`}
           >
             {aiGeneratorExpanded ? (
             <>
@@ -848,7 +895,7 @@ export default function EmailStudio() {
               </button>
               <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">AI Email Generator</h2>
             </div>
-            <div className="p-6 overflow-y-auto flex-1 min-h-0 max-h-[calc(100vh-16rem)]">
+            <div className="p-6 flex-1 min-h-0">
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
               Describe the email, set the audience, and assign a company. Then use Quick Compose or select a contact.
             </p>
@@ -918,12 +965,9 @@ export default function EmailStudio() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-              <div className="min-w-0 sm:col-span-3">
-                <AiModelSelect id="studio-ai-model" />
-              </div>
               <div className="min-w-0">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Tone</label>
-                <select
+                <select aria-label="Tone"
                   value={tone}
                   onChange={(e) => setTone(e.target.value)}
                   className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200"
@@ -935,7 +979,7 @@ export default function EmailStudio() {
               </div>
               <div className="min-w-0">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Length</label>
-                <select
+                <select aria-label="Email length"
                   value={length}
                   onChange={(e) => setLength(e.target.value)}
                   className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200"
@@ -947,7 +991,7 @@ export default function EmailStudio() {
               </div>
               <div className="min-w-0">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Angle</label>
-                <select
+                <select aria-label="Message angle"
                   value={angle}
                   onChange={(e) => setAngle(e.target.value)}
                   className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200"
@@ -980,13 +1024,16 @@ export default function EmailStudio() {
                 />
               </div>
             </div>
-            <button
-              onClick={generateEmail}
-              disabled={loading}
-              className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-semibold disabled:opacity-50 transition-all"
-            >
-              {loading ? 'Generating…' : 'Generate email'}
-            </button>
+            <div className="studio-generate-row">
+              <AiModelSelect id="studio-ai-model" compact />
+              <button
+                onClick={generateEmail}
+                disabled={loading}
+                className="studio-generate-row__go py-3.5 px-4 bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-semibold disabled:opacity-50 transition-all"
+              >
+                {loading ? 'Generating…' : 'Generate email'}
+              </button>
+            </div>
             </div>
             </>
             ) : (
@@ -1006,7 +1053,7 @@ export default function EmailStudio() {
             </div>
             )}
           </div>
-          <div id="email-editor-section" className="flex-1 min-w-0 surface-card shadow-sm rounded-xl overflow-hidden overflow-y-auto max-h-[calc(100vh-12rem)]">
+          <div id="email-editor-section" className={`studio-step ${mobileStep === 'edit' ? 'is-active' : ''} flex-1 min-w-0 surface-card shadow-sm rounded-xl min-h-0`}>
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] p-4 border-b border-pale-sky dark:border-slate-600 truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
               Email for {selected?.name || quickCompose.name || 'Recipient'} ({selected?.email || quickCompose.email || 'enter email for test send'})
             </h2>
@@ -1025,7 +1072,7 @@ export default function EmailStudio() {
                 <div className="overflow-hidden min-h-0">
                 <div className="p-4 space-y-3 text-sm border-t border-[var(--border)] bg-white dark:bg-[var(--bg-card)]">
                   <p className="text-xs text-[var(--text-muted)] leading-relaxed">
-                    Pick companies, load <strong>employee</strong> contacts (generic inboxes like info@ are excluded). Compose subject/body below, then save or send a campaign. An optional <strong>follow-up sequence</strong> is processed by the daily server job: each step goes out after its configured delay from the <em>last</em> message, and <strong>only to contacts who have not replied</strong>. Replies are detected from Gmail when you use <strong>Outreach → Pipeline → Sync inbox (Gmail)</strong> (and on a periodic server sync); you can still mark a thread replied manually. LinkedIn employees need <code className="text-[11px] bg-pale-sky/25 dark:bg-slate-700 px-1 rounded font-mono text-deep-navy dark:text-slate-200">APIFY_API_TOKEN</code>.
+                    Load employees for the companies you tick (generic inboxes like info@ are skipped). Write below, then save or send. Follow-ups run on the daily job only for people who have not replied — sync Gmail on Pipeline.
                   </p>
                   {companiesSummary.length === 0 ? (
                     <p className="text-xs text-amber-700 dark:text-amber-400">No companies in the database yet — scrape or import contacts first.</p>
@@ -1185,13 +1232,13 @@ export default function EmailStudio() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-deep-navy dark:text-slate-400 mb-1">Follow-up sequence (optional)</label>
-                      <select
+                      <select aria-label="Follow-up sequence"
                         value={campaignSequenceId}
                         onChange={(e) => setCampaignSequenceId(e.target.value)}
                         className="w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-sm text-deep-navy dark:text-slate-100"
                       >
                         <option value="">None</option>
-                        {sequences.map((s: any) => (
+                        {sequences.map((s) => (
                           <option key={s.id} value={String(s.id)}>{s.name} ({(s.steps || []).length} steps)</option>
                         ))}
                       </select>
@@ -1204,18 +1251,10 @@ export default function EmailStudio() {
                     <button
                       type="button"
                       disabled={campaignBusy}
-                      onClick={() => buildCampaignFromStudio(false)}
+                      onClick={buildCampaignFromStudio}
                       className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-semibold disabled:opacity-50"
                     >
                       Save campaign draft
-                    </button>
-                    <button
-                      type="button"
-                      disabled={campaignBusy}
-                      onClick={() => buildCampaignFromStudio(true)}
-                      className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-semibold disabled:opacity-50"
-                    >
-                      {campaignBusy ? 'Working…' : 'Create & send now'}
                     </button>
                     <Link
                       to="/campaigns"
@@ -1251,7 +1290,7 @@ export default function EmailStudio() {
                   <input type="color" defaultValue="#000000" onInput={(e) => { document.execCommand('foreColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Text color" />
                   <input type="color" defaultValue="#ffff00" onInput={(e) => { document.execCommand('backColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Highlight" />
                   <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
-                  <select
+                  <select aria-label="Email font size"
                     value={emailFontSize}
                     onChange={(e) => { const s = Number(e.target.value); setEmailFontSize(s); if (bodyRef.current) bodyRef.current.style.fontSize = s + 'px'; }}
                     className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
@@ -1279,12 +1318,14 @@ export default function EmailStudio() {
                       ref={bodyRef}
                       contentEditable
                       suppressContentEditableWarning
-                      onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: (e.target as HTMLDivElement).innerHTML }))}
+                      onPaste={event => { event.preventDefault(); insertSafeTransfer(event.clipboardData); }}
+                      onDrop={event => { event.preventDefault(); insertSafeTransfer(event.dataTransfer); }}
+                      onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: sanitizeRichText((e.target as HTMLDivElement).innerHTML) }))}
                       style={{ fontFamily: "'Lato', system-ui, sans-serif", fontSize: emailFontSize }}
                       className="email-studio-body min-h-[280px] w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-deep-navy caret-deep-navy resize-y overflow-auto focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:caret-slate-200 dark:focus:ring-offset-transparent"
                     />
                     {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
-                      <span className="absolute left-3 top-2 text-deep-navy/50 dark:text-slate-500 pointer-events-none text-sm">
+                      <span className="absolute left-3 top-2 text-slate-600 dark:text-slate-300 pointer-events-none text-sm">
                         Type your email here or click Generate Email for AI assistance.
                       </span>
                     )}
@@ -1341,8 +1382,9 @@ export default function EmailStudio() {
                               setOnedriveConfigured(res.configured);
                               setOnedriveItems(res.items || []);
                               setOnedriveOpen(true);
-                            } catch (e: any) {
-                              setCampaignMessage(e?.message || 'OneDrive list failed');
+                            } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+                              setCampaignMessage(eMessage || 'OneDrive list failed');
                             } finally {
                               setOnedriveBusy(false);
                             }
@@ -1357,10 +1399,10 @@ export default function EmailStudio() {
                   <div className="flex gap-2 flex-wrap items-center">
                     <button
                       onClick={saveCurrentAsDraft}
-                      disabled={!email?.subject && !email?.body}
+                      disabled={draftSaving || (!email?.subject && !email?.body)}
                       className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50 transition-all"
                     >
-                      Save Draft
+                      {draftSaving ? 'Saving…' : selectedDraftId ? 'Update Draft' : 'Save Draft'}
                     </button>
                     <button
                       onClick={analyzeSentiment}
@@ -1387,6 +1429,7 @@ export default function EmailStudio() {
                       Sends to {user?.email || 'your email'} to verify delivery
                     </span>
                   </div>
+                  {draftMessage && <p className="text-sm text-slate-600 dark:text-slate-300">{draftMessage}</p>}
                   {sentimentAnalysis && (
                     <div className="mt-4 p-4 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700/30">
                       <h4 className="font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Sentiment Analysis</h4>
@@ -1457,67 +1500,18 @@ export default function EmailStudio() {
                       }}
                     >
                       {email?.body && /<[a-z][\s\S]*>/i.test(email.body) ? (
-                        <div dangerouslySetInnerHTML={{ __html: previewBodyHtml || '' }} />
+                        <div dangerouslySetInnerHTML={{ __html: sanitizeRichText(previewBodyHtml || '') }} />
                       ) : (
                         <span className="whitespace-pre-wrap">{previewBody || 'Start typing above or generate with AI to see a live preview.'}</span>
                       )}
                     </div>
                     {signatureImageUrl && (
-                      <img src={signatureImageUrl} alt="" className="mt-2 max-h-16 object-contain" />
+                      <img src={safeImageUrl(signatureImageUrl) || undefined} alt="" className="mt-2 max-h-16 object-contain" />
                     )}
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-      <div className="mt-4 w-full">
-        <div className="surface-card shadow-sm rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-pale-sky">
-            <h2 className="font-semibold text-deep-navy">Saved Drafts</h2>
-            <p className="text-xs text-slate-500 mt-0.5">Stored locally in your browser</p>
-          </div>
-          <div className="max-h-[320px] overflow-y-auto p-4">
-            {drafts.length === 0 ? (
-              <p className="text-slate-500 text-sm">No drafts yet. Generate an email and click Save Draft.</p>
-            ) : (
-              <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                {drafts.map((d) => (
-                  <li
-                    key={d.id}
-                    className={`p-4 rounded-lg border cursor-pointer transition-colors min-w-0 ${
-                      selectedDraftId === d.id
-                        ? 'border-deep-navy bg-pale-sky/50'
-                        : 'border-pale-sky hover:bg-pale-sky/30'
-                    }`}
-                  >
-                    <button
-                      onClick={() => loadDraftIntoEditor(d)}
-                      className="w-full text-left min-w-0"
-                    >
-                      <div className="font-medium text-sm text-deep-navy dark:text-slate-200 break-words">{d.description || 'Untitled'}</div>
-                      <div className="text-xs text-slate-500 mt-1">{d.targetAudience || '—'}</div>
-                      <div className="text-xs text-slate-500 mt-0.5">Company: {d.company || '—'}</div>
-                      <div className="text-xs text-slate-400 mt-1 break-words">{d.subject}</div>
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm('Delete this draft?')) {
-                          deleteDraft(d.id);
-                          refreshDrafts();
-                          if (selectedDraftId === d.id) startNewEmail();
-                        }
-                      }}
-                      className="mt-2 text-xs text-red-600 hover:underline"
-                    >
-                      Delete
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
         </div>
       </div>
@@ -1550,8 +1544,9 @@ export default function EmailStudio() {
                           const lib = await api.attachments.list();
                           setAttachmentLibrary(lib);
                           setOnedriveOpen(false);
-                        } catch (e: any) {
-                          setCampaignMessage(e?.message || 'Attach failed');
+                        } catch (e) {
+      const eMessage = e instanceof Error ? e.message : 'Request failed';
+                          setCampaignMessage(eMessage || 'Attach failed');
                         } finally {
                           setOnedriveBusy(false);
                         }

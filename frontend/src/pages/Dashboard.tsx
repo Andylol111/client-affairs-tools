@@ -14,27 +14,31 @@ const DEFAULT_DATA = {
 
 const WEEK = [
   {
-    n: '01',
-    title: 'Cut the slate',
-    body: 'Pick this week’s companies from the prospect list.',
+    n: '1',
+    door: 'Week',
+    title: 'Choose companies',
+    body: 'Choose this week’s companies from the prospect list.',
     to: '/yucgoutreach',
   },
   {
-    n: '02',
-    title: 'Comb addresses',
-    body: 'Mint inferred inboxes, Keep or Drop. Never a verified-inbox badge.',
-    to: '/yucgoutreach',
+    n: '2',
+    door: 'Week',
+    title: 'Review contacts',
+    body: 'Review suggested addresses and keep relevant contacts. A working domain does not confirm a mailbox exists.',
+    to: '/yucgoutreach?view=comb',
   },
   {
-    n: '03',
+    n: '3',
+    door: 'Drafts',
     title: 'Write',
-    body: 'Draft in Studio against kept people. Pick Opus → Haiku in the header.',
+    body: 'Select a contact, prepare an email, and save your draft.',
     to: '/studio',
   },
   {
-    n: '04',
-    title: 'Release',
-    body: 'Pace Gmail. Pause lives in Send. Bounces are the ground truth.',
+    n: '4',
+    door: 'Campaigns',
+    title: 'Review and send',
+    body: 'Review your sender account and recipients in Campaigns. Monitor replies and delivery failures after sending.',
     to: '/campaigns',
   },
 ];
@@ -65,7 +69,7 @@ export default function Dashboard() {
 
   const cards = [
     { label: 'Found today', value: data.contacts_discovered_today ?? 0, to: '/scraper' },
-    { label: 'In queue', value: data.emails_in_queue ?? 0, to: '/studio' },
+    { label: 'In queue', value: data.emails_in_queue ?? 0, to: '/campaigns' },
     { label: 'Active sends', value: data.active_campaigns ?? 0, to: '/campaigns' },
     { label: 'Follow-ups due', value: dueFollowUps, to: '/campaigns' },
     { label: 'Sent', value: data.total_sent ?? 0, to: '/analytics' },
@@ -73,27 +77,41 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="max-w-[1920px] mx-auto">
+    <div className="app-workspace max-w-[1920px]">
       <PageHeader
-        title="Client affairs"
-        subtitle="One week: slate, comb, write, release. Yale undergraduate consulting — not a generic CRM."
+        hero
+        title="Home"
+        subtitle="Your club’s projects, contacts, and outreach activity in one place."
         imageSrc="/yucg-bg/hero-campus.jpg"
+        actions={<Link to="/yucgoutreach" className="ui-button ui-button--primary">Open this week</Link>}
       />
       {apiError && (
-        <p className="text-amber-800 text-sm mb-4">
-          API not responding. From the project folder run <code className="px-1 border border-pale-sky">./start-all.sh</code>
+        <p className="ui-notice ui-notice--warning mb-4">
+          Live metrics are temporarily unavailable. The work pages remain usable.
         </p>
       )}
 
-      <div className="app-week-steps mb-8">
-        {WEEK.map((step) => (
-          <Link key={step.n} to={step.to} className="app-week-step">
-            <div className="app-week-step__n">Step {step.n}</div>
-            <h2 className="app-week-step__title">{step.title}</h2>
-            <p className="app-week-step__body">{step.body}</p>
-          </Link>
-        ))}
-      </div>
+      <section className="app-week-guide mb-8" aria-labelledby="week-guide-title">
+        <h2 id="week-guide-title" className="app-week-guide__title">
+          How a week works
+        </h2>
+        <ol className="app-week-guide__list">
+          {WEEK.map((step) => (
+            <li key={step.n} className="app-week-guide__item">
+              <Link to={step.to} className="app-week-guide__link">
+                <span className="app-week-guide__n" aria-hidden="true">
+                  {step.n}
+                </span>
+                <span className="app-week-guide__copy">
+                  <span className="app-week-guide__door">{step.door}</span>
+                  <span className="app-week-guide__name">{step.title}</span>
+                  <span className="app-week-guide__how">{step.body}</span>
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ol>
+      </section>
 
       <div className="app-stat-grid mb-8">
         {cards.map((c) => (

@@ -23,6 +23,7 @@ from app.routers.emails import _upsert_contact_by_email  # noqa: E402
 
 
 async def _seed() -> None:
+    os.environ["DATABASE_URL"] = f"sqlite:///{_tmp.name}"
     await init_db()
     db = await get_db()
     try:
@@ -33,7 +34,7 @@ async def _seed() -> None:
         await db.execute(
             "INSERT INTO contacts (id, name, email, company, company_domain) VALUES (2, 'Ben', 'ben@acme.com', 'Acme', 'acme.com')"
         )
-        await db.execute("INSERT INTO campaigns (id, name, status) VALUES (1, 'Week 1', 'draft')")
+        await db.execute("INSERT INTO campaigns (id, name, status, owner_user_id, sender_user_id) VALUES (1, 'Week 1', 'draft', 1, 1)")
         await db.execute(
             """INSERT INTO campaign_contacts
                (campaign_id, contact_id, email_subject, email_body, status, sent_at, sent_by_user_id)
@@ -50,8 +51,8 @@ async def _seed() -> None:
 
 async def _run() -> None:
     await _seed()
-    rows = await list_contacts(user=None)
-    by_email = {r["email"]: r for r in rows}
+    page = await list_contacts(user=None)
+    by_email = {row["email"]: row for row in page["items"]}
     assert by_email["ada@acme.com"]["last_campaign_name"] == "Week 1"
     assert by_email["ada@acme.com"]["last_send_status"] == "sent"
     assert by_email["ada@acme.com"]["last_sent_at"]

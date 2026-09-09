@@ -55,12 +55,47 @@ def test_pending_2fa_not_authenticated() -> None:
 def test_anthropic_catalog_opus_to_haiku() -> None:
     from app.services.llm import BEDROCK_ANTHROPIC, is_bedrock_model, list_models
 
-    tiers = {m["tier"] for m in BEDROCK_ANTHROPIC}
-    assert "opus" in tiers and "haiku" in tiers
-    assert is_bedrock_model("us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    ids = {m["id"] for m in BEDROCK_ANTHROPIC}
+    labels = {m["label"] for m in BEDROCK_ANTHROPIC}
+    assert ids == {
+        "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
+    assert "Claude Opus 4" not in labels
+    assert is_bedrock_model("us.anthropic.claude-opus-5")
     assert not is_bedrock_model("ollama:llama3.2")
     catalog = list_models()
-    assert catalog["groups"][0]["id"] == "anthropic"
+    assert [g["id"] for g in catalog["groups"]] == ["anthropic"]
+    assert not any(m["id"].startswith("ollama:") for g in catalog["groups"] for m in g["models"])
+
+
+def test_spa_week_route_uses_index() -> None:
+    import tempfile
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from fastapi.responses import FileResponse
+    from main import spa_file
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "index.html").write_text("spa", encoding="utf-8")
+        (root / "favicon.ico").write_text("ico", encoding="utf-8")
+        assert spa_file(root, "yucgoutreach").name == "index.html"
+        assert spa_file(root, "login").name == "index.html"
+        assert spa_file(root, "favicon.ico").name == "favicon.ico"
+
+        mini = FastAPI()
+
+        @mini.get("/{full_path:path}")
+        async def spa_fallback(full_path: str):
+            return FileResponse(spa_file(root, full_path))
+
+        with TestClient(mini) as client:
+            r = client.get("/yucgoutreach")
+            assert r.status_code == 200
+            assert r.text == "spa"
 
 
 def test_health_ok_without_spa() -> None:
@@ -78,4 +113,5 @@ if __name__ == "__main__":
     test_thinkcell_table_names()
     test_pending_2fa_not_authenticated()
     test_anthropic_catalog_opus_to_haiku()
+    test_spa_week_route_uses_index()
     print("ok")

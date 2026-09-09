@@ -6,10 +6,7 @@
 const KEY_ACCENT = 'yucg_accent';
 const KEY_COMPACT = 'yucg_compact';
 const KEY_FONT_SIZE = 'yucg_font_size';
-const KEY_SIDEBAR_COLLAPSED = 'yucg_sidebar_collapsed';
 const KEY_REDUCE_MOTION = 'yucg_reduce_motion';
-const KEY_BORDER_RADIUS = 'yucg_border_radius';
-const KEY_CHECKLIST_BADGE = 'yucg_checklist_badge';
 
 const DEFAULT_ACCENT = '#1a2f5a';
 
@@ -25,20 +22,14 @@ export type UserPreferences = {
   accent: string;
   compact: boolean;
   fontSize: 'small' | 'medium' | 'large';
-  sidebarCollapsed: boolean;
   reduceMotion: boolean;
-  borderRadius: 'sharp' | 'medium' | 'round';
-  checklistBadge: boolean;
 };
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   accent: DEFAULT_ACCENT,
   compact: false,
   fontSize: 'medium',
-  sidebarCollapsed: false,
   reduceMotion: false,
-  borderRadius: 'sharp',
-  checklistBadge: true,
 };
 
 export function getStoredPreferences(): UserPreferences {
@@ -46,18 +37,12 @@ export function getStoredPreferences(): UserPreferences {
     const accent = localStorage.getItem(KEY_ACCENT) || DEFAULT_ACCENT;
     const compact = localStorage.getItem(KEY_COMPACT) === '1';
     const fontSize = (localStorage.getItem(KEY_FONT_SIZE) || 'medium') as UserPreferences['fontSize'];
-    const sidebarCollapsed = localStorage.getItem(KEY_SIDEBAR_COLLAPSED) === '1';
     const reduceMotion = localStorage.getItem(KEY_REDUCE_MOTION) === '1';
-    const borderRadius = (localStorage.getItem(KEY_BORDER_RADIUS) || 'sharp') as UserPreferences['borderRadius'];
-    const checklistBadge = localStorage.getItem(KEY_CHECKLIST_BADGE) !== '0';
     return {
       accent,
       compact,
       fontSize: ['small', 'medium', 'large'].includes(fontSize) ? fontSize : 'medium',
-      sidebarCollapsed,
       reduceMotion,
-      borderRadius: ['sharp', 'medium', 'round'].includes(borderRadius) ? borderRadius : 'medium',
-      checklistBadge,
     };
   } catch {
     return { ...DEFAULT_PREFERENCES };
@@ -69,11 +54,8 @@ export function savePreferences(prefs: Partial<UserPreferences>) {
     if (prefs.accent != null) localStorage.setItem(KEY_ACCENT, prefs.accent);
     if (prefs.compact != null) localStorage.setItem(KEY_COMPACT, prefs.compact ? '1' : '0');
     if (prefs.fontSize != null) localStorage.setItem(KEY_FONT_SIZE, prefs.fontSize);
-    if (prefs.sidebarCollapsed != null) localStorage.setItem(KEY_SIDEBAR_COLLAPSED, prefs.sidebarCollapsed ? '1' : '0');
     if (prefs.reduceMotion != null) localStorage.setItem(KEY_REDUCE_MOTION, prefs.reduceMotion ? '1' : '0');
-    if (prefs.borderRadius != null) localStorage.setItem(KEY_BORDER_RADIUS, prefs.borderRadius);
-    if (prefs.checklistBadge != null) localStorage.setItem(KEY_CHECKLIST_BADGE, prefs.checklistBadge ? '1' : '0');
-  } catch {}
+  } catch { /* Preferences remain usable when browser storage is unavailable. */ }
 }
 
 export function resetPreferencesToDefault(): UserPreferences {
@@ -81,11 +63,8 @@ export function resetPreferencesToDefault(): UserPreferences {
     localStorage.removeItem(KEY_ACCENT);
     localStorage.removeItem(KEY_COMPACT);
     localStorage.removeItem(KEY_FONT_SIZE);
-    localStorage.removeItem(KEY_SIDEBAR_COLLAPSED);
     localStorage.removeItem(KEY_REDUCE_MOTION);
-    localStorage.removeItem(KEY_BORDER_RADIUS);
-    localStorage.removeItem(KEY_CHECKLIST_BADGE);
-  } catch {}
+  } catch { /* Preferences remain usable when browser storage is unavailable. */ }
   const def = { ...DEFAULT_PREFERENCES };
   applyUserPreferences(def);
   return def;
@@ -98,7 +77,6 @@ export function applyUserPreferences(prefs: UserPreferences) {
   document.body.classList.toggle('yucg-compact', prefs.compact);
   document.body.setAttribute('data-ui-font', prefs.fontSize);
   document.body.classList.toggle('yucg-reduce-motion', prefs.reduceMotion);
-  document.body.setAttribute('data-border-radius', prefs.borderRadius);
 }
 
 export function applyStoredPreferences() {

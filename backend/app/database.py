@@ -72,6 +72,38 @@ async def init_db():
     db = await get_db()
     try:
         await db.executescript("""
+            CREATE TABLE IF NOT EXISTS outreach_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_contact_id INTEGER NOT NULL REFERENCES campaign_contacts(id) ON DELETE CASCADE,
+                sender_id INTEGER NOT NULL,
+                recipient TEXT NOT NULL,
+                tracking_token TEXT NOT NULL UNIQUE,
+                rfc_message_id TEXT NOT NULL UNIQUE,
+                gmail_message_id TEXT,
+                gmail_thread_id TEXT,
+                sent_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS outreach_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL REFERENCES outreach_messages(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                detail TEXT,
+                UNIQUE(message_id, kind, source_id)
+            );
+            CREATE TABLE IF NOT EXISTS gmail_sync_state (
+                user_id INTEGER PRIMARY KEY,
+                last_success_at TEXT,
+                last_attempt_at TEXT,
+                error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_outreach_messages_sender ON outreach_messages(sender_id, sent_at);
+            CREATE INDEX IF NOT EXISTS idx_outreach_messages_contact ON outreach_messages(campaign_contact_id);
+        """)
+        await db.executescript("""
             CREATE TABLE IF NOT EXISTS contacts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
@@ -104,6 +136,7 @@ async def init_db():
                 sent_at TIMESTAMP,
                 opened_at TIMESTAMP,
                 replied_at TIMESTAMP,
+                last_error TEXT,
                 FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
                 FOREIGN KEY (contact_id) REFERENCES contacts(id)
             );
@@ -437,6 +470,9 @@ async def init_db():
         """)
         await db.commit()
 
+        from app.workspace_schema import initialize_workspace_schema
+        await initialize_workspace_schema(db)
+
         # Pending 2FA setup (secret stored here until verified; then moved to users.totp_secret)
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS pending_2fa_setup (
@@ -629,11 +665,28 @@ async def init_db():
             except Exception:
                 pass
 
+        if is_postgres():
+            campaign_columns = {r["column_name"] for r in await (await db.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'campaigns'"
+            )).fetchall()}
+        else:
+            campaign_columns = {r["name"] for r in await (await db.execute("PRAGMA table_info(campaigns)")).fetchall()}
+        for column in ("owner_user_id", "sender_user_id"):
+            if column not in campaign_columns:
+                await db.execute(f"ALTER TABLE campaigns ADD COLUMN {column} INTEGER REFERENCES users(id)")
+        await db.commit()
+
         try:
             await db.execute("ALTER TABLE campaigns ADD COLUMN released_by INTEGER")
             await db.commit()
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE campaign_contacts ADD COLUMN last_error TEXT")
+            await db.commit()
+        except Exception:
+            pass
+
 
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS company_email_patterns (

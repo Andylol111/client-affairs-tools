@@ -1,27 +1,31 @@
+import PageHeader from '../components/PageHeader';
+import Invitations from '../components/Invitations';
 import { useEffect, useState, Fragment } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { api } from '../api';
-import type { CursorHeatmapResponse } from '../api';
-import { useToast } from '../contexts/ToastContext';
+import { useToast } from '../contexts/useToast';
 import { AnimatedEventTypeChart, AnimatedResourceChart } from '../components/AnimatedOperationsCharts';
 import AppTabMenu from '../components/AppTabMenu';
+import { useUrlTab } from '../lib/useUrlTab';
 
 export default function Admin() {
   const { user } = useOutletContext<{ user: { id?: number; email: string; role?: string } }>();
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'audit' | 'apikeys' | '2fa' | 'catalog' | 'operations'>('users');
-  const [catalog, setCatalog] = useState<{ bucket: string | null; objects: any[]; prefixes: { prefix: string; objects: any[] }[] } | null>(null);
-  const [users, setUsers] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useUrlTab<'users' | 'projects' | 'audit' | 'apikeys' | '2fa' | 'catalog' | 'operations'>(
+    ['users', 'projects', 'audit', 'apikeys', '2fa', 'catalog', 'operations'],
+    'users',
+  );
+  const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof api.admin.catalog>> | null>(null);
+  const [users, setUsers] = useState<Awaited<ReturnType<typeof api.admin.users.list>>>([]);
+  const [projects, setProjects] = useState<Awaited<ReturnType<typeof api.admin.projects.list>>>([]);
   const [projectForm, setProjectForm] = useState({ name: '', semester: '', description: '' });
-  const [selectedProject, setSelectedProject] = useState<any>(null);
-  const [projectAssignments, setProjectAssignments] = useState<any[]>([]);
+  const [selectedProject, setSelectedProject] = useState<Awaited<ReturnType<typeof api.admin.projects.list>>[number] | null>(null);
+  const [projectAssignments, setProjectAssignments] = useState<Awaited<ReturnType<typeof api.admin.projects.assignments>>>([]);
   const [assignUserModal, setAssignUserModal] = useState<{ projectId: number; projectName: string } | null>(null);
   const [assignRole, setAssignRole] = useState('');
-  const [auditLog, setAuditLog] = useState<any[]>([]);
-  const [apiKeys, setApiKeys] = useState<any[]>([]);
-  const [inviteEmail, setInviteEmail] = useState('');
+  const [auditLog, setAuditLog] = useState<Awaited<ReturnType<typeof api.admin.auditLog>>>([]);
+  const [apiKeys, setApiKeys] = useState<Awaited<ReturnType<typeof api.admin.apiKeys.list>>>([]);
   const [newKeyName, setNewKeyName] = useState('');
   const [newKeyResult, setNewKeyResult] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
@@ -36,12 +40,11 @@ export default function Admin() {
   const [opsHeatmap, setOpsHeatmap] = useState<{
     group_by: string;
     grid: Record<string, Record<string, number>>;
-    rows: any[];
+    rows: Record<string, unknown>[];
     matrix_2d?: { row_labels: string[]; col_labels: string[]; values: number[][] };
   } | null>(null);
-  const [opsCursorHeatmap, setOpsCursorHeatmap] = useState<CursorHeatmapResponse | null>(null);
-  const [opsEvents, setOpsEvents] = useState<any[]>([]);
-  const [opsResources, setOpsResources] = useState<any[]>([]);
+  const [opsEvents, setOpsEvents] = useState<Awaited<ReturnType<typeof api.admin.operations.events>>>([]);
+  const [opsResources, setOpsResources] = useState<Awaited<ReturnType<typeof api.admin.operations.resources.list>>>([]);
   const [opsResourceName, setOpsResourceName] = useState('');
   const [opsResourceText, setOpsResourceText] = useState('');
   const [opsOllamaQuery, setOpsOllamaQuery] = useState('');
@@ -52,8 +55,8 @@ export default function Admin() {
 
   useEffect(() => {
     if (user?.role !== 'admin') return;
-    if (activeTab === 'users') api.admin.users.list().then(setUsers).catch(() => setUsers([]));
-    if (activeTab === 'projects') api.admin.projects.list().then(setProjects).catch(() => setProjects([]));
+    if (activeTab === 'users') api.admin.users.list().then(setUsers).catch((e: Error) => setError(e.message));
+    if (activeTab === 'projects') api.admin.projects.list().then(setProjects).catch((e: Error) => setError(e.message));
     if (activeTab === 'audit') api.admin.auditLog().then(setAuditLog).catch(() => setAuditLog([]));
     if (activeTab === 'apikeys') api.admin.apiKeys.list().then(setApiKeys).catch(() => setApiKeys([]));
     if (activeTab === '2fa') api.admin.twoFactor.status().then((s) => setTwoFactorStatus(s.status)).catch(() => setTwoFactorStatus('not_setup'));
@@ -61,7 +64,6 @@ export default function Admin() {
     if (activeTab === 'operations') {
       api.admin.operations.aggregates(opsDays).then(setOpsAggregates).catch(() => setOpsAggregates({ by_event_type: [], by_resource_type: [], days: 30 }));
       api.admin.operations.heatmap({ days: opsDays, group_by: opsGroupBy }).then(setOpsHeatmap).catch(() => setOpsHeatmap(null));
-      api.admin.operations.cursorHeatmap({ days: opsDays, bins: 10 }).then(setOpsCursorHeatmap).catch(() => setOpsCursorHeatmap(null));
       api.admin.operations.events({ limit: 200, days: opsDays }).then(setOpsEvents).catch(() => setOpsEvents([]));
       api.admin.operations.resources.list().then(setOpsResources).catch(() => setOpsResources([]));
     }
@@ -70,34 +72,8 @@ export default function Admin() {
   useEffect(() => {
     if (selectedProject?.id) {
       api.admin.projects.assignments(selectedProject.id).then(setProjectAssignments).catch(() => setProjectAssignments([]));
-    } else {
-      setProjectAssignments([]);
     }
   }, [selectedProject?.id]);
-
-  if (user?.role !== 'admin') {
-    return (
-      <div className="max-w-3xl mx-auto">
-        <h1 className="text-2xl font-bold text-deep-navy mb-6">Admin Access Required</h1>
-        <p className="text-slate-600">You need admin privileges to access this page.</p>
-      </div>
-    );
-  }
-
-  const handleInvite = async () => {
-    if (!inviteEmail.trim() || !inviteEmail.includes('@')) return;
-    setError('');
-    try {
-      await api.admin.users.invite(inviteEmail.trim());
-      setInviteEmail('');
-      api.admin.users.list().then(setUsers).catch(() => {});
-      toast.addToast('User invited.', 'success');
-    } catch (e) {
-      const msg = (e as Error)?.message || 'Failed';
-      setError(msg);
-      toast.addToast(msg, 'error');
-    }
-  };
 
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) return;
@@ -139,10 +115,7 @@ export default function Admin() {
 
   const [qrCountdown, setQrCountdown] = useState(0);
   useEffect(() => {
-    if (!qrExpiresAt) {
-      setQrCountdown(0);
-      return;
-    }
+    if (!qrExpiresAt) return;
     const tick = () => {
       const left = Math.ceil((qrExpiresAt - Date.now()) / 1000);
       if (left <= 0) {
@@ -206,56 +179,48 @@ export default function Admin() {
     }
   };
 
+  if (user?.role !== 'admin') {
+    return (
+      <div className="max-w-3xl mx-auto">
+        <h1 className="text-2xl font-bold text-deep-navy mb-6">Admin Access Required</h1>
+        <p className="text-slate-600">You need admin privileges to access this page.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-5xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-        <h1 className="text-2xl font-bold text-deep-navy dark:text-[var(--text-primary)]">Admin Panel</h1>
+    <div className="app-workspace max-w-5xl">
+      <PageHeader title="Admin" subtitle="Manage members, project access, and club settings." actions={
         <button
           onClick={() => api.admin.exportAllZip().then(() => toast.addToast('Export all (ZIP) downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-          className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
+          className="ui-button ui-button--secondary"
         >
           Export all (ZIP)
         </button>
-      </div>
+      } />
 
       <AppTabMenu
-        className="mb-6"
-        tabs={[
-          { id: 'users', label: 'Users' },
-          { id: 'projects', label: 'Projects' },
-          { id: 'audit', label: 'Audit' },
-          { id: 'apikeys', label: 'API Keys' },
-          { id: '2fa', label: '2FA' },
-          { id: 'catalog', label: 'Catalog' },
-          { id: 'operations', label: 'Operations' },
-        ]}
+        tabs={[{ id: 'users', label: 'Members' }, { id: 'projects', label: 'Projects' }, { id: 'audit', label: 'Activity' }, { id: 'apikeys', label: 'Settings' }]}
+        active={['apikeys', '2fa', 'catalog', 'operations'].includes(activeTab) ? 'apikeys' : activeTab}
+        onChange={(id) => setActiveTab(id as typeof activeTab)}
+        label="Admin sections"
+      />
+      {['apikeys', '2fa', 'catalog', 'operations'].includes(activeTab) && <AppTabMenu
+        tabs={[{ id: 'apikeys', label: 'API keys' }, { id: '2fa', label: 'Account security' }, { id: 'catalog', label: 'Storage' }, { id: 'operations', label: 'Operations' }]}
         active={activeTab}
         onChange={(id) => setActiveTab(id as typeof activeTab)}
-      />
+        label="Administrative settings"
+      />}
+
 
       {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
 
       {activeTab === 'users' && (
         <div className="space-y-6">
-          <div className="surface-card rounded-xl p-6">
-            <h2 className="font-semibold text-deep-navy mb-4">Invite User</h2>
-            <p className="text-sm text-slate-600 mb-4">Add a @yale.edu email. They will be able to sign in with Google.</p>
-            <div className="flex gap-2">
-              <input
-                type="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="email@yale.edu"
-                className="flex-1 px-3 py-2 rounded-lg border border-pale-sky"
-              />
-              <button onClick={handleInvite} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
-                Invite
-              </button>
-            </div>
-          </div>
+          <Invitations />
           <div className="surface-card rounded-xl p-6">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-              <h2 className="font-semibold text-deep-navy">Users</h2>
+              <h2 className="font-semibold text-deep-navy">Members</h2>
               <button
                 type="button"
                 onClick={async () => {
@@ -289,6 +254,7 @@ export default function Admin() {
                       <td className="py-2">{u.name || '—'}</td>
                       <td className="py-2">
                         <select
+                          aria-label={`Role for ${u.email}`}
                           value={u.role || 'standard'}
                           onChange={async (e) => {
                             try {
@@ -653,7 +619,7 @@ export default function Admin() {
           <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Operations Intelligence</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-              Private, internal-only. Usage data and YUCG resources train the AI to learn how the club operates. Ollama runs locally; data never leaves your environment.
+              Ask questions about club activity and the reference material below.
             </p>
             <div className="flex flex-wrap gap-4 items-center mb-6">
               <label className="flex items-center gap-2">
@@ -764,41 +730,6 @@ export default function Admin() {
               <p className="text-sm text-slate-500">No usage data yet. Use the site (create campaigns, generate emails, scrape) to build the heatmap.</p>
             )}
 
-            <h3 className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] mt-6 mb-2">Cursor heatmap (where users&apos; cursors go, by page)</h3>
-            {opsCursorHeatmap?.pages && typeof opsCursorHeatmap.pages === 'object' && Object.keys(opsCursorHeatmap.pages).length > 0 ? (
-              <div className="flex flex-wrap gap-6">
-                {Object.entries(opsCursorHeatmap.pages).map(([pageName, pageData]) => {
-                  const grid = Array.isArray(pageData?.grid) ? pageData.grid : [];
-                  const bins = Number(pageData?.bins) || 10;
-                  const flatMax = Math.max(1, ...grid.flat());
-                  return (
-                    <div key={pageName} className="flex flex-col items-start">
-                      <span className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{pageName || 'unknown'}</span>
-                      <div
-                        className="inline-grid gap-0.5 border border-pale-sky rounded-lg overflow-hidden"
-                        style={{ gridTemplateColumns: `repeat(${bins}, 12px)`, gridTemplateRows: `repeat(${bins}, 12px)` }}
-                      >
-                        {grid.map((row, i) =>
-                          Array.isArray(row) ? row.map((val, j) => {
-                            const intensity = flatMax > 0 && val ? val / flatMax : 0;
-                            return (
-                              <div
-                                key={`${i}-${j}`}
-                                className="w-3 h-3"
-                                style={{ backgroundColor: `rgba(26, 47, 90, ${0.15 + intensity * 0.85})` }}
-                                title={`(${j},${i}) ${val}`}
-                              />
-                            );
-                          }) : null
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">No cursor data yet. Cursor position is recorded while you use the app (throttled); data appears after some activity.</p>
-            )}
 
             <h3 className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] mt-6 mb-2">Event counts by type (animated)</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
@@ -850,7 +781,7 @@ export default function Admin() {
           </div>
 
           <div className="surface-card rounded-xl p-6">
-            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">YUCG resources (for Ollama)</h2>
+            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Reference material</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Upload or paste internal docs so the AI can learn from past workstreams and how the club operates.</p>
             <div className="flex flex-wrap gap-2 mb-4 items-center">
               <input type="text" value={opsResourceName} onChange={(e) => setOpsResourceName(e.target.value)} placeholder="Resource name" className="px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700" />
@@ -904,7 +835,7 @@ export default function Admin() {
           </div>
 
           <div className="surface-card rounded-xl p-6">
-            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Ask Ollama (operations analyst)</h2>
+            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Operations assistant</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Uses ingested YUCG resources and usage events. Runs locally; no data leaves your environment.</p>
             <textarea value={opsOllamaQuery} onChange={(e) => setOpsOllamaQuery(e.target.value)} placeholder="e.g. What types of campaigns do we run most? What email tones are popular?" rows={3} className="w-full px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700 mb-2" />
             <button

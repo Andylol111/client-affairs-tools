@@ -33,64 +33,32 @@ export class YucgGithubOidcStack extends cdk.Stack {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           },
           StringLike: {
-            "token.actions.githubusercontent.com:sub": `repo:${repo}:ref:refs/heads/main`,
+            "token.actions.githubusercontent.com:sub": `repo:${repo}:environment:production`,
           },
         },
         "sts:AssumeRoleWithWebIdentity",
       ),
     });
 
-    role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ["sts:AssumeRole"],
-        resources: [
-          `arn:aws:iam::${this.account}:role/cdk-hnb659fds-*-role-${this.account}-${this.region}`,
-        ],
-      }),
-    );
-    role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "cloudformation:*",
-          "ssm:GetParameter",
-          "ssm:GetParameters",
-          "ssm:SendCommand",
-          "ssm:GetCommandInvocation",
-          "ssm:ListCommands",
-          "ssm:ListCommandInvocations",
-          "ecr:*",
-          "s3:*",
-        ],
-        resources: ["*"],
-      }),
-    );
-    role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "iam:PassRole",
-          "iam:GetRole",
-          "iam:CreateRole",
-          "iam:AttachRolePolicy",
-          "iam:PutRolePolicy",
-        ],
-        resources: ["*"],
-      }),
-    );
-    role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "ec2:*",
-          "cloudfront:*",
-          "secretsmanager:*",
-          "logs:*",
-          "lambda:*",
-          "events:*",
-          "cloudwatch:*",
-          "iam:CreateServiceLinkedRole",
-        ],
-        resources: ["*"],
-      }),
-    );
+    // Application shipping does not own infrastructure or read application secrets.
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["ecr:GetAuthorizationToken", "ssm:GetCommandInvocation"], resources: ["*"],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["cloudformation:DescribeStacks"],
+      resources: [`arn:aws:cloudformation:${this.region}:${this.account}:stack/YucgOutreach-${envName}/*`],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:DescribeImages"],
+      resources: [`arn:aws:ecr:${this.region}:${this.account}:repository/cdk-hnb659fds-container-assets-${this.account}-${this.region}`],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["ssm:SendCommand"], resources: [`arn:aws:ssm:${this.region}::document/AWS-RunShellScript`],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["ssm:SendCommand"], resources: [`arn:aws:ec2:${this.region}:${this.account}:instance/*`],
+      conditions: { StringEquals: { "ssm:resourceTag/aws:cloudformation:stack-name": `YucgOutreach-${envName}` } },
+    }));
 
     new cdk.CfnOutput(this, "GitHubShipRoleArn", {
       value: role.roleArn,

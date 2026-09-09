@@ -1,4 +1,4 @@
-"""Text generation: Bedrock Anthropic (Opus → Haiku) or local Ollama."""
+"""Text generation: current Claude on Bedrock US inference profiles."""
 from __future__ import annotations
 
 import json
@@ -6,55 +6,26 @@ import os
 import re
 from typing import Any
 
-# US inference-profile IDs. Converse will not take a bare anthropic.* foundation id.
+# US geo profiles. Converse will not take a bare anthropic.* foundation id.
+# IDs from Bedrock model cards (Opus 5 / Sonnet 5 / Haiku 4.5).
 BEDROCK_ANTHROPIC: list[dict[str, str]] = [
     {
-        "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
-        "label": "Claude Opus 4.1",
+        "id": "us.anthropic.claude-opus-5",
+        "label": "Claude Opus 5",
         "tier": "opus",
         "blurb": "Hardest reasoning",
     },
     {
-        "id": "us.anthropic.claude-opus-4-20250514-v1:0",
-        "label": "Claude Opus 4",
-        "tier": "opus",
-        "blurb": "Deep analysis",
-    },
-    {
-        "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "label": "Claude Sonnet 4.5",
+        "id": "us.anthropic.claude-sonnet-5",
+        "label": "Claude Sonnet 5",
         "tier": "sonnet",
         "blurb": "Default for club week",
-    },
-    {
-        "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-        "label": "Claude Sonnet 4",
-        "tier": "sonnet",
-        "blurb": "Balanced",
-    },
-    {
-        "id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "label": "Claude Sonnet 3.7",
-        "tier": "sonnet",
-        "blurb": "Extended thinking",
     },
     {
         "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "label": "Claude Haiku 4.5",
         "tier": "haiku",
         "blurb": "Fast drafts",
-    },
-    {
-        "id": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        "label": "Claude Haiku 3.5",
-        "tier": "haiku",
-        "blurb": "Cheap labels",
-    },
-    {
-        "id": "us.anthropic.claude-3-haiku-20240307-v1:0",
-        "label": "Claude Haiku 3",
-        "tier": "haiku",
-        "blurb": "Lightest",
     },
 ]
 
@@ -69,9 +40,7 @@ def default_model_id() -> str:
     explicit = (os.getenv("BEDROCK_MODEL_ID") or os.getenv("LLM_MODEL") or "").strip()
     if explicit:
         return explicit
-    if llm_provider() == "bedrock":
-        return "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    return f"ollama:{(os.getenv('OLLAMA_MODEL') or 'llama3.2').strip()}"
+    return "us.anthropic.claude-sonnet-5"
 
 
 def rank_model_id() -> str:
@@ -79,9 +48,7 @@ def rank_model_id() -> str:
     explicit = (os.getenv("BEDROCK_RANK_MODEL_ID") or "").strip()
     if explicit:
         return explicit
-    if llm_provider() == "bedrock":
-        return "us.anthropic.claude-3-5-haiku-20241022-v1:0"
-    return default_model_id()
+    return "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def is_bedrock_model(model_id: str | None) -> bool:
@@ -90,21 +57,11 @@ def is_bedrock_model(model_id: str | None) -> bool:
 
 
 def list_models() -> dict[str, Any]:
-    ollama_id = f"ollama:{(os.getenv('OLLAMA_MODEL') or 'llama3.2').strip()}"
-    laptop = [
-        {
-            "id": ollama_id,
-            "label": f"Ollama ({ollama_id.split(':', 1)[1]})",
-            "tier": "laptop",
-            "blurb": "Local laptop only",
-        }
-    ]
     return {
         "provider": llm_provider(),
         "default": default_model_id(),
         "groups": [
-            {"id": "anthropic", "label": "Anthropic on Bedrock — Opus → Haiku", "models": BEDROCK_ANTHROPIC},
-            {"id": "laptop", "label": "Laptop", "models": laptop},
+            {"id": "anthropic", "label": "Claude on Bedrock", "models": BEDROCK_ANTHROPIC},
         ],
     }
 

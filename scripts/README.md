@@ -1,6 +1,9 @@
-# Scripts (Local AI & Utilities)
+# Scripts (local utilities)
 
-Scripts here support the **local-first AI** workflow described in [docs/LOCAL-AI-STRATEGY.md](../docs/LOCAL-AI-STRATEGY.md).
+The live site uses Bedrock, not these scripts. Members use `AppUrl`. See [`README.md`](../README.md).
+
+Scripts here support a **laptop** workflow (optional RAG index, conversation compact, website corpus). They are not part of GitHub ship.
+
 
 ## RAG codebase index
 

@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
-from app.services.settings_service import get_setting, set_setting, get_all_settings
+from app.services.settings_service import get_setting, set_setting, get_all_settings, get_member_setting, set_member_setting
 from app.auth_deps import get_current_user, get_current_admin
 from app.services.audit_service import log_audit
 
@@ -27,17 +27,22 @@ class CustomFormatCreate(BaseModel):
 @router.get("")
 async def get_settings(user: dict = Depends(get_current_user)):
     """Get all settings. Any authenticated user can read."""
-    return await get_all_settings()
+    result = await get_all_settings()
+    for key in ("signature", "signature_image_url"):
+        result[key] = await get_member_setting(user["id"], key) or ""
+    return result
 
 
 @router.put("")
-async def update_settings(payload: SettingsUpdate, admin: dict = Depends(get_current_admin)):
+async def update_settings(payload: SettingsUpdate, admin: dict = Depends(get_current_user)):
     """Update settings. Admin only."""
+    if payload.attachments_enabled is not None and admin.get("role") != "admin":
+        raise HTTPException(403, "Only administrators can change club settings")
     if payload.signature is not None:
-        await set_setting("signature", payload.signature)
+        await set_member_setting(admin["id"], "signature", payload.signature)
         await log_audit(admin["id"], "settings_update", "settings", "signature", "Updated signature")
     if payload.signature_image_url is not None:
-        await set_setting("signature_image_url", payload.signature_image_url or "")
+        await set_member_setting(admin["id"], "signature_image_url", payload.signature_image_url or "")
         await log_audit(admin["id"], "settings_update", "settings", "signature_image_url", "Updated signature image URL")
     if payload.attachments_enabled is not None:
         await set_setting("attachments_enabled", "1" if payload.attachments_enabled else "0")

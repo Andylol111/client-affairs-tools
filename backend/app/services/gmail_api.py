@@ -4,11 +4,15 @@ No App Password required; uses the logged-in user's Google account.
 """
 import os
 import base64
+import secrets
+from email.utils import make_msgid, formataddr
+from html import escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from typing import Optional, Any
 import httpx
+from app.services.mail_address import validate_recipient, validate_header
 
 GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
 GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
@@ -25,7 +29,7 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT email, access_token, refresh_token, token_expires_at FROM users WHERE id = ?",
+            "SELECT email, access_token, refresh_token, token_expires_at FROM users WHERE id = ? AND is_active = 1",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -123,10 +127,13 @@ async def send_via_gmail_api(
     Send email via Gmail API using the user's OAuth tokens.
     Returns True on success, raises on failure.
     """
+    validate_recipient(to_email)
+    validate_header(subject)
+    validate_header(from_name or "")
     result = await get_valid_access_token(user_id)
     if not result:
         raise ValueError(
-            "No Gmail access. Sign out and sign in again with Google to grant email-sending permission."
+            "No Gmail access. Connect your own Gmail account in Profile, under Integrations."
         )
     access_token, from_email = result
 
@@ -134,7 +141,7 @@ async def send_via_gmail_api(
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{from_name or 'YUCG Outreach'} <{from_email}>"
+    msg["From"] = formataddr((from_name or "YUCG Outreach", from_email))
     msg["To"] = to_email
     msg.attach(MIMEText(full_body, "plain", "utf-8"))
     if attachments:
@@ -205,10 +212,13 @@ async def send_via_gmail_api_multipart(
     attachments: Optional[list[tuple[bytes, str, str]]] = None,
 ) -> bool:
     """Send email as multipart (plain + HTML) with optional signature and signature image. No tracking pixel."""
+    validate_recipient(to_email)
+    validate_header(subject)
+    validate_header(from_name or "")
     result = await get_valid_access_token(user_id)
     if not result:
         raise ValueError(
-            "No Gmail access. Sign out and sign in again with Google to grant email-sending permission."
+            "No Gmail access. Connect your own Gmail account in Profile, under Integrations."
         )
     access_token, from_email = result
 
@@ -218,7 +228,7 @@ async def send_via_gmail_api_multipart(
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{from_name or 'YUCG Outreach'} <{from_email}>"
+    msg["From"] = formataddr((from_name or "YUCG Outreach", from_email))
     msg["To"] = to_email
     msg.attach(MIMEText(full_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -253,6 +263,7 @@ async def send_via_gmail_api_with_tracking(
     from_name: Optional[str] = None,
     signature: Optional[str] = None,
     signature_image_url: Optional[str] = None,
+    dispatch_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Send HTML email with open-tracking pixel for campaigns.
 
@@ -261,24 +272,53 @@ async def send_via_gmail_api_with_tracking(
     """
     from app.routers.track import get_tracking_pixel_url
 
+    validate_recipient(to_email)
+    validate_header(subject)
+    validate_header(from_name or "")
     result = await get_valid_access_token(user_id)
     if not result:
         raise ValueError(
-            "No Gmail access. Sign out and sign in again with Google to grant email-sending permission."
+            "No Gmail access. Connect your own Gmail account in Profile, under Integrations."
         )
     access_token, from_email = result
 
     full_body = append_signature(body, signature)
     sig_html = _signature_html(signature, signature_image_url)
-    tracking_url = get_tracking_pixel_url(campaign_contact_id)
+    token = secrets.token_urlsafe(32)
+    tracking_url = get_tracking_pixel_url(token)
+    rfc_message_id = make_msgid(domain=from_email.rsplit('@', 1)[-1])
+    from app.database import get_db
+    db = await get_db()
+    try:
+        if dispatch_key is not None:
+            from app.services.dispatch_service import begin_write
+            await begin_write(db)
+            intent = await (await db.execute('SELECT * FROM outreach_dispatches WHERE dispatch_key=?',(dispatch_key,))).fetchone()
+            if (not intent or intent['state']!='claimed' or intent['sender_user_id']!=user_id
+                    or intent['campaign_contact_id']!=campaign_contact_id or intent['recipient']!=to_email
+                    or intent['subject']!=subject or intent['body']!=body
+                    or (intent['signature'] or '')!=(signature or '')
+                    or (intent['signature_image_url'] or '')!=(signature_image_url or '')):
+                raise ValueError('Send does not match its claimed immutable dispatch')
+        cursor = await db.execute(
+            """INSERT INTO outreach_messages
+               (campaign_contact_id, sender_id, recipient, tracking_token, rfc_message_id, dispatch_key)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (campaign_contact_id, user_id, to_email, token, rfc_message_id, dispatch_key),
+        )
+        tracking_message_id = cursor.lastrowid
+        await db.commit()
+    finally:
+        await db.close()
     # HTML: body only (no duplicate signature) + signature HTML + tracking pixel
-    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{body.replace(chr(10), '<br>')}{sig_html}
+    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{escape(body).replace(chr(10), '<br>')}{sig_html}
 <img src="{tracking_url}" width="1" height="1" alt="" style="display:none" /></body></html>"""
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{from_name or 'YUCG Outreach'} <{from_email}>"
+    msg["From"] = formataddr((from_name or "YUCG Outreach", from_email))
     msg["To"] = to_email
+    msg["Message-ID"] = rfc_message_id
     msg.attach(MIMEText(full_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
@@ -300,6 +340,16 @@ async def send_via_gmail_api_with_tracking(
         if r.status_code >= 400:
             raise RuntimeError(f"Gmail API error: {r.status_code} - {r.text}")
         data = r.json()
+        db = await get_db()
+        try:
+            await db.execute(
+                """UPDATE outreach_messages SET gmail_message_id = ?, gmail_thread_id = ?,
+                   sent_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                (data.get("id"), data.get("threadId"), tracking_message_id),
+            )
+            await db.commit()
+        finally:
+            await db.close()
         return {
             "ok": True,
             "message_id": data.get("id"),

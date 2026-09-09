@@ -1,6 +1,5 @@
 
 import os
-import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -16,6 +15,10 @@ else:
     print(f"[env] No backend/.env found at {_env_path}")
 
 from contextlib import asynccontextmanager
+import logging
+from app.log_redaction import RedactAccessPath
+logging.getLogger("uvicorn.access").addFilter(RedactAccessPath())
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -39,76 +42,47 @@ _cors_origins = os.getenv("CORS_ORIGINS", "").strip()
 CORS_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _cors_origins else _default_origins
 
 
-_loop_for_jobs = None
-
-
-def _run_follow_ups_sync():
-    """Bridge for APScheduler (runs in thread): schedule async job on main loop."""
-    if _loop_for_jobs:
-        _loop_for_jobs.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(run_follow_up_sequences(), loop=_loop_for_jobs)
-        )
-
-
-def _run_digests_sync():
-    """Bridge for APScheduler: schedule notification digest job on main loop."""
-    if _loop_for_jobs:
-        _loop_for_jobs.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(run_notification_digests(), loop=_loop_for_jobs)
-        )
-
-
-def _run_gmail_reply_sync():
-    """Bridge for APScheduler: schedule Gmail inbox reply sync on main loop."""
-    if _loop_for_jobs:
-        _loop_for_jobs.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(sync_replies_all_senders(), loop=_loop_for_jobs)
-        )
-
-
-def _run_campaign_drain():
-    if _loop_for_jobs:
-        _loop_for_jobs.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(drain_releasing_campaigns(), loop=_loop_for_jobs)
-        )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _loop_for_jobs
     await init_db()
-    _loop_for_jobs = asyncio.get_running_loop()
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
-        _run_follow_ups_sync,
+        run_follow_up_sequences,
         "cron",
         hour=8,
         minute=0,
         id="follow_up_sequences",
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.add_job(
-        _run_digests_sync,
+        run_notification_digests,
         "cron",
         hour=8,
         minute=5,
         id="notification_digests",
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.add_job(
-        _run_gmail_reply_sync,
+        sync_replies_all_senders,
         "cron",
-        minute="*/30",
+        minute="*/2",
         id="gmail_reply_sync",
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.add_job(
-        _run_campaign_drain,
+        drain_releasing_campaigns,
         "cron",
         minute="*/5",
         id="campaign_drain",
+        max_instances=1,
+        coalesce=True,
     )
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
-    _loop_for_jobs = None
 
 
 app = FastAPI(
@@ -126,11 +100,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def private_api_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 _require_user = [Depends(get_current_user)]
 app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"], dependencies=_require_user)
 app.include_router(emails.router, prefix="/api/emails", tags=["emails"], dependencies=_require_user)
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"], dependencies=_require_user)
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"], dependencies=_require_user)
+from app.routers import invitations, workspace, activity
+app.include_router(activity.router, prefix="/api/activity", tags=["activity"])
+app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(invitations.router, prefix="/api/admin/invitations", tags=["invitations"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"], dependencies=_require_user)
@@ -154,15 +142,39 @@ async def ai_models(_user: dict = Depends(get_current_user)):
     return list_models()
 
 
+def spa_file(root: Path, full_path: str) -> Path:
+    """Serve a real file if it exists under dist; otherwise index.html (React routes)."""
+    root = root.resolve()
+    index = root / "index.html"
+    if not full_path or full_path.endswith("/"):
+        return index
+    candidate = (root / full_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return index
+    return candidate if candidate.is_file() else index
+
+
 def _mount_spa() -> None:
     """Hosted box: same process as the API. Localhost still uses Vite on :5173."""
     raw = (os.getenv("FRONTEND_DIST") or "").strip()
     root = Path(raw) if raw else _backend_dir / "frontend_dist"
     if not root.is_dir():
         return
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=str(root), html=True), name="spa")
+    assets = root / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="spa-assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(spa_file(root, full_path))
 
 
 _mount_spa()

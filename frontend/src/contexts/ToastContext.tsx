@@ -1,23 +1,8 @@
+import { ToastContext, type Toast } from './useToast';
 /**
  * Toast notifications - bottom-right, progress bar, auto-dismiss
  */
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-
-type Toast = {
-  id: string;
-  message: string;
-  type: 'error' | 'success' | 'info';
-  duration: number;
-  createdAt: number;
-};
-
-type ToastContextValue = {
-  toasts: Toast[];
-  addToast: (message: string, type?: 'error' | 'success' | 'info', duration?: number) => void;
-  removeToast: (id: string) => void;
-};
-
-const ToastContext = createContext<ToastContextValue | null>(null);
+import { useCallback, useEffect, useState } from 'react';
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -45,7 +30,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 }
 
 function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast: (id: string) => void }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (toasts.length === 0) return;
     const id = setInterval(() => setNow(Date.now()), 50);
@@ -87,10 +72,4 @@ function ToastContainer({ toasts, removeToast }: { toasts: Toast[]; removeToast:
       </div>
     </div>
   );
-}
-
-export function useToast() {
-  const ctx = useContext(ToastContext);
-  if (!ctx) return { addToast: () => {}, toasts: [], removeToast: () => {} };
-  return ctx;
 }
