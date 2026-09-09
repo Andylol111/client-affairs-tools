@@ -25,7 +25,7 @@ export class YucgGithubOidcStack extends cdk.Stack {
 
     const role = new iam.Role(this, "Ship", {
       roleName: `yucg-github-ship-${envName}`,
-      description: "GitHub Actions cdk deploy on main (OIDC)",
+      description: "GitHub Actions image push + SSM restart on main (OIDC)",
       assumedBy: new iam.FederatedPrincipal(
         provider.openIdConnectProviderArn,
         {
@@ -50,7 +50,17 @@ export class YucgGithubOidcStack extends cdk.Stack {
     );
     role.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["cloudformation:*", "ssm:GetParameter", "ssm:GetParameters", "ecr:*", "s3:*"],
+        actions: [
+          "cloudformation:*",
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommands",
+          "ssm:ListCommandInvocations",
+          "ecr:*",
+          "s3:*",
+        ],
         resources: ["*"],
       }),
     );
