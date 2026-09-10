@@ -54,7 +54,7 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ui
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           name: yucg-frontend-${{ github.sha }}
@@ -157,7 +157,7 @@ jobs:
         run: |
           docker save yucg-check:${{ github.sha }} -o /tmp/yucg-image.tar
           echo "sha256=$(sha256sum /tmp/yucg-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:
           name: yucg-image-${{ github.sha }}
