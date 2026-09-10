@@ -12,13 +12,33 @@ OLD_MOUNT=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/dat
 [ "$OLD_MOUNT" = /data ] || { echo 'Unexpected current database mount'; exit 1; }
 aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_HOST}"
 docker pull "${IMAGE}"
-# Existing root-owned data needs a reviewed permissions migration before cutover.
-# Probe with the candidate image identity before stopping the running application.
-docker run --rm --network none --entrypoint python -v /data:/data "${IMAGE}" -c 'import os,sqlite3; assert os.geteuid()!=0,"Non-root image required"; assert os.access("/data",os.W_OK) and os.access("/data/clientreach.db",os.W_OK),"Review data ownership for UID 10001 before deploying"; c=sqlite3.connect("file:/data/clientreach.db?mode=rw",uri=True); c.execute("BEGIN IMMEDIATE"); c.rollback(); c.close()'
 # SQLite online backup accounts for WAL; no raw copy of a live database.
 install -d -m 0700 /data/backups
 BACKUP="/data/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).db"
 docker exec --user 0 -e BACKUP="$BACKUP" yucg python -c 'import os,sqlite3; s=sqlite3.connect("/data/clientreach.db"); d=sqlite3.connect(os.environ["BACKUP"]); s.backup(d); assert d.execute("PRAGMA integrity_check").fetchone()[0]=="ok"; d.close(); s.close()'
+
+# One-time migration from the legacy root container to application UID/GID 10001.
+# It is disabled by default and deliberately excludes root-owned backups.
+if [ "${DATA_OWNER_MIGRATION_APPROVED}" = true ]; then
+  [ "$(stat -c %u /data/clientreach.db)" = 0 ] || [ "$(stat -c %u /data/clientreach.db)" = 10001 ]
+  [ "$(stat -c %g /data/clientreach.db)" = 0 ] || [ "$(stat -c %g /data/clientreach.db)" = 10001 ]
+  chown 10001:10001 /data /data/clientreach.db
+  chmod 0750 /data
+  chmod 0600 /data/clientreach.db
+  for sqlite_sidecar in /data/clientreach.db-wal /data/clientreach.db-shm; do
+    if [ -e "$sqlite_sidecar" ]; then
+      chown 10001:10001 "$sqlite_sidecar"
+      chmod 0600 "$sqlite_sidecar"
+    fi
+  done
+  if [ -d /data/.cache ]; then
+    find /data/.cache -xdev -type d -exec chown 10001:10001 {} + -exec chmod 0750 {} +
+    find /data/.cache -xdev -type f -exec chown 10001:10001 {} + -exec chmod 0600 {} +
+  fi
+fi
+
+# Probe with the candidate image identity before stopping the running application.
+docker run --rm --network none --entrypoint python -v /data:/data "${IMAGE}" -c 'import os,sqlite3; assert os.geteuid()!=0,"Non-root image required"; assert os.access("/data",os.W_OK) and os.access("/data/clientreach.db",os.W_OK),"Review data ownership for UID 10001 before deploying"; c=sqlite3.connect("file:/data/clientreach.db?mode=rw",uri=True); c.execute("BEGIN IMMEDIATE"); c.rollback(); c.close()'
 run_image() {
   docker rm -f yucg >/dev/null 2>&1 || true
   docker run -d --name yucg --restart unless-stopped --env-file /etc/yucg/app.env \

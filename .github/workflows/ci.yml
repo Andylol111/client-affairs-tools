@@ -178,6 +178,7 @@ jobs:
       AWS_REGION: us-east-1
       YUCG_ENV: dev
       EXPECTED_ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}
+      DATA_OWNER_MIGRATION_APPROVED: ${{ vars.DATA_OWNER_MIGRATION_APPROVED }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df
@@ -218,8 +219,8 @@ jobs:
           IMAGE="${IMAGE%:*}@${DIGEST}"
           [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
 
-          export IMAGE ECR_HOST AWS_REGION YUCG_ENV
-          envsubst '$IMAGE $ECR_HOST $AWS_REGION $YUCG_ENV' < infra/scripts/restart-yucg.sh > /tmp/restart-yucg.sh
+          export IMAGE ECR_HOST AWS_REGION YUCG_ENV DATA_OWNER_MIGRATION_APPROVED
+          envsubst '$IMAGE $ECR_HOST $AWS_REGION $YUCG_ENV $DATA_OWNER_MIGRATION_APPROVED' < infra/scripts/restart-yucg.sh > /tmp/restart-yucg.sh
           jq -n --rawfile script /tmp/restart-yucg.sh \
             --arg id "$ID" \
             '{
