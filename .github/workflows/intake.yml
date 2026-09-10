@@ -31,7 +31,7 @@ jobs:
     with:
       stage: intake
   required-checks:
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [route, verify]
     runs-on: ubuntu-latest
     steps:

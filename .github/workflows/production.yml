@@ -32,7 +32,7 @@ jobs:
     with:
       stage: production
   required-checks:
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [route, verify]
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +52,7 @@ jobs:
       contents: read
       id-token: write
   outcome:
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [required-checks, verify, deploy]
     runs-on: ubuntu-latest
     steps:
