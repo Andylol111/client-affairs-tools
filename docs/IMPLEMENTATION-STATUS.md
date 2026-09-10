@@ -24,7 +24,7 @@ Database metadata powers permission-filtered search, project membership and fron
 
 CI includes backend branch coverage, frontend lint/build/browser tests, dependency and security scans, infrastructure validation and a stable aggregate required-check job. Actions are pinned and Python dependencies are hash-locked. Shipping uses the scanned image artifact and resolved digest. Deployment scripts check the mounted database, create a consistent backup, wait for readiness and support application rollback. PR guidance requests behavior evidence, authorization review, rollout details and a short gross cost delta.
 
-Repository branch protection, designated reviewers and production environment protection still need live configuration verification. YAML alone does not enforce those account settings. Scanners and coverage do not establish that the entire legacy codebase is secure.
+GitHub main and feature rules now require the aggregate GitHub Actions check with no administrator bypass. Production requires owner approval and allows only main. The user deferred a second maintainer, so independent review is a future requirement. Scanners and coverage do not establish that the entire legacy codebase is secure.
 
 ## 6. AWS/Terraform preparation
 
@@ -39,12 +39,12 @@ The current database implementation remains a single-server SQLite deployment. D
 - Frontend production build and lint pass: **0 errors, 0 warnings**. **42 Chromium desktop/mobile browser tests pass**, including WCAG accessibility checks across 11 main pages and malicious HTML cases. APIs are mocked in these browser tests.
 - Frontend and locked backend dependency audits reported **0 known vulnerabilities** at verification time.
 - Three infrastructure regression scripts pass, including backup/restore and static publication failure handling. Infrastructure TypeScript, shell syntax, Terraform formatting/validation and diff whitespace checks pass.
-- Actual Linux image/container scanning runs in CI; no local Docker execution was available. Native systemd validation, additional browser engines and live service behavior were not exercised locally.
+- Hosted Linux image scanning now passes on Python 3.12.14 Alpine 3.24; non-root startup and all backend regressions inside that image also pass. The Debian runtime failed on 54 high/critical OS findings and was replaced without weakening the scan threshold. No local Docker execution was available. Native systemd validation, additional browser engines and live service behavior were not exercised locally.
 
 ## Approval-dependent production completion
 
 1. Verify live resource ownership, database mount, existing configuration and a restorable backup; review the exact Terraform plan and cost delta before any apply/import.
-2. Configure and verify GitHub required checks/reviewers, production environment protection and scoped OIDC trust.
+2. GitHub required checks and owner-approved production protection are configured. Update the deployed AWS OIDC trust from the legacy main-branch subject to the protected production-environment subject through an approved IAM change.
 3. Perform the approved CDK-to-Terraform handoff and configure storage CORS, application environment and optional static origin without replacing data-bearing resources.
 4. Deploy the verified artifact, exercise readiness and rollback, and enable the backup timer only after a controlled restore rehearsal.
 5. Use explicitly authorized test accounts for end-to-end invitation, Google/Gmail connection, send/open/reply/bounce and S3 permission/version/share tests. Reconcile legacy campaign ownership before resuming old outreach.
