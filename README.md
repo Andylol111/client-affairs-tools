@@ -4,7 +4,7 @@ Live club website for Yale Undergraduate Consulting Group outreach. Members shar
 
 **Site:** CloudFront `AppUrl` from stack `YucgOutreach-dev` (currently `https://d2vjpur8zjk0ai.cloudfront.net`). Sign in with `@yale.edu`.
 
-**Ship:** GitHub Actions (**verify and ship**) on `main`. Image goes to ECR; SSM restarts the existing box. Nothing ships from a laptop. Do not `cdk deploy YucgOutreach-dev` (that replaces the instance and breaks CloudFront + SQLite).
+**Ship:** GitHub Actions. `develop` is Intake only (no deploy). `feature` deploys beta. `main` deploys production. Image goes to ECR; SSM restarts the existing box. Nothing ships from a laptop. Do not `cdk deploy YucgOutreach-dev` (that replaces the instance and breaks CloudFront + SQLite).
 
 ## Members
 
@@ -18,11 +18,13 @@ Use `AppUrl` in any order: Home, Week, Studio, Send, Pipeline, Find, Stats.
 
 Daily loop:
 
-1. Push to `develop` (no required checks).
-2. PR `develop` → `main`. Wait for tests and `build-image`.
-3. Merge. The same workflow `ship` job builds `docker/app.Dockerfile`, pushes a unique ECR tag, and SSM-restarts the container.
+1. Open a same-repo PR into `develop` (or push there). **Intake** runs the selected checks. Develop never deploys.
+2. After Intake succeeds, promotion opens `develop` → `feature`. **Beta** must pass; a runtime push to `feature` deploys the beta box.
+3. After Beta succeeds, promotion opens `feature` → `main`. **Production** must pass; a runtime push to `main` deploys the live box after environment approval.
 
-`feature` is an optional test-only hop. Repo **Admins** can **Bypass rules** on a PR. Random other branches cannot target `main`.
+A docs-only or workflow-only change still has to pass its selected checks, but it does not request a deployment. Add `release:hold`, request changes, or close the promotion PR to stop a candidate. Terraform apply is a separate reviewed saved-plan workflow.
+
+`feature` is the beta hop, not an optional skip. Required checks have no administrator bypass. Random other branches cannot target `feature` or `main`.
 
 On / off, secrets, the prospect workbook, and handoff live in [`infra/README.md`](infra/README.md). CloudShell only. After a secret change, Session Manager: `sudo /usr/local/bin/yucg-run.sh`.
 
@@ -43,7 +45,7 @@ Frontend: http://localhost:5173 · API: http://localhost:8000. Press Ctrl+C to s
 
 ```
 docker/app.Dockerfile   live image (SPA + API)
-.github/workflows/ci.yml  verify and ship
+.github/workflows/        Intake (develop), Beta (feature), Production (main)
 infra/                    CDK (box, OIDC). Do not deploy the app stack from Actions.
 backend/                  FastAPI
 frontend/                 Vite SPA

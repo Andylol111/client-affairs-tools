@@ -1,0 +1,44 @@
+name: Promote verified changes
+on:
+  workflow_run:
+    workflows: [Intake, Beta, Production]
+    types: [completed]
+permissions:
+  contents: read
+concurrency:
+  group: promotion-controller
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require configured automation identity
+        env:
+          APP_ID: ${{ vars.PROMOTION_APP_ID }}
+          APP_KEY: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo 'Promotion blocked: configure the repository-scoped GitHub App and required branch rules.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      # This checkout is the trusted default branch, never the workflow_run head or PR code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        id: app
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: client-affairs-tools
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: read
+      - name: Open or merge eligible candidates
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/promote.py

@@ -6,6 +6,7 @@ import { api, type Contact, type GeneratedEmail } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import AiModelSelect from '../components/AiModelSelect';
+import AddressCheck from '../components/AddressCheck';
 import { useAiModel } from '../contexts/useAiModel';
 import { useUrlTab } from '../lib/useUrlTab';
 
@@ -159,7 +160,9 @@ export default function EmailStudio() {
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
   const [draftMessage, setDraftMessage] = useState('');
-  const [mobileStep, setMobileStep] = useState<'contacts' | 'generate' | 'edit'>('contacts');
+  const [mobileStep, setMobileStep] = useState<'contacts' | 'generate' | 'edit'>(() => activeTab === 'cache' ? 'contacts' : 'edit');
+  const [focusWriting, setFocusWriting] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [draftDescription, setDraftDescription] = useState('');
   const [draftTargetAudience, setDraftTargetAudience] = useState('');
   const [draftCompany, setDraftCompany] = useState('');
@@ -188,7 +191,7 @@ export default function EmailStudio() {
   const [campaignName, setCampaignName] = useState('');
   const [campaignBusy, setCampaignBusy] = useState(false);
   const [campaignMessage, setCampaignMessage] = useState<string | null>(null);
-  const [campaignPanelOpen, setCampaignPanelOpen] = useState(true);
+  const [campaignPanelOpen, setCampaignPanelOpen] = useState(false);
   const [studioContactsListOpen, setStudioContactsListOpen] = useState(true);
   const [studioCompanyListOpen, setStudioCompanyListOpen] = useState(false);
   const [studioListDeleting, setStudioListDeleting] = useState(false);
@@ -353,6 +356,7 @@ export default function EmailStudio() {
   };
 
   const loadDraftIntoEditor = (draft: GeneratedEmail) => {
+    setMobileStep('edit');
     setSelectedDraftId(draft.id);
     setEmail({ subject: draft.subject, body: draft.body });
     setDraftCompany(draft.company || '');
@@ -640,17 +644,23 @@ export default function EmailStudio() {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="email-studio app-workspace w-full max-w-[1920px]">
+    <div className={`email-studio app-workspace w-full max-w-[1920px] ${focusWriting ? 'studio-focus' : ''} ${previewOpen ? 'studio-preview-open' : ''}`}>
       <PageHeader
-        title="Drafts"
-        subtitle="Select a contact, prepare a personalized email, and save it for campaign review."
-        imageSrc="/yucg-bg/texture-panel.jpg"
+        title="Email studio"
+        subtitle="Write, review, and save your outreach. AI assistance is optional."
       />
+      <div className="studio-workbench-bar">
+        <span>Writing as <strong>{user?.email}</strong></span>
+        <div>
+          <button type="button" aria-pressed={focusWriting} onClick={() => setFocusWriting(value => !value)}>Focus on writing</button>
+          <button type="button" aria-pressed={previewOpen} onClick={() => { setPreviewOpen(value => !value); setMobileStep('edit'); }}>Preview email</button>
+        </div>
+      </div>
       <nav className="studio-mobile-steps" aria-label="Studio workflow">
         {([
           ['contacts', '1. Contact'],
-          ['generate', '2. Generate'],
-          ['edit', '3. Edit'],
+          ['generate', '2. AI assistance'],
+          ['edit', '3. Write'],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -893,14 +903,14 @@ export default function EmailStudio() {
               >
                 ◀
               </button>
-              <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">AI Email Generator</h2>
+              <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">AI assistance</h2>
             </div>
             <div className="email-studio-generator-body">
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              Describe the email, set the audience, and assign a company. Then use Quick Compose or select a contact.
+              Optionally describe your goal and audience to generate a starting draft. You can also write directly in the editor.
             </p>
             <div className="email-studio-field email-studio-field--grow">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">What Does This Email Do?</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Email goal</label>
                 <textarea
                   value={draftDescription}
                   onChange={(e) => setDraftDescription(e.target.value)}
@@ -952,7 +962,7 @@ export default function EmailStudio() {
             </div>
             </div>
             <div className="border-t border-pale-sky dark:border-slate-600 pt-3">
-              <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Quick Compose (Recipient for AI)</h3>
+              <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Recipient details</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input
                   type="text"
@@ -1055,13 +1065,14 @@ export default function EmailStudio() {
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] p-4 border-b border-pale-sky dark:border-slate-600 truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
               Email for {selected?.name || quickCompose.name || 'Recipient'} ({selected?.email || quickCompose.email || 'enter email for test send'})
             </h2>
+            <AddressCheck email={selected?.email || quickCompose.email || ''} />
             <div className="email-studio-campaign border-b border-[var(--border)]">
               <button
                 type="button"
                 onClick={() => setCampaignPanelOpen((v) => !v)}
                 className="w-full px-4 py-2.5 flex items-center justify-between text-left text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] bg-white dark:bg-[var(--bg-card)] hover:bg-pale-sky/10 dark:hover:bg-slate-700/40"
               >
-                <span>Company outreach &amp; mass send</span>
+                <span>Add this draft to a campaign</span>
                 <span className={`inline-block text-[var(--text-muted)] transition-transform duration-300 ease-out motion-reduce:transition-none ${campaignPanelOpen ? 'rotate-0' : '-rotate-90'}`} aria-hidden>▼</span>
               </button>
               <div
@@ -1270,7 +1281,7 @@ export default function EmailStudio() {
             </div>
             <div className="email-studio-compose divide-x divide-pale-sky dark:divide-slate-600">
               <div className="p-4 min-w-0 email-studio-editor-column">
-                <h3 className="text-sm font-medium text-deep-navy dark:text-slate-400 mb-2">Live Editor</h3>
+                <h3 className="text-sm font-medium text-deep-navy dark:text-slate-400 mb-2">Your draft</h3>
                 {/* Text formatting toolbar - white in light mode */}
                 <div className="email-studio-block flex flex-wrap items-center gap-1 mb-2 p-2 rounded-lg border dark:bg-slate-700/50 dark:border-slate-600">
                   <button type="button" onClick={() => document.execCommand('bold')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] font-bold text-sm" title="Bold">B</button>
@@ -1300,8 +1311,9 @@ export default function EmailStudio() {
                 </div>
                 <div className="email-studio-editor-stack">
                   <div className="min-w-0">
-                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Subject</label>
+                    <label htmlFor="studio-subject" className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Subject</label>
                     <input
+                      id="studio-subject"
                       type="text"
                       value={email?.subject ?? ''}
                       onChange={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), subject: e.target.value }))}
@@ -1310,11 +1322,14 @@ export default function EmailStudio() {
                     />
                   </div>
                   <div className="email-studio-body-wrap">
-                    <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Body</label>
+                    <label id="studio-body-label" className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Message</label>
                     <div className="relative min-w-0 flex-1 min-h-0">
                     <div
                       ref={bodyRef}
                       contentEditable
+                      role="textbox"
+                      aria-labelledby="studio-body-label"
+                      aria-multiline="true"
                       suppressContentEditableWarning
                       onPaste={event => { event.preventDefault(); insertSafeTransfer(event.clipboardData); }}
                       onDrop={event => { event.preventDefault(); insertSafeTransfer(event.dataTransfer); }}
@@ -1394,7 +1409,7 @@ export default function EmailStudio() {
                       </div>
                     </div>
                   )}
-                  <div className="flex gap-2 flex-wrap items-center">
+                  <div className="studio-draft-actions flex gap-2 flex-wrap items-center">
                     <button
                       onClick={saveCurrentAsDraft}
                       disabled={draftSaving || (!email?.subject && !email?.body)}
@@ -1421,13 +1436,13 @@ export default function EmailStudio() {
                       disabled={testSending || !email?.body}
                       className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50 transition-all"
                     >
-                      {testSending ? 'Sending...' : 'Email Tester'}
+                      {testSending ? 'Sending...' : 'Send test to myself'}
                     </button>
                     <span className="text-xs text-slate-500 dark:text-slate-400">
                       Sends to {user?.email || 'your email'} to verify delivery
                     </span>
                   </div>
-                  {draftMessage && <p className="text-sm text-slate-600 dark:text-slate-300">{draftMessage}</p>}
+                  {draftMessage && <p role="status" className="text-sm text-slate-600 dark:text-slate-300">{draftMessage}</p>}
                   {sentimentAnalysis && (
                     <div className="mt-4 p-4 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700/30">
                       <h4 className="font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Sentiment Analysis</h4>
@@ -1461,15 +1476,11 @@ export default function EmailStudio() {
               <div className="email-studio-gmail-rail p-4 min-w-0 border-l border-[var(--border)]">
                 <h3 className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2 flex items-center gap-2">
                   <span className="inline-block w-2 h-2 rounded-full bg-steel-blue animate-pulse" />
-                  Live Gmail Preview
+                  Email preview
                 </h3>
                 <div className="email-studio-gmail-card rounded-lg overflow-hidden min-h-[280px]">
                   <div className="email-studio-gmail-toolbar px-4 py-2 flex items-center gap-3 flex-wrap">
-                    <span>←</span>
-                    <span>Archive</span>
-                    <span>Report spam</span>
-                    <span>Delete</span>
-                    <span className="ml-auto">Mark as read</span>
+                    <span>Recipient view · appearance varies by email app</span>
                   </div>
                   <div className="email-studio-gmail-body p-4">
                     <div className="flex items-start gap-3 mb-4">
@@ -1478,10 +1489,10 @@ export default function EmailStudio() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-deep-navy dark:text-slate-800">YUCG Outreach</span>
-                          <span className="text-slate-500 text-sm">&lt;you@gmail.com&gt;</span>
+                          <span className="font-semibold text-deep-navy dark:text-slate-800">{user.name || user.email}</span>
+                          <span className="text-slate-500 text-sm">&lt;{user.email}&gt;</span>
                         </div>
-                        <div className="text-slate-500 text-sm mt-0.5">to me</div>
+                        <div className="text-slate-500 text-sm mt-0.5">To: {selected?.email || quickCompose.email || 'Choose a recipient'}</div>
                       </div>
                       <div className="text-slate-400 text-xs shrink-0">
                         {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}

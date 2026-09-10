@@ -2,6 +2,8 @@
 Emails API - AI Email Generation Engine (Ollama)
 """
 from fastapi import APIRouter, HTTPException, Depends
+from starlette.concurrency import run_in_threadpool
+from app.services.generation_policy import reserve_generation
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
@@ -50,7 +52,8 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
         from app.services.contact_scraper import normalize_domain
         company_domain = normalize_domain(contact.get("company_domain") or "")
 
-        subject, body = generate_email(
+        await reserve_generation(user['id'], req.model)
+        subject, body = await run_in_threadpool(generate_email,
             contact_name=contact.get("name"),
             contact_title=contact.get("title"),
             company_name=contact.get("company"),
@@ -122,13 +125,14 @@ async def _upsert_contact_by_email(
 @router.post("/generate-template", response_model=EmailGenerateResponse)
 async def generate_email_template(
     req: EmailGenerateTemplateRequest,
-    user: dict | None = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     """Generate an email. If the user is signed in and gave an email, upsert the catalog row and cache the draft."""
     from app.services.contact_scraper import normalize_domain, sanitize_email
 
     company_domain = normalize_domain(req.company or "") if req.company else ""
-    subject, body = generate_email(
+    await reserve_generation(user['id'], req.model)
+    subject, body = await run_in_threadpool(generate_email,
         contact_name=req.name,
         contact_title=req.title,
         company_name=req.company,
@@ -311,15 +315,24 @@ async def clear_generated_emails_cache(user: dict = Depends(get_current_user)):
 @router.post("/generate-batch")
 async def generate_emails_batch(requests: list[EmailGenerateRequest], user: dict = Depends(get_current_user)):
     """Generate emails for multiple contacts (batch)."""
+    if len(requests) > 20:
+        raise HTTPException(413, 'Generate at most 20 drafts per batch')
     results = []
     for req in requests:
         try:
             resp = await generate_email_for_contact(req, user)
             results.append(resp.model_dump())
-        except Exception as e:
+        except HTTPException as exc:
             results.append({
                 "contact_id": req.contact_id,
-                "error": str(e),
+                "error": exc.detail,
+                "subject": None,
+                "body": None,
+            })
+        except Exception:
+            results.append({
+                "contact_id": req.contact_id,
+                "error": "Draft generation failed. Your existing draft is unchanged; please retry.",
                 "subject": None,
                 "body": None,
             })

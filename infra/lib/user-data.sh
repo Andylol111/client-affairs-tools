@@ -1,7 +1,7 @@
 #!/bin/bash
 # First boot: mount retained data volume, pull image, write env, start container.
 set -euo pipefail
-dnf install -y docker jq xfsprogs
+dnf install -y docker jq xfsprogs amazon-ecr-credential-helper
 systemctl enable --now docker
 
 install -d -m 0755 /etc/yucg
@@ -28,7 +28,13 @@ fi
 
 mountpoint -q /data || { echo "Retained data mount failed"; exit 1; }
 
-aws ecr get-login-password --region "$YUCG_REGION" | docker login --username AWS --password-stdin "$YUCG_ECR"
+export AWS_DEFAULT_REGION="$YUCG_REGION" AWS_ECR_DISABLE_CACHE=true
+export DOCKER_CONFIG
+DOCKER_CONFIG="$(mktemp -d)"
+chmod 700 "$DOCKER_CONFIG"
+trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
+printf '{"credHelpers":{"%s":"ecr-login"}}\n' "$YUCG_ECR" > "$DOCKER_CONFIG/config.json"
+chmod 600 "$DOCKER_CONFIG/config.json"
 docker pull "$YUCG_IMAGE"
 
 PUBLIC_URL=""

@@ -1,0 +1,61 @@
+name: Publish static frontend (optional S3 origin)
+on:
+  workflow_dispatch:
+    inputs:
+      production_run_id:
+        description: Successful Production push run for the current main revision
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: static-production
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      STATIC_BUCKET: ${{ vars.STATIC_BUCKET }}
+      STATIC_CUTOVER_APPROVED: ${{ vars.STATIC_CUTOVER_APPROVED }}
+      STATIC_INVALIDATION_APPROVED: ${{ vars.STATIC_INVALIDATION_APPROVED }}
+      STATIC_DISTRIBUTION_ID: ${{ vars.STATIC_DISTRIBUTION_ID }}
+    steps:
+      - name: Require completed S3 origin cutover
+        run: test "$STATIC_CUTOVER_APPROVED" = true && test -n "$STATIC_BUCKET"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require successful production delivery of this exact revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN: ${{ inputs.production_run_id }}
+        run: |
+          [[ "$VERIFIED_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN" | jq -e \
+            --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            '.name == "Production" and .event == "push" and .head_branch == "main" and .head_sha == $sha and .head_repository.full_name == $repo and .conclusion == "success"'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: yucg-static-${{ github.sha }}
+          path: /tmp/yucg-static
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.production_run_id }}
+      - name: Check and extract the frontend bundled in the verified image
+        run: |
+          cd /tmp/yucg-static
+          sha256sum -c SHA256SUMS
+          mkdir dist
+          tar -xzf frontend.tar.gz -C dist
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_STATIC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - run: bash infra/scripts/publish-static.sh /tmp/yucg-static/dist

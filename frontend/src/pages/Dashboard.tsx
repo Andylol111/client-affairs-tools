@@ -29,7 +29,7 @@ const WEEK = [
   },
   {
     n: '3',
-    door: 'Drafts',
+    door: 'Studio',
     title: 'Write',
     body: 'Select a contact, prepare an email, and save your draft.',
     to: '/studio',

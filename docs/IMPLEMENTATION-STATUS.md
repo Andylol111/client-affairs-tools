@@ -22,7 +22,7 @@ Database metadata powers permission-filtered search, project membership and fron
 
 ## 5. Delivery and security gates
 
-CI includes backend branch coverage, frontend lint/build/browser tests, dependency and security scans, infrastructure validation and a stable aggregate required-check job. Actions are pinned and Python dependencies are hash-locked. Shipping uses the scanned image artifact and resolved digest. Deployment scripts check the mounted database, create a consistent backup, wait for readiness and support application rollback. PR guidance requests behavior evidence, authorization review, rollout details and a short gross cost delta.
+CI is three named workflows: **Intake** (`develop`, never deploys), **Beta** (`feature` deploys the beta box), and **Production** (`main` deploys the live box). Shared verification in `verify.yml` classifies the diff, runs only the required jobs, and fails if a required job is skipped. Promotion after a green push is automatic; `release:hold`, requested changes, or closing the PR stop the candidate. Actions are pinned and Python dependencies are hash-locked. Shipping uses the scanned image artifact and resolved digest through the ECR credential helper (no plaintext `docker login`). Deployment scripts check the mounted database, create a consistent backup, wait for readiness and support application rollback. Terraform apply and optional static publishing are separate reviewed operations.
 
 GitHub main and feature rules now require the aggregate GitHub Actions check with no administrator bypass. Production requires owner approval and allows only main. The user deferred a second maintainer, so independent review is a future requirement. Scanners and coverage do not establish that the entire legacy codebase is secure.
 
@@ -34,12 +34,17 @@ The current database implementation remains a single-server SQLite deployment. D
 
 ## Final local verification
 
-- All **21 isolated backend regression scripts pass** under Python 3.12 with the production dependency lock.
-- Combined backend statement/branch coverage is **31%**. New critical-module gates require at least 80% individually: invitations **91%**, workspace **85%**, dispatch claims **88%**, dispatch recovery **99%**, mailbox validation **89%**. Broad legacy coverage remains work to do.
-- Frontend production build and lint pass: **0 errors, 0 warnings**. **42 Chromium desktop/mobile browser tests pass**, including WCAG accessibility checks across 11 main pages and malicious HTML cases. APIs are mocked in these browser tests.
-- Frontend and locked backend dependency audits reported **0 known vulnerabilities** at verification time.
-- Three infrastructure regression scripts pass, including backup/restore and static publication failure handling. Infrastructure TypeScript, shell syntax, Terraform formatting/validation and diff whitespace checks pass.
-- Hosted Linux image scanning now passes on Python 3.12.14 Alpine 3.24; non-root startup and all backend regressions inside that image also pass. The Debian runtime failed on 54 high/critical OS findings and was replaced without weakening the scan threshold. No local Docker execution was available. Native systemd validation, additional browser engines and live service behavior were not exercised locally.
+Verified on 2026-09-10 for branch `feat/staged-delivery-and-studio` (uncommitted until requested):
+
+- Backend `scripts/test_suite.py` passes, including `test_environment_security.py`. Combined coverage is **34%**. Gated modules: invitations **91%**, workspace **85%**, dispatch claims **88%**, dispatch recovery **99%**, mailbox validation **89%**, delivery policy **100%**, generation policy **100%**, Bedrock/LLM **97%**, email verifier **95%**.
+- Frontend lint and production build pass. Studio Playwright: 5 passed, 1 desktop-only viewport case skipped on mobile. Accessibility title for `/studio` is **Email studio**.
+- `python3 -m unittest discover -s infra/tests` : **29** tests pass. Terraform `storage.tftest.hcl`: **3** passed. `actionlint` is clean.
+- This branch is not on `main` and has not been deployed. Production remains `26969f6`.
+
+Earlier hosted verification (already on main):
+
+- Hosted Linux image scanning passed on Python 3.12.14 Alpine 3.24; non-root startup and in-image backend regressions passed.
+- Native systemd validation, additional browser engines, and a full re-run of the 42-test browser suite were not repeated in this pass.
 
 ## Approval-dependent production completion
 

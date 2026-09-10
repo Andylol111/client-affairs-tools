@@ -6,17 +6,28 @@ umask 0077
 mountpoint -q /data || { echo 'Retained /data volume is not mounted; refusing deployment'; exit 1; }
 [ -f /data/clientreach.db ] || { echo 'Existing database missing; use reviewed bootstrap for first deployment'; exit 1; }
 [ -s /etc/yucg/app.env ]
+if [ "${DEPLOYMENT_ENV:-production}" = beta ]; then
+  # Beta must use its own database, OAuth client, and storage. Never reuse production mail.
+  grep -qx 'APP_ENV=beta' /etc/yucg/app.env
+  grep -qx 'EMAIL_DELIVERY_ENABLED=false' /etc/yucg/app.env
+fi
 exec 9>/var/lock/yucg-deploy.lock
 flock -n 9 || { echo 'Deployment already running'; exit 1; }
 OLD_IMAGE=$(docker inspect --format '{{.Image}}' yucg)
 OLD_MOUNT=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' yucg)
 [ "$OLD_MOUNT" = /data ] || { echo 'Unexpected current database mount'; exit 1; }
-aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_HOST}"
+command -v docker-credential-ecr-login >/dev/null || dnf install -y amazon-ecr-credential-helper
+export DOCKER_CONFIG AWS_ECR_DISABLE_CACHE=true
+DOCKER_CONFIG="$(mktemp -d)"
+chmod 0700 "$DOCKER_CONFIG"
+printf '{"credHelpers":{"%s":"ecr-login"}}\n' "${ECR_HOST}" > "$DOCKER_CONFIG/config.json"
+chmod 0600 "$DOCKER_CONFIG/config.json"
+trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
 docker pull "${IMAGE}"
 # SQLite online backup accounts for WAL; no raw copy of a live database.
 install -d -m 0700 /data/backups
 BACKUP="/data/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).db"
-docker exec --user 0 -e BACKUP="$BACKUP" yucg python -c 'import os,sqlite3; s=sqlite3.connect("/data/clientreach.db"); d=sqlite3.connect(os.environ["BACKUP"]); s.backup(d); assert d.execute("PRAGMA integrity_check").fetchone()[0]=="ok"; d.close(); s.close()'
+docker exec --user 0 -e BACKUP="$BACKUP" yucg python -c 'import os,sqlite3; os.umask(0o077); s=sqlite3.connect("/data/clientreach.db"); d=sqlite3.connect(os.environ["BACKUP"]); s.backup(d); assert d.execute("PRAGMA integrity_check").fetchone()[0]=="ok"; d.close(); s.close()'
 
 # One-time migration from the legacy root container to application UID/GID 10001.
 # It is disabled by default and deliberately excludes root-owned backups.

@@ -591,7 +591,7 @@ export default function Outreach() {
             <div className="surface-card rounded-xl p-4 max-h-[500px] overflow-y-auto space-y-4 w-full">
               <h3 className="font-semibold text-deep-navy">Outreach work lists</h3>
               <p className="text-sm text-slate-600">
-                Organize contacts into shared or personal worklists. Prepare emails in Drafts and track sending in Campaigns.
+                Organize contacts into shared or personal worklists. Prepare emails in Email studio and track sending in Campaigns.
               </p>
               <div className="flex gap-2 flex-wrap">
                 <input

@@ -1,0 +1,58 @@
+name: Infrastructure plan and apply
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [plan, apply]
+        default: plan
+        required: true
+      target:
+        type: choice
+        options: [beta, production]
+        required: true
+      plan_run_id:
+        description: Run ID of the reviewed saved plan (apply only)
+        type: string
+      plan_sha256:
+        description: Exact SHA256 from the reviewed plan (apply only)
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: infrastructure-${{ inputs.target }}
+  cancel-in-progress: false
+jobs:
+  infrastructure:
+    if: github.ref == 'refs/heads/main'
+    environment: infrastructure-${{ inputs.target }}-${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: bash infra/scripts/install-terraform.sh
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ vars.TF_REGION }}
+          allowed-account-ids: ${{ vars.TF_ACCOUNT_ID }}
+          retry-max-attempts: 3
+      - name: Execute the reviewed infrastructure operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          APPROVED_PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          TF_TARGET: ${{ inputs.target }}
+          TF_REGION: ${{ vars.TF_REGION }}
+          TF_ACCOUNT_ID: ${{ vars.TF_ACCOUNT_ID }}
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+          TF_BUCKET_PREFIX: ${{ vars.TF_BUCKET_PREFIX }}
+          TF_FRONTEND_ORIGIN: ${{ vars.TF_FRONTEND_ORIGIN }}
+          TF_ENABLE_NEW_STORAGE: ${{ vars.TF_ENABLE_NEW_STORAGE }}
+        run: bash infra/scripts/terraform-release.sh "$OPERATION"
