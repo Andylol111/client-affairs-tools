@@ -8,7 +8,11 @@ export default function DispatchRecovery({ campaignId, onReconciled }: { campaig
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const refresh = useCallback(async () => { setDispatches(await fetchApi<Dispatch[]>(`/api/campaigns/${campaignId}/dispatches`)); }, [campaignId]);
-  useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Unable to check dispatch recovery.')); }, [refresh]);
+  useEffect(() => {
+    fetchApi<Dispatch[]>(`/api/campaigns/${campaignId}/dispatches`)
+      .then(setDispatches)
+      .catch(e => setError(e instanceof Error ? e.message : 'Unable to check dispatch recovery.'));
+  }, [campaignId]);
   const uncertain = dispatches.filter(item => ['claimed', 'ambiguous'].includes(item.state));
   if (!uncertain.length && !error && !message) return null;
   return <section className="surface-card p-4 mb-5" aria-label="Send recovery">

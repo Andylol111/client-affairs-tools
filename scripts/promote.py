@@ -1,12 +1,19 @@
 """Trusted workflow_run controller. Reads GitHub metadata; never executes PR code.
 
-GitHub App token is restricted to this repository, contents/PR writes, checks reads.
-Repository rules remain authoritative; this controller never uses an admin bypass.
+A repository GitHub App is optional. The default identity is GITHUB_TOKEN, which
+cannot start workflows from the pull_request or push events it creates, so this
+controller dispatches the next stage (Intake, Beta, Production) after a merge
+or after opening a promotion PR. Repository rules stay authoritative; this
+controller never uses an admin bypass.
 """
 import json
 import os
 import subprocess
 import sys
+
+STAGE_FOR_BASE = {'develop': 'Intake', 'feature': 'Beta', 'main': 'Production'}
+WORKFLOW_FOR_BRANCH = {'develop': 'intake.yml', 'feature': 'beta.yml', 'main': 'production.yml'}
+PROMOTION_EDGES = {('feature', 'develop'), ('main', 'feature')}
 
 
 def api(path, method='GET', payload=None):
@@ -39,6 +46,32 @@ def dependency_files_allowed(files):
     return bool(files) and all(item['filename'] in allowed for item in files)
 
 
+def dispatch_workflow(repo, workflow, ref):
+    """Start the next stage when GITHUB_TOKEN cannot trigger it by event."""
+    if os.environ.get('PROMOTION_DISPATCH') != '1':
+        return
+    api(f'repos/{repo}/actions/workflows/{workflow}/dispatches', 'POST', {'ref': ref})
+
+
+def merge_now(repo, number, sha, base):
+    subprocess.run(['gh', 'pr', 'merge', str(number), '--repo', repo,
+                    '--merge', '--match-head-commit', sha], check=True)
+    workflow = WORKFLOW_FOR_BRANCH.get(base)
+    if workflow:
+        dispatch_workflow(repo, workflow, base)
+
+
+def pull_requests_for(run, repo):
+    listed = list(run.get('pull_requests') or [])
+    if listed:
+        return listed
+    if run.get('event') != 'workflow_dispatch':
+        return []
+    sha = run['head_sha']
+    open_prs = api(f'repos/{repo}/pulls?state=open&per_page=100') or []
+    return [{'number': item['number']} for item in open_prs if item.get('head', {}).get('sha') == sha]
+
+
 def synchronize(repo, source):
     """Carry protected-branch merge history back through a normal Intake PR."""
     prefix = f'repos/{repo}'
@@ -59,48 +92,42 @@ def synchronize(repo, source):
         'head': branch, 'base': 'develop', 'title': f'Synchronize {source} history into develop',
         'body': f'Carries trusted `{source}` revision `{sha}` back through Intake. '
                 'Required checks and human holds apply. This PR does not deploy.'})
+    dispatch_workflow(repo, 'intake.yml', branch)
 
 
-def process(event, repo):
-    run = event['workflow_run']
+def process_pull_requests(run, repo):
     prefix = f'repos/{repo}'
-    if run['head_repository']['full_name'] != repo or run['conclusion'] != 'success':
-        return
-    if run['name'] not in {'Intake', 'Beta', 'Production'}:
-        raise RuntimeError('Unexpected workflow')
-    if run['event'] == 'pull_request':
-        for candidate in run.get('pull_requests', []):
-            pr = api(f"{prefix}/pulls/{candidate['number']}")
-            if pr['state'] != 'open' or held(pr) or pr['head']['repo']['full_name'] != repo:
+    for candidate in pull_requests_for(run, repo):
+        pr = api(f"{prefix}/pulls/{candidate['number']}")
+        if pr['state'] != 'open' or held(pr) or pr['head']['repo']['full_name'] != repo:
+            continue
+        if pr['head']['sha'] != run['head_sha']:
+            continue  # Never merge newer, unchecked code using an older run.
+        base, head = pr['base']['ref'], pr['head']['ref']
+        if run['name'] != STAGE_FOR_BASE.get(base):
+            continue
+        promotion = (base, head) in PROMOTION_EDGES
+        dependency = base == 'develop' and pr['user']['login'] == 'dependabot[bot]'
+        requested = base == 'develop' and 'automerge' in {label['name'] for label in pr.get('labels', [])}
+        sync_source = head.split('/')[1].split('-')[0] if head.startswith('sync/') else ''
+        sync = base == 'develop' and sync_source in {'main', 'feature'} and pr['head']['sha'] == api(f'{prefix}/branches/{sync_source}')['commit']['sha']
+        if not promotion and not dependency and not sync and not requested:
+            continue
+        reviews = api(f"{prefix}/pulls/{pr['number']}/reviews?per_page=100")
+        if len(reviews) == 100 or latest_reviews_block(reviews):
+            continue  # Conservative when pagination or human rejection needs attention.
+        if dependency:
+            files = api(f"{prefix}/pulls/{pr['number']}/files?per_page=100")
+            if len(files) == 100 or not dependency_files_allowed(files):
                 continue
-            if pr['head']['sha'] != run['head_sha']:
-                continue  # Never merge newer, unchecked code using an older run.
-            base, head = pr['base']['ref'], pr['head']['ref']
-            if run['name'] != {'develop': 'Intake', 'feature': 'Beta', 'main': 'Production'}.get(base):
-                continue
-            promotion = (base, head) in {('feature', 'develop'), ('main', 'feature')}
-            dependency = base == 'develop' and pr['user']['login'] == 'dependabot[bot]'
-            requested = base == 'develop' and 'automerge' in {label['name'] for label in pr.get('labels', [])}
-            sync_source = head.split('/')[1].split('-')[0] if head.startswith('sync/') else ''
-            sync = base == 'develop' and sync_source in {'main', 'feature'} and pr['head']['sha'] == api(f'{prefix}/branches/{sync_source}')['commit']['sha']
-            if not promotion and not dependency and not sync and not requested:
-                continue
-            reviews = api(f"{prefix}/pulls/{pr['number']}/reviews?per_page=100")
-            if len(reviews) == 100 or latest_reviews_block(reviews):
-                continue  # Conservative when pagination or human rejection needs attention.
-            if dependency:
-                files = api(f"{prefix}/pulls/{pr['number']}/files?per_page=100")
-                if len(files) == 100 or not dependency_files_allowed(files):
-                    continue
-            current = api(f"{prefix}/pulls/{pr['number']}")
-            if current['state'] != 'open' or held(current) or current['head']['sha'] != pr['head']['sha']:
-                continue
-            # Merge now under native rules; never arm a deferred merge that a later hold cannot stop.
-            subprocess.run(['gh', 'pr', 'merge', str(pr['number']), '--repo', repo,
-                            '--merge', '--match-head-commit', pr['head']['sha']], check=True)
-        return
-    if run['event'] != 'push':
-        return
+        current = api(f"{prefix}/pulls/{pr['number']}")
+        if current['state'] != 'open' or held(current) or current['head']['sha'] != pr['head']['sha']:
+            continue
+        merge_now(repo, pr['number'], pr['head']['sha'], base)
+
+
+def process_branch(run, repo):
+    prefix = f'repos/{repo}'
     source = run['head_branch']
     if source not in {'develop', 'feature', 'main'}:
         return
@@ -110,12 +137,10 @@ def process(event, repo):
         synchronize(repo, 'main')
         return
     target = {'develop': 'feature', 'feature': 'main'}.get(source)
-    if not target or run['name'] != {'develop': 'Intake', 'feature': 'Beta'}[source]:
+    if not target or run['name'] != STAGE_FOR_BASE[source]:
         return
-    # No empty/history-only PR loops after merge commits are synchronized.
     comparison = api(f'{prefix}/compare/{target}...{source}')
     if comparison['behind_by']:
-        # Preserve strict up-to-date branch checks; never bypass them with --admin.
         synchronize(repo, target)
         return
     if not comparison['files']:
@@ -123,7 +148,6 @@ def process(event, repo):
     existing = api(f'{prefix}/pulls?state=all&base={target}&head={repo.split("/")[0]}:{source}&per_page=100')
     if any(p['state'] == 'open' for p in existing):
         return
-    # Closing a promotion without merging is a rejection of this exact candidate.
     if any(p['state'] == 'closed' and not p.get('merged_at') and p['head']['sha'] == run['head_sha'] for p in existing):
         return
     if len(existing) == 100:
@@ -135,6 +159,25 @@ def process(event, repo):
                 'The next stage must pass its own required checks. Add `release:hold`, request changes, '
                 'or close this PR to stop this candidate. Infrastructure apply uses a separate reviewed saved plan.\n\n'
                 'Cost: application promotion adds no resources; infrastructure cost changes require their own plan.'})
+    dispatch_workflow(repo, WORKFLOW_FOR_BRANCH[target], source)
+
+
+def process(event, repo):
+    run = event['workflow_run']
+    if run['head_repository']['full_name'] != repo or run['conclusion'] != 'success':
+        return
+    if run['name'] not in {'Intake', 'Beta', 'Production'}:
+        raise RuntimeError('Unexpected workflow')
+    if run['event'] == 'pull_request':
+        process_pull_requests(run, repo)
+        return
+    if run['event'] == 'workflow_dispatch':
+        process_pull_requests(run, repo)
+        process_branch(run, repo)
+        return
+    if run['event'] != 'push':
+        return
+    process_branch(run, repo)
 
 
 if __name__ == '__main__':
@@ -142,6 +185,5 @@ if __name__ == '__main__':
         with open(os.environ['GITHUB_EVENT_PATH']) as event_file:
             process(json.load(event_file), os.environ['GITHUB_REPOSITORY'])
     except subprocess.CalledProcessError as error:
-        # GitHub CLI stderr describes rule violations without printing credentials.
         print(error.stderr or 'GitHub rejected the automation operation', file=sys.stderr)
         raise SystemExit(1)

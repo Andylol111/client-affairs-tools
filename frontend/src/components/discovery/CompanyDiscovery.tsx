@@ -67,8 +67,10 @@ export default function CompanyDiscovery() {
   }, []);
 
   useEffect(() => {
-    loadRuns();
-  }, [loadRuns]);
+    api.yucgoutreach.listRuns(40).then((list) => setRuns(list as RunRow[])).catch((e) => {
+      setError(e instanceof Error ? e.message : 'Failed to load runs');
+    });
+  }, []);
 
   const refreshSelected = useCallback(async () => {
     if (selectedId == null) return;
@@ -89,7 +91,16 @@ export default function CompanyDiscovery() {
 
   useEffect(() => {
     if (selectedId == null) return;
-    refreshSelected();
+    Promise.all([
+      api.yucgoutreach.getRun(selectedId),
+      api.yucgoutreach.listProspects(selectedId, 500),
+    ]).then(([run, pros]) => {
+      setRuns((prev) => {
+        const others = prev.filter((r) => r.id !== selectedId);
+        return [run as RunRow, ...others].sort((a, b) => b.id - a.id);
+      });
+      setProspects(pros as DiscoveryProspectRow[]);
+    }).catch((e) => setError(e instanceof Error ? e.message : 'Failed to load run'));
     const t = setInterval(refreshSelected, 3000);
     return () => clearInterval(t);
   }, [selectedId, refreshSelected]);

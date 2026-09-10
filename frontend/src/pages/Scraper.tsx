@@ -279,7 +279,7 @@ export default function Scraper() {
   } | null>(null);
   const [scrapeProgress, setScrapeProgress] = useState<ScrapeProgressState | null>(null);
   const [scrapeTick, setScrapeTick] = useState(0);
-  const scrapeStartedAtRef = useRef<number | null>(null);
+  const [scrapeStartedAt, setScrapeStartedAt] = useState<number | null>(null);
   const scrapeAbortRef = useRef<AbortController | null>(null);
   const [scrapeCancelArmed, setScrapeCancelArmed] = useState(false);
   const scrapeCancelArmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -306,10 +306,7 @@ export default function Scraper() {
 
   useEffect(() => {
     const raw = domain.trim();
-    if (!raw) {
-      setEmailPatterns([]);
-      return;
-    }
+    if (!raw) return;
     const t = window.setTimeout(async () => {
       setPatternsLoading(true);
       try {
@@ -448,7 +445,7 @@ export default function Scraper() {
     setContacts([]);
     setDiscoveryLog([]);
     setScrapeRunId(null);
-    scrapeStartedAtRef.current = Date.now();
+    setScrapeStartedAt(Date.now());
     setScrapeProgress({
       phase: 'init',
       pct: 0,
@@ -503,7 +500,7 @@ export default function Scraper() {
       scrapeAbortRef.current = null;
       setLoading(false);
       setScrapeProgress(null);
-      scrapeStartedAtRef.current = null;
+      setScrapeStartedAt(null);
       disarmScrapeCancel();
     }
   };
@@ -629,7 +626,7 @@ export default function Scraper() {
                   />
                 </div>
               </div>
-              {(domain.trim() || patternsLoading || emailPatterns.length > 0) && (
+              {(domain.trim() || patternsLoading) && (
                 <div className="rounded-xl border border-pale-sky/80 bg-pale-sky/20 px-4 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                     <p className="text-[13px] font-medium text-deep-navy">
@@ -656,7 +653,7 @@ export default function Scraper() {
                   </div>
                   {patternsLoading ? (
                     <p className="text-[12px] text-slate-500">Loading patterns…</p>
-                  ) : emailPatterns.length === 0 ? (
+                  ) : !domain.trim() || emailPatterns.length === 0 ? (
                     <p className="text-[12px] text-slate-500">
                       No learned patterns yet for this domain. Verified scrapes will populate{' '}
                       <span className="font-mono">first.last</span>, <span className="font-mono">flast</span>, etc.
@@ -733,7 +730,7 @@ export default function Scraper() {
           {(loading || scrapeProgress) && (
             <ScrapeProgressPanel
               progress={scrapeProgress}
-              startedAt={scrapeStartedAtRef.current}
+              startedAt={scrapeStartedAt}
               tick={scrapeTick}
             />
           )}

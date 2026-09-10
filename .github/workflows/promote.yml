@@ -4,7 +4,10 @@ on:
     workflows: [Intake, Beta, Production]
     types: [completed]
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: read
 concurrency:
   group: promotion-controller
   cancel-in-progress: false
@@ -14,21 +17,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require configured automation identity
+      - name: Choose promotion identity
+        id: token
         env:
           APP_ID: ${{ vars.PROMOTION_APP_ID }}
           APP_KEY: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
         run: |
-          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
-            echo 'Promotion blocked: configure the repository-scoped GitHub App and required branch rules.' >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo mode=app >> "$GITHUB_OUTPUT"
+            echo 'Using the repository GitHub App. Pull request and push events start the next stage on their own.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo mode=actions >> "$GITHUB_OUTPUT"
+            echo 'Using GITHUB_TOKEN. After a merge or promotion PR, Promote dispatches the next stage (Intake, Beta, or Production). Actions tokens do not start those workflows from the events they create.' >> "$GITHUB_STEP_SUMMARY"
           fi
-      # This checkout is the trusted default branch, never the workflow_run head or PR code.
+      # Trusted default branch only — never the workflow_run head or PR code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: main
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+      - if: steps.token.outputs.mode == 'app'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
         id: app
         with:
           app-id: ${{ vars.PROMOTION_APP_ID }}
@@ -38,7 +46,9 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-checks: read
+          permission-actions: write
       - name: Open or merge eligible candidates
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.token.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          PROMOTION_DISPATCH: ${{ steps.token.outputs.mode == 'actions' && '1' || '0' }}
         run: python3 scripts/promote.py

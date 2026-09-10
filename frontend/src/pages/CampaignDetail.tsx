@@ -46,7 +46,10 @@ export default function CampaignDetail() {
       navigate('/campaigns', { replace: true });
       return;
     }
-    Promise.all([refresh(), api.outreach.sequences.list().then(setSequences)])
+    Promise.all([
+      api.campaigns.get(campaignId).then(setCampaign),
+      api.outreach.sequences.list().then(setSequences),
+    ])
       .catch((requestError) => setError((requestError as Error).message))
       .finally(() => setLoading(false));
   }, [campaignId, navigate, refresh]);

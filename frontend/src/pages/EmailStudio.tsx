@@ -232,16 +232,10 @@ export default function EmailStudio() {
     api.yucg.listReleases().then(setReleases).catch(() => setReleases([]));
   }, []);
 
-  useEffect(() => {
-    setSidebarBulkIds((prev) => {
-      const allowed = new Set(contacts.map((c) => c.id));
-      const next = new Set<number>();
-      prev.forEach((id) => {
-        if (allowed.has(id)) next.add(id);
-      });
-      return next;
-    });
-  }, [contacts]);
+  const sidebarSelectedIds = useMemo(() => {
+    const allowed = new Set(contacts.map((c) => c.id));
+    return new Set([...sidebarBulkIds].filter((id) => allowed.has(id)));
+  }, [contacts, sidebarBulkIds]);
 
   useEffect(() => {
     api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
@@ -249,12 +243,8 @@ export default function EmailStudio() {
   }, []);
 
   useEffect(() => {
-    if (attachmentsEnabled) {
-      api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
-    } else {
-      setAttachmentLibrary([]);
-      setSelectedAttachmentIds(new Set());
-    }
+    if (!attachmentsEnabled) return;
+    api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
   }, [attachmentsEnabled]);
 
   useEffect(() => {
@@ -399,7 +389,7 @@ export default function EmailStudio() {
         to_email: toEmail,
         subject: email.subject,
         body: email.body,
-        attachment_ids: selectedAttachmentIds.size > 0 ? Array.from(selectedAttachmentIds) : undefined,
+        attachment_ids: attachmentsEnabled && selectedAttachmentIds.size > 0 ? Array.from(selectedAttachmentIds) : undefined,
       });
       alert(`Test email sent to ${toEmail}. Check your inbox to verify delivery.`);
     } catch (e) {
@@ -587,7 +577,7 @@ export default function EmailStudio() {
   };
 
   const bulkDeleteSidebarContacts = async () => {
-    const ids = [...sidebarBulkIds];
+    const ids = [...sidebarSelectedIds];
     if (!ids.length) return;
     if (!window.confirm(`Are you sure? Delete ${ids.length} contact(s) from the database? This cannot be undone.`)) return;
     setSidebarDeleting(true);
@@ -731,7 +721,7 @@ export default function EmailStudio() {
                 {contacts.length > 0 && (
                   <div className="px-4 py-2 border-b border-[var(--border)] flex flex-wrap items-center gap-2 bg-white dark:bg-[var(--bg-card)]">
                     <span className="text-xs font-medium text-deep-navy dark:text-[var(--text-primary)]">
-                      {sidebarBulkIds.size} selected
+                      {sidebarSelectedIds.size} selected
                     </span>
                     <button
                       type="button"
@@ -749,7 +739,7 @@ export default function EmailStudio() {
                     </button>
                     <button
                       type="button"
-                      disabled={sidebarBulkIds.size === 0 || sidebarDeleting}
+                      disabled={sidebarSelectedIds.size === 0 || sidebarDeleting}
                       onClick={bulkDeleteSidebarContacts}
                       className="btn-danger-solid text-xs px-2 py-1.5"
                     >
@@ -780,7 +770,7 @@ export default function EmailStudio() {
                           company={company}
                           contacts={companyContacts}
                           selected={selected}
-                          bulkSelectedIds={sidebarBulkIds}
+                          bulkSelectedIds={sidebarSelectedIds}
                           onToggleBulk={toggleSidebarBulk}
                           onToggleAllInCompany={toggleSidebarBulkForCompany}
                           onSelect={(c) => {
@@ -801,7 +791,7 @@ export default function EmailStudio() {
                       >
                         <input
                           type="checkbox"
-                          checked={sidebarBulkIds.has(c.id)}
+                          checked={sidebarSelectedIds.has(c.id)}
                           onChange={() => toggleSidebarBulk(c.id)}
                           aria-label={`Select ${c.name || c.email}`}
                           className="mt-2.5 ml-1 rounded border-slate-400 dark:border-slate-500 text-[var(--accent)] shrink-0"
@@ -1301,7 +1291,7 @@ export default function EmailStudio() {
                   <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
                   <select aria-label="Email font size"
                     value={emailFontSize}
-                    onChange={(e) => { const s = Number(e.target.value); setEmailFontSize(s); if (bodyRef.current) bodyRef.current.style.fontSize = s + 'px'; }}
+                    onChange={(e) => setEmailFontSize(Number(e.target.value))}
                     className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
                   >
                     {[12, 14, 16, 18, 20, 24].map((s) => (
