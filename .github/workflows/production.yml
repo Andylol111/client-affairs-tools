@@ -40,7 +40,7 @@ jobs:
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
     needs: [required-checks, verify]
-    if: github.event_name == 'push' && needs.verify.outputs.runtime == 'true'
+    if: needs.verify.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/deploy.yml
     with:
       environment: production
@@ -57,20 +57,21 @@ jobs:
       - name: Explain deployment eligibility and reject unexpected skips
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           RUNTIME: ${{ needs.verify.outputs.runtime }}
           VERIFIED: ${{ needs.required-checks.result }}
           DEPLOYED: ${{ needs.deploy.result }}
         run: |
           test "$VERIFIED" = success
-          if [ "$EVENT" = push ] && [ "$RUNTIME" = true ]; then
+          if { [ "$EVENT" = push ] || [ "$EVENT" = workflow_dispatch ]; } && [ "$REF" = refs/heads/main ] && [ "$RUNTIME" = true ]; then
             test "$DEPLOYED" = success
             echo 'production deployment and health checks passed.' >> "$GITHUB_STEP_SUMMARY"
           else
-            echo 'No deployment: PR/manual verification or no runtime changes. All selected checks passed.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No deployment: PR/manual verification, non-main ref, or no runtime changes. All selected checks passed.' >> "$GITHUB_STEP_SUMMARY"
           fi
   release:
     needs: deploy
-    if: github.event_name == 'push' && needs.deploy.result == 'success'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

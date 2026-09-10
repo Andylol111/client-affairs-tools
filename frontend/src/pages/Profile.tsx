@@ -79,31 +79,22 @@ export default function Profile() {
   }, [user?.role]);
 
   useEffect(() => {
-    if (activeTab === 'settings') {
-      const prefs = getStoredPreferences();
-      setAccentColor(prefs.accent);
-      setCompactMode(prefs.compact);
-      setUiFontSize(prefs.fontSize);
-      setReduceMotion(prefs.reduceMotion);
-      api.settings.get().then((s) => {
-        setSignature(s.signature || '');
-        setSignatureImageUrl(s.signature_image_url || '');
-        setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
-      }).catch(() => {});
-      api.auth.notificationPrefs.get().then(setNotifPrefs).catch(() => {});
-      if (isAdmin) {
-        api.settings.customFormats.list().then(setCustomFormats).catch(() => []);
-        api.admin.loginLog().then(setLoginLog).catch(() => []);
-      }
+    if (activeTab !== 'settings') return;
+    api.settings.get().then((s) => {
+      setSignature(s.signature || '');
+      setSignatureImageUrl(s.signature_image_url || '');
+      setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
+    }).catch(() => {});
+    api.auth.notificationPrefs.get().then(setNotifPrefs).catch(() => {});
+    if (isAdmin) {
+      api.settings.customFormats.list().then(setCustomFormats).catch(() => []);
+      api.admin.loginLog().then(setLoginLog).catch(() => []);
     }
   }, [activeTab, isAdmin]);
 
   useEffect(() => {
-    if (attachmentsEnabled && isAdmin) {
-      api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
-    } else {
-      setAttachmentLibrary([]);
-    }
+    if (!attachmentsEnabled || !isAdmin) return;
+    api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
   }, [attachmentsEnabled, isAdmin]);
 
   const saveProfile = async () => {

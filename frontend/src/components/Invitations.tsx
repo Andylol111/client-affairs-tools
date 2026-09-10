@@ -11,7 +11,10 @@ export default function Invitations() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(async () => { setItems(await workspaceRequest<Invitation[]>('/api/admin/invitations')); }, []);
-  useEffect(() => { void refresh().catch((e: Error) => setError(e.message)); api.admin.projects.list().then(setProjects).catch((e: Error) => setError(e.message)); }, [refresh]);
+  useEffect(() => {
+    workspaceRequest<Invitation[]>('/api/admin/invitations').then(setItems).catch((e: Error) => setError(e.message));
+    api.admin.projects.list().then(setProjects).catch((e: Error) => setError(e.message));
+  }, []);
   async function create() {
     setBusy(true); setError('');
     try {
