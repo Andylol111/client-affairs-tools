@@ -692,7 +692,7 @@ export default function EmailStudio() {
                   + New
                 </button>
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 email-studio-contacts-body">
             {activeTab === 'editor' ? (
               <>
                 <div className="px-4 py-2 border-b border-slate-200 space-y-2">
@@ -879,7 +879,7 @@ export default function EmailStudio() {
         <div className="email-studio-main">
           <div
             id="email-generator-section"
-            className={`studio-step ${mobileStep === 'generate' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex-shrink-0 flex flex-col min-w-0 ${aiGeneratorExpanded ? 'w-full email-studio-generator' : 'w-full xl:w-14'}`}
+            className={`studio-step ${mobileStep === 'generate' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex flex-col min-w-0 ${aiGeneratorExpanded ? 'w-full email-studio-generator' : 'w-full xl:w-14 flex-shrink-0'}`}
           >
             {aiGeneratorExpanded ? (
             <>
@@ -895,32 +895,32 @@ export default function EmailStudio() {
               </button>
               <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">AI Email Generator</h2>
             </div>
-            <div className="p-6 flex-1 min-h-0">
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+            <div className="email-studio-generator-body">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
               Describe the email, set the audience, and assign a company. Then use Quick Compose or select a contact.
             </p>
-            <div className="space-y-3 mb-4">
-              <div className="min-w-0">
+            <div className="email-studio-field email-studio-field--grow">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">What Does This Email Do?</label>
-                <input
-                  type="text"
+                <textarea
                   value={draftDescription}
                   onChange={(e) => setDraftDescription(e.target.value)}
                   placeholder="e.g. Cold outreach for consulting services"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
+                  rows={3}
+                  className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
-              </div>
-              <div className="min-w-0">
+            </div>
+            <div className="email-studio-brief-grid">
+            <div className="email-studio-field">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Target Audience</label>
-                <input
-                  type="text"
+                <textarea
                   value={draftTargetAudience}
                   onChange={(e) => setDraftTargetAudience(e.target.value)}
                   placeholder="e.g. CTOs at mid-size tech companies"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
+                  rows={2}
+                  className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
-              </div>
-              <div className="min-w-0">
+            </div>
+            <div className="email-studio-field">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Assign Company</label>
                 <input
                   type="text"
@@ -929,9 +929,29 @@ export default function EmailStudio() {
                   placeholder="e.g. Acme Corp"
                   className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
-              </div>
             </div>
-            <div className="border-t border-pale-sky dark:border-slate-600 pt-4 mb-4">
+            <div className="email-studio-field">
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Value Proposition</label>
+                <textarea
+                  value={valueProp}
+                  onChange={(e) => setValueProp(e.target.value)}
+                  placeholder="e.g. our solution that helps companies like yours..."
+                  rows={2}
+                  className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
+                />
+            </div>
+            <div className="email-studio-field">
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Custom Instructions</label>
+                <textarea
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  placeholder="e.g. mention our Series B"
+                  rows={2}
+                  className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
+                />
+            </div>
+            </div>
+            <div className="border-t border-pale-sky dark:border-slate-600 pt-3">
               <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Quick Compose (Recipient for AI)</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <input
@@ -1002,27 +1022,6 @@ export default function EmailStudio() {
                 </select>
               </div>
             </div>
-            <div className="space-y-3 mb-4">
-              <div className="min-w-0">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Value Proposition</label>
-                <input
-                  type="text"
-                  value={valueProp}
-                  onChange={(e) => setValueProp(e.target.value)}
-                  placeholder="e.g. our solution that helps companies like yours..."
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
-                />
-              </div>
-              <div className="min-w-0">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Custom Instructions</label>
-                <input
-                  type="text"
-                  value={customInstructions}
-                  onChange={(e) => setCustomInstructions(e.target.value)}
-                  placeholder="e.g. mention our Series B"
-                  className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
-                />
-              </div>
             </div>
             <div className="studio-generate-row">
               <AiModelSelect id="studio-ai-model" compact />
@@ -1033,7 +1032,6 @@ export default function EmailStudio() {
               >
                 {loading ? 'Generating…' : 'Generate email'}
               </button>
-            </div>
             </div>
             </>
             ) : (
@@ -1053,11 +1051,11 @@ export default function EmailStudio() {
             </div>
             )}
           </div>
-          <div id="email-editor-section" className={`studio-step ${mobileStep === 'edit' ? 'is-active' : ''} flex-1 min-w-0 surface-card shadow-sm rounded-xl min-h-0`}>
+          <div id="email-editor-section" className={`studio-step ${mobileStep === 'edit' ? 'is-active' : ''} flex-1 min-w-0 surface-card shadow-sm rounded-xl min-h-0 flex flex-col`}>
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] p-4 border-b border-pale-sky dark:border-slate-600 truncate" title={`Email for ${selected?.name || quickCompose.name || 'Recipient'} (${selected?.email || quickCompose.email || 'enter email for test send'})`}>
               Email for {selected?.name || quickCompose.name || 'Recipient'} ({selected?.email || quickCompose.email || 'enter email for test send'})
             </h2>
-            <div className="border-b border-[var(--border)]">
+            <div className="email-studio-campaign border-b border-[var(--border)]">
               <button
                 type="button"
                 onClick={() => setCampaignPanelOpen((v) => !v)}
@@ -1070,7 +1068,7 @@ export default function EmailStudio() {
                 className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${campaignPanelOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
               >
                 <div className="overflow-hidden min-h-0">
-                <div className="p-4 space-y-3 text-sm border-t border-[var(--border)] bg-white dark:bg-[var(--bg-card)]">
+                <div className="px-4 py-3 space-y-2 text-sm border-t border-[var(--border)] bg-white dark:bg-[var(--bg-card)]">
                   <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                     Load employees for the companies you tick (generic inboxes like info@ are skipped). Write below, then save or send. Follow-ups run on the daily job only for people who have not replied — sync Gmail on Pipeline.
                   </p>
@@ -1270,7 +1268,7 @@ export default function EmailStudio() {
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 divide-x divide-pale-sky dark:divide-slate-600 min-w-0">
+            <div className="email-studio-compose divide-x divide-pale-sky dark:divide-slate-600">
               <div className="p-4 min-w-0 email-studio-editor-column">
                 <h3 className="text-sm font-medium text-deep-navy dark:text-slate-400 mb-2">Live Editor</h3>
                 {/* Text formatting toolbar - white in light mode */}
@@ -1300,7 +1298,7 @@ export default function EmailStudio() {
                     ))}
                   </select>
                 </div>
-                <div className="space-y-4">
+                <div className="email-studio-editor-stack">
                   <div className="min-w-0">
                     <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Subject</label>
                     <input
@@ -1311,9 +1309,9 @@ export default function EmailStudio() {
                       className="email-studio-input w-full min-w-0 px-3 py-2 rounded-lg border border-slate-300 bg-white text-deep-navy placeholder:text-slate-500 caret-deep-navy dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:placeholder-slate-500 dark:caret-slate-200"
                     />
                   </div>
-                  <div className="min-w-0">
+                  <div className="email-studio-body-wrap">
                     <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Body</label>
-                    <div className="relative min-w-0">
+                    <div className="relative min-w-0 flex-1 min-h-0">
                     <div
                       ref={bodyRef}
                       contentEditable
@@ -1322,7 +1320,7 @@ export default function EmailStudio() {
                       onDrop={event => { event.preventDefault(); insertSafeTransfer(event.dataTransfer); }}
                       onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: sanitizeRichText((e.target as HTMLDivElement).innerHTML) }))}
                       style={{ fontFamily: "'Lato', system-ui, sans-serif", fontSize: emailFontSize }}
-                      className="email-studio-body min-h-[280px] w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-deep-navy caret-deep-navy resize-y overflow-auto focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:caret-slate-200 dark:focus:ring-offset-transparent"
+                      className="email-studio-body min-h-[280px] h-full w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-deep-navy caret-deep-navy resize-y overflow-auto focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:caret-slate-200 dark:focus:ring-offset-transparent"
                     />
                     {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
                       <span className="absolute left-3 top-2 text-slate-600 dark:text-slate-300 pointer-events-none text-sm">
