@@ -40,6 +40,10 @@ class PolicyTests(unittest.TestCase):
             results['backend'] = {'result': result}
             self.assertTrue(policy.check_results(scope, results))
 
+    def test_gate_does_not_fail_a_superseded_run(self):
+        text = Path(__file__).parents[2].joinpath('.github/workflows/verify.yml').read_text()
+        self.assertIn('always() && !cancelled()', text)
+
 
 if __name__ == '__main__':
     unittest.main()

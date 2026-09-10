@@ -220,7 +220,7 @@ jobs:
 
 
   gate:
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [scope, backend, frontend, infra, security, image]
     runs-on: ubuntu-latest
     steps:

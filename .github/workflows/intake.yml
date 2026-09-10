@@ -6,7 +6,9 @@ on:
     branches: [develop]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  actions: write
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -29,7 +31,7 @@ jobs:
     with:
       stage: intake
   required-checks:
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: [route, verify]
     runs-on: ubuntu-latest
     steps:
@@ -37,3 +39,42 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+  promote:
+    needs: required-checks
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Merge or open the next club branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_DISPATCH: '1'
+          PROMOTION_STAGE: Intake
+        run: |
+          python3 - <<'PY'
+          import json, os
+          path = os.environ['GITHUB_EVENT_PATH']
+          event = json.load(open(path, encoding='utf-8'))
+          if 'workflow_run' not in event:
+              pull = event.get('pull_request') or {}
+              head = pull.get('head') or {}
+              json.dump({'workflow_run': {
+                  'name': os.environ['PROMOTION_STAGE'],
+                  'event': os.environ['GITHUB_EVENT_NAME'],
+                  'conclusion': 'success',
+                  'head_sha': head.get('sha') or os.environ['GITHUB_SHA'],
+                  'head_branch': head.get('ref') or os.environ['GITHUB_REF_NAME'],
+                  'head_repository': {'full_name': os.environ['GITHUB_REPOSITORY']},
+                  'html_url': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                  'pull_requests': [{'number': pull['number']}] if pull.get('number') else [],
+              }}, open(path, 'w', encoding='utf-8'))
+          PY
+          python3 scripts/promote.py

@@ -195,11 +195,20 @@ class PromotionTests(unittest.TestCase):
             promotion.process(event, self.repo)
             self.assertEqual(len(merge.call_args_list), 1)
 
-    def test_promote_workflow_uses_actions_token_without_failing_closed(self):
-        text = Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').read_text()
-        self.assertNotIn('exit 1', text)
-        self.assertIn('github.token', text)
-        self.assertIn('PROMOTION_DISPATCH', text)
+    def test_stage_run_reads_native_pull_request_event(self):
+        event = {'pull_request': {'number': 7, 'head': {'sha': 'verified', 'ref': 'topic'}}}
+        with patch.dict(promotion.os.environ, {'PROMOTION_STAGE': 'Intake', 'GITHUB_EVENT_NAME': 'pull_request',
+                                              'GITHUB_SHA': 'ignored', 'GITHUB_REF_NAME': 'develop',
+                                              'GITHUB_SERVER_URL': 'https://github.com', 'GITHUB_RUN_ID': '9'}):
+            run = promotion.stage_run(event, self.repo)
+        self.assertEqual(run['name'], 'Intake')
+        self.assertEqual(run['head_sha'], 'verified')
+        self.assertEqual(run['pull_requests'], [{'number': 7}])
+
+    def test_intake_advances_branches_without_a_fourth_workflow(self):
+        text = Path(__file__).parents[2].joinpath('.github/workflows/intake.yml').read_text()
+        self.assertIn('PROMOTION_STAGE: Intake', text)
+        self.assertFalse(Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').exists())
 
 
 if __name__ == '__main__':
