@@ -149,6 +149,28 @@ test('campaign deletion confirmation contains keyboard focus', async ({ page }) 
   await expect(own.getByRole('button', { name: 'Delete', exact: true })).toBeFocused();
 });
 
+test('studio workbench fills the desktop viewport instead of leaving a short generator column', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop');
+  await page.goto('/studio');
+  await expect(page.getByRole('heading', { name: 'AI Email Generator' })).toBeVisible();
+  const generator = page.locator('#email-generator-section');
+  const editor = page.locator('#email-editor-section');
+  const brief = page.getByPlaceholder('e.g. Cold outreach for consulting services');
+  const body = page.locator('.email-studio-body');
+  const genBox = await generator.boundingBox();
+  const editBox = await editor.boundingBox();
+  const briefBox = await brief.boundingBox();
+  const bodyBox = await body.boundingBox();
+  expect(genBox?.height || 0).toBeGreaterThan(520);
+  expect(Math.abs((genBox?.height || 0) - (editBox?.height || 0))).toBeLessThan(48);
+  expect(briefBox?.height || 0).toBeGreaterThan(70);
+  expect(bodyBox?.height || 0).toBeGreaterThanOrEqual(280);
+  await expect(page.getByRole('button', { name: 'Generate email' })).toBeInViewport();
+  await expect(page.getByText('Value Proposition', { exact: true })).toBeInViewport();
+  await expect(page.getByText('Custom Instructions', { exact: true })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('studio-workbench.png'), fullPage: false });
+});
+
 const maliciousHtml = '<p><strong>Safe bold</strong> and <em>safe emphasis</em></p><img src="x" onerror="window.__xss=1"><a href="javascript:window.__xss=2">Unsafe link</a><svg onload="window.__xss=3"></svg><script>window.__xss=4</script><iframe srcdoc="<script>parent.__xss=5</script>"></iframe><img src="data:image/svg+xml;base64,PHN2Zy8+"><img alt="Allowed image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jqysAAAAASUVORK5CYII=">';
 
 test('untrusted draft and preview HTML cannot execute while formatting remains', async ({ page }) => {
