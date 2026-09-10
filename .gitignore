@@ -28,3 +28,6 @@ amplify.yml
 # Local test coverage artifacts
 backend/.coverage*
 backend/coverage.xml
+
+# Local UI preview — do not ship
+studio-layout-preview.html

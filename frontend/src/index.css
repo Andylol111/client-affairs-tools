@@ -1903,6 +1903,10 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   min-width: 0;
 }
 
+.email-studio.app-workspace {
+  max-width: min(100%, 1920px);
+}
+
 .email-studio-layout {
   display: flex;
   flex-direction: column;
@@ -1918,23 +1922,203 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   flex: 1;
 }
 
+.email-studio-generator-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem 1.5rem;
+  min-width: 0;
+}
+
+.email-studio-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.email-studio-grow-field {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.email-studio-brief-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .email-studio-brief-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.email-studio-compose {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-width: 0;
+}
+
+.email-studio-editor-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.email-studio-body-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .email-studio-compose {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 @media (min-width: 1280px) {
+  .app-shell:has(.email-studio) {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+
+  .app-shell-body:has(.email-studio) {
+    min-height: 0;
+  }
+
+  .app-shell-main:has(.email-studio),
+  .app-shell-main:has(.email-studio) .app-shell-main-inner {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .email-studio {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .email-studio .app-page-header {
+    flex-shrink: 0;
+    margin-bottom: 1rem;
+  }
+
   .email-studio-layout {
+    flex: 1 1 auto;
     flex-direction: row;
-    align-items: flex-start;
+    align-items: stretch;
+    min-height: 0;
   }
 
   .email-studio-contacts {
     max-width: 280px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .email-studio-contacts-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
   }
 
   .email-studio-generator {
-    max-width: 26rem;
+    flex: 1 1 28rem;
+    max-width: 36rem;
+    min-width: 20rem;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .email-studio-generator-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .email-studio-field--grow {
+    flex: 1 1 5.5rem;
+    min-height: 5.5rem;
+  }
+
+  .email-studio-field--grow .email-studio-grow-field {
+    flex: 1 1 auto;
+    min-height: 5rem;
   }
 
   .email-studio-main {
     flex-direction: row;
-    align-items: flex-start;
+    align-items: stretch;
+    min-height: 0;
+  }
+
+  #email-editor-section.studio-step {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .email-studio-campaign {
+    flex: 0 1 auto;
+    max-height: calc(100% - 18rem);
+    overflow: auto;
+  }
+
+  .email-studio-compose {
+    flex: 1 1 auto;
+    min-height: 18rem;
+    overflow: hidden;
+    align-items: stretch;
+  }
+
+  .email-studio-editor-column,
+  .email-studio-gmail-rail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .email-studio-editor-column > :not(.email-studio-editor-stack),
+  .email-studio-gmail-rail > h3 {
+    flex-shrink: 0;
+  }
+
+  .email-studio-editor-stack {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .email-studio-body-wrap {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 17.5rem;
+  }
+
+  .email-studio-body {
+    flex: 1 1 auto;
+    min-height: 17.5rem;
+  }
+
+  .email-studio-gmail-card {
+    flex: 1 1 auto;
+    min-height: 17.5rem;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .email-studio-gmail-body {
+    flex: 1 1 auto;
   }
 }
 
@@ -1943,6 +2127,10 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.75rem;
+  flex-shrink: 0;
+  padding: 0.75rem 1.5rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
 }
 
 .studio-generate-row__go {
