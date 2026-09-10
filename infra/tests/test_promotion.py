@@ -211,6 +211,36 @@ class PromotionTests(unittest.TestCase):
         self.assertIn("needs.required-checks.result == 'success'", text)
         self.assertFalse(Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').exists())
 
+    def test_bot_promotion_does_not_use_pull_request_triggers(self):
+        root = Path(__file__).parents[2].joinpath('.github/workflows')
+        self.assertNotIn('pull_request:', root.joinpath('beta.yml').read_text())
+        self.assertNotIn('pull_request:', root.joinpath('production.yml').read_text())
+        self.assertIn('pull_request:', root.joinpath('intake.yml').read_text())
+
+    def test_synchronize_merges_into_develop_without_opening_a_pr(self):
+        posts = []
+
+        def fake_api(path, method='GET', payload=None):
+            if method == 'POST':
+                posts.append((path, payload))
+                return {'sha': 'merged'}
+            if path.endswith('/branches/main'):
+                return {'commit': {'sha': 'verified'}}
+            if path.endswith('/compare/develop...main'):
+                return {'ahead_by': 1}
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.dict(promotion.os.environ, {'PROMOTION_DISPATCH': '1'}), \
+             patch.object(promotion, 'api', side_effect=fake_api):
+            promotion.process(self.event('Production', 'push', 'main'), self.repo)
+        self.assertEqual(posts[0], ('repos/club/tools/merges', {
+            'base': 'develop', 'head': 'main',
+            'commit_message': 'Synchronize main (verified) into develop',
+        }))
+        self.assertEqual(posts[1], ('repos/club/tools/actions/workflows/intake.yml/dispatches',
+                                    {'ref': 'develop'}))
+        self.assertFalse(any('/pulls' in path for path, _ in posts))
+
 
 if __name__ == '__main__':
     unittest.main()

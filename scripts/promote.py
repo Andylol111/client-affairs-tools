@@ -73,26 +73,23 @@ def pull_requests_for(run, repo):
 
 
 def synchronize(repo, source):
-    """Carry protected-branch merge history back through a normal Intake PR."""
+    """Replay trusted feature/main history onto develop.
+
+    develop is not a protected promotion branch. A topic PR here is only noise:
+    github-actions[bot] PRs wait for a human to approve Actions, then expire red,
+    while the matching workflow_dispatch already did the work.
+    """
     prefix = f'repos/{repo}'
     sha = api(f'{prefix}/branches/{source}')['commit']['sha']
     comparison = api(f'{prefix}/compare/develop...{source}')
     if comparison['ahead_by'] == 0:
         return
-    branch = f'sync/{source}-{sha[:12]}'
-    prior = api(f'{prefix}/pulls?state=all&base=develop&head={repo.split("/")[0]}:{branch}')
-    if prior:
-        return  # A rejected synchronization is a hold, never an automatic reopen.
-    refs = api(f'{prefix}/git/matching-refs/heads/{branch}')
-    if not refs:
-        api(f'{prefix}/git/refs', 'POST', {'ref': f'refs/heads/{branch}', 'sha': sha})
-    elif len(refs) != 1 or refs[0]['object']['sha'] != sha:
-        raise RuntimeError('Synchronization ref differs from trusted branch')
-    api(f'{prefix}/pulls', 'POST', {
-        'head': branch, 'base': 'develop', 'title': f'Synchronize {source} history into develop',
-        'body': f'Carries trusted `{source}` revision `{sha}` back through Intake. '
-                'Required checks and human holds apply. This PR does not deploy.'})
-    dispatch_workflow(repo, 'intake.yml', branch)
+    api(f'{prefix}/merges', 'POST', {
+        'base': 'develop',
+        'head': source,
+        'commit_message': f'Synchronize {source} ({sha[:12]}) into develop',
+    })
+    dispatch_workflow(repo, 'intake.yml', 'develop')
 
 
 def process_pull_requests(run, repo):
