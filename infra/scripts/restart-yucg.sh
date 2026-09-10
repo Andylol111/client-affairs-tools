@@ -1,6 +1,7 @@
 #!/bin/bash
 # Render only IMAGE/AWS_REGION/YUCG_ENV/ECR_HOST via envsubst. Requires digest image.
 set -euo pipefail
+umask 0077
 [[ "${IMAGE}" =~ @sha256:[a-f0-9]{64}$ ]] || { echo 'Immutable image digest required'; exit 1; }
 mountpoint -q /data || { echo 'Retained /data volume is not mounted; refusing deployment'; exit 1; }
 [ -f /data/clientreach.db ] || { echo 'Existing database missing; use reviewed bootstrap for first deployment'; exit 1; }

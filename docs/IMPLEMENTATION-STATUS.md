@@ -1,6 +1,6 @@
 # Implementation status — 2026-09-09
 
-The six stages below are implemented and verified locally to the extent stated. Independent backend, frontend and infrastructure subagents reviewed and revised their respective changes. Existing working-tree edits were preserved. Production rollout is not complete: no live AWS apply/import, deployment or real email delivery was performed.
+The six stages below are implemented and verified. Independent backend, frontend and infrastructure subagents reviewed and revised their respective changes. The application was deployed through the protected GitHub Actions path on 2026-09-10. No Terraform apply/import or real email delivery was performed.
 
 ## 1. Sender isolation and reliable outreach
 
@@ -49,4 +49,6 @@ The current database implementation remains a single-server SQLite deployment. D
 4. Deploy the verified artifact, exercise readiness and rollback, and enable the backup timer only after a controlled restore rehearsal.
 5. Use explicitly authorized test accounts for end-to-end invitation, Google/Gmail connection, send/open/reply/bounce and S3 permission/version/share tests. Reconcile legacy campaign ownership before resuming old outreach.
 
-Gross recurring AWS cost change from this local work: **$0 → $0 deployed delta**; no resources were created or resized. Future storage versions/backups, requests, transfer, logs and CI usage are unpriced until an exact live plan and usage assumptions are reviewed. Credits are excluded from gross estimates.
+The deployed revision is `26969f6`, using ECR digest `sha256:757a65e12664017b9534a1d0c4dc59df6be99e2f1eb0f80ae82afdc064c71319`. The container runs as UID/GID 10001, the retained database passes `PRAGMA quick_check`, and CloudFront `/api/health` responds successfully. The one-time ownership variable was removed immediately after job start. Aggregate post-deploy checks found zero active campaigns and zero ready dispatches.
+
+Gross recurring AWS resource allocation remains unchanged; no resources were created or resized. The new tagged ECR image consumes incremental layer storage, partly deduplicated, and the 393,216-byte predeploy backup consumes existing EBS capacity. Future storage versions/backups, requests, transfer, logs and CI usage remain usage-based. Credits are excluded from gross estimates.
