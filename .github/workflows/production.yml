@@ -6,7 +6,9 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  actions: write
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -40,7 +42,7 @@ jobs:
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
     needs: [required-checks, verify]
-    if: needs.verify.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: needs.verify.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.AWS_INSTANCE_ID != '' && vars.AWS_SHIP_ROLE_ARN != ''
     uses: ./.github/workflows/deploy.yml
     with:
       environment: production
@@ -61,11 +63,18 @@ jobs:
           RUNTIME: ${{ needs.verify.outputs.runtime }}
           VERIFIED: ${{ needs.required-checks.result }}
           DEPLOYED: ${{ needs.deploy.result }}
+          ROLE: ${{ vars.AWS_SHIP_ROLE_ARN }}
+          HOST: ${{ vars.AWS_INSTANCE_ID }}
         run: |
           test "$VERIFIED" = success
           if { [ "$EVENT" = push ] || [ "$EVENT" = workflow_dispatch ]; } && [ "$REF" = refs/heads/main ] && [ "$RUNTIME" = true ]; then
-            test "$DEPLOYED" = success
-            echo 'production deployment and health checks passed.' >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "$ROLE" ] || [ -z "$HOST" ]; then
+              test "$DEPLOYED" = skipped
+              echo 'Production verification passed. No ship binding (AWS_SHIP_ROLE_ARN / AWS_INSTANCE_ID), so the live box was not touched.' >> "$GITHUB_STEP_SUMMARY"
+            else
+              test "$DEPLOYED" = success
+              echo 'production deployment and health checks passed.' >> "$GITHUB_STEP_SUMMARY"
+            fi
           else
             echo 'No deployment: PR/manual verification, non-main ref, or no runtime changes. All selected checks passed.' >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -85,3 +94,42 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_CHANNEL: production
         run: python3 scripts/release_version.py
+  promote:
+    needs: outcome
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Merge or open the next club branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_DISPATCH: '1'
+          PROMOTION_STAGE: Production
+        run: |
+          python3 - <<'PY'
+          import json, os
+          path = os.environ['GITHUB_EVENT_PATH']
+          event = json.load(open(path, encoding='utf-8'))
+          if 'workflow_run' not in event:
+              pull = event.get('pull_request') or {}
+              head = pull.get('head') or {}
+              json.dump({'workflow_run': {
+                  'name': os.environ['PROMOTION_STAGE'],
+                  'event': os.environ['GITHUB_EVENT_NAME'],
+                  'conclusion': 'success',
+                  'head_sha': head.get('sha') or os.environ['GITHUB_SHA'],
+                  'head_branch': head.get('ref') or os.environ['GITHUB_REF_NAME'],
+                  'head_repository': {'full_name': os.environ['GITHUB_REPOSITORY']},
+                  'html_url': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                  'pull_requests': [{'number': pull['number']}] if pull.get('number') else [],
+              }}, open(path, 'w', encoding='utf-8'))
+          PY
+          python3 scripts/promote.py
