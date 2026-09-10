@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { AiModelContext } from './useAiModel';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import {
   AI_MODEL_STORAGE_KEY,
@@ -7,14 +8,6 @@ import {
   catalogModelIds,
   type AiModelGroup,
 } from '../lib/aiModels';
-
-type AiModelContextValue = {
-  modelId: string;
-  setModelId: (id: string) => void;
-  groups: AiModelGroup[];
-};
-
-const AiModelContext = createContext<AiModelContextValue | null>(null);
 
 export function AiModelProvider({ children }: { children: ReactNode }) {
   const [groups, setGroups] = useState<AiModelGroup[]>(FALLBACK_AI_GROUPS);
@@ -70,16 +63,4 @@ export function AiModelProvider({ children }: { children: ReactNode }) {
       {children}
     </AiModelContext.Provider>
   );
-}
-
-export function useAiModel() {
-  const ctx = useContext(AiModelContext);
-  if (!ctx) {
-    return {
-      modelId: DEFAULT_AI_MODEL_ID,
-      setModelId: () => {},
-      groups: FALLBACK_AI_GROUPS,
-    };
-  }
-  return ctx;
 }

@@ -1,4 +1,4 @@
-import { useAiModel } from '../contexts/AiModelContext';
+import { useAiModel } from '../contexts/useAiModel';
 
 type AiModelSelectProps = {
   id?: string;

@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models import ContactCreate, ScrapeRequest, SearchPersonRequest
-from app.auth_deps import get_current_user_optional, get_current_user
+from app.auth_deps import get_current_user_optional, get_current_user, get_current_admin
 from app.services.audit_service import log_audit
 from app.services.usage_service import log_event
 from app.services.contact_merge import merge_contacts
@@ -784,7 +784,17 @@ async def companies_summary(user: dict | None = Depends(get_current_user_optiona
 async def _delete_contacts_cascade(db, contact_ids: list[int]) -> None:
     if not contact_ids:
         return
+    from app.services.dispatch_service import begin_write
+    await begin_write(db)
     ph = ",".join(["?" for _ in contact_ids])
+    dispatched = await (await db.execute(
+        f"""SELECT 1 FROM campaign_contacts cc WHERE cc.contact_id IN ({ph})
+        AND (cc.sent_at IS NOT NULL OR cc.status='sending' OR EXISTS
+        (SELECT 1 FROM outreach_dispatches d WHERE d.campaign_contact_id=cc.id)) LIMIT 1""",
+        contact_ids,
+    )).fetchone()
+    if dispatched:
+        raise HTTPException(409, "Outreach history cannot be cascade-deleted; archive these contacts instead")
     await db.execute(
         f"""DELETE FROM email_events WHERE campaign_contact_id IN (
                SELECT id FROM campaign_contacts WHERE contact_id IN ({ph}))""",
@@ -811,7 +821,7 @@ class ClearContactsRequest(BaseModel):
 
 
 @router.post("/clear-all")
-async def clear_all_contacts(payload: ClearContactsRequest, user: dict | None = Depends(get_current_user_optional)):
+async def clear_all_contacts(payload: ClearContactsRequest, user: dict | None = Depends(get_current_admin)):
     """
     Delete all contacts (optional domain filter) and optionally email-pattern / discovery caches.
     Requires confirm=true in JSON body.
@@ -867,10 +877,10 @@ class BulkDeleteContactsRequest(BaseModel):
 
 
 @router.post("/bulk-delete")
-async def bulk_delete_contacts(payload: BulkDeleteContactsRequest, user: dict | None = Depends(get_current_user_optional)):
+async def bulk_delete_contacts(payload: BulkDeleteContactsRequest, user: dict | None = Depends(get_current_admin)):
     """
     Delete multiple contacts and dependent rows (campaign_contacts, notes, generated_emails cache, etc.).
-    When logged in, non-admins may only delete their own or unassigned contacts.
+    Administrators only; records with released or historical outreach are retained.
     """
     raw_ids = [i for i in payload.contact_ids if isinstance(i, int) and i > 0]
     ids = list(dict.fromkeys(raw_ids))
@@ -913,11 +923,14 @@ async def list_contacts(
     pipeline_status: str | None = None,
     employee_only: bool = False,
     release_id: int | None = None,
-    limit: int = 500,
+    limit: int = 100,
+    offset: int = 0,
     mine_only: bool = False,
     user: dict | None = Depends(get_current_user_optional),
 ):
-    """List contacts. Optional q (search name/email/company), pipeline_status filter. `companies` = comma-separated exact company names. `employee_only` excludes role-based inboxes. Standard users see only their contacts + unassigned."""
+    """Paginated canonical contacts. Standard users see their contacts plus shared unassigned rows."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     db = await get_db()
     try:
         conditions, params = [], []
@@ -950,7 +963,9 @@ async def list_contacts(
             )
             params.append(release_id)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        params.append(limit)
+        count_cursor = await db.execute(f"SELECT COUNT(*) AS n FROM contacts c {where}", params)
+        total = int((await count_cursor.fetchone())["n"] or 0)
+        query_params = [*params, limit, offset]
         cursor = await db.execute(
             f"""SELECT c.*,
                        ls.sent_at AS last_sent_at,
@@ -970,8 +985,8 @@ async def list_contacts(
                 ) ls ON ls.contact_id = c.id
                 LEFT JOIN campaigns camp ON camp.id = ls.campaign_id
                 {where}
-                ORDER BY c.created_at DESC LIMIT ?""",
-            params,
+                ORDER BY c.created_at DESC LIMIT ? OFFSET ?""",
+            query_params,
         )
         rows = await cursor.fetchall()
         result = [dict(r) for r in rows]
@@ -982,7 +997,7 @@ async def list_contacts(
                 r["company_domain"] = normalize_domain(r["company_domain"])
         if employee_only:
             result = [r for r in result if is_employee_outreach_email(r.get("email") or "")]
-        return result
+        return {"items": result, "total": total, "limit": limit, "offset": offset}
     finally:
         await db.close()
 
@@ -1043,7 +1058,7 @@ async def get_contact(contact_id: int):
 
 
 @router.post("/purge-junk-contacts")
-async def purge_junk_contacts(domain: str | None = None):
+async def purge_junk_contacts(domain: str | None = None, user: dict = Depends(get_current_admin)):
     """
     Remove nav/product junk saved as contacts (gift.cards@…, Gift Cards, etc.).
     Optional domain= filter.
@@ -1097,7 +1112,7 @@ async def purge_junk_contacts(domain: str | None = None):
 
 
 @router.post("/reconcile-identity")
-async def reconcile_stored_identities(domain: str | None = None):
+async def reconcile_stored_identities(domain: str | None = None, user: dict = Depends(get_current_admin)):
     """
     Re-run name/email reconciliation on saved contacts.
     Fixes mismatches (e.g. junk name from prose near email) and removes rows that cannot be verified.
@@ -1169,7 +1184,7 @@ async def reconcile_stored_identities(domain: str | None = None):
 
 
 @router.post("/fix-emails")
-async def fix_malformed_emails():
+async def fix_malformed_emails(user: dict = Depends(get_current_admin)):
     """Fix contacts with malformed emails (e.g. name@https://domain.com/path -> name@domain.com)."""
     db = await get_db()
     try:
@@ -1192,16 +1207,16 @@ async def fix_malformed_emails():
 
 
 @router.delete("/{contact_id}")
-async def delete_contact(contact_id: int, user: dict | None = Depends(get_current_user_optional)):
+async def delete_contact(contact_id: int, user: dict | None = Depends(get_current_admin)):
     """Delete a contact."""
     db = await get_db()
     try:
         cursor = await db.execute("SELECT email FROM contacts WHERE id = ?", (contact_id,))
         row = await cursor.fetchone()
-        await db.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+        await _delete_contacts_cascade(db,[contact_id])
         await db.commit()
         if user and row:
-            await log_audit(user["id"], "contact_delete", "contact", str(contact_id), row.get("email", ""))
+            await log_audit(user["id"], "contact_delete", "contact", str(contact_id), row["email"] or "")
         return {"ok": True}
     finally:
         await db.close()

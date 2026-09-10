@@ -3,6 +3,8 @@ Tracking API - Open tracking pixel for campaign emails.
 No auth required (loaded by recipient's email client).
 """
 import os
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from fastapi import APIRouter
 from fastapi.responses import Response
 from app.database import get_db
@@ -32,10 +34,43 @@ async def track_open(campaign_contact_id: int):
         pass
     finally:
         await db.close()
-    return Response(content=TRACKING_PIXEL, media_type="image/gif")
+    return pixel_response()
 
 
-def get_tracking_pixel_url(campaign_contact_id: int) -> str:
+def pixel_response():
+    return Response(content=TRACKING_PIXEL, media_type="image/gif", headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache",
+    })
+
+
+@router.get("/message/{token}")
+async def track_message_open(token: str):
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT id, campaign_contact_id FROM outreach_messages WHERE tracking_token = ?", (token,)
+        )).fetchone()
+        if row:
+            await db.execute(
+                """INSERT OR IGNORE INTO outreach_events(message_id, kind, source_id, occurred_at)
+                   VALUES (?, 'opened', 'pixel:first', ?)""",
+                (row["id"], datetime.now(timezone.utc).isoformat()),
+            )
+            await db.execute(
+                "UPDATE campaign_contacts SET opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP) WHERE id = ?",
+                (row["campaign_contact_id"],),
+            )
+            await db.commit()
+    finally:
+        await db.close()
+    return pixel_response()
+
+
+def get_tracking_pixel_url(campaign_contact_id: int | str) -> str:
     """Build tracking pixel URL for injection into emails."""
-    base = (os.getenv("API_BASE_URL") or "http://localhost:8000").rstrip("/")
-    return f"{base}/api/track/open/{campaign_contact_id}"
+    base = (os.getenv("API_BASE_URL") or os.getenv("BACKEND_URL") or "http://localhost:8000").strip().rstrip("/")
+    parsed = urlsplit(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Tracking requires a valid public API_BASE_URL or BACKEND_URL")
+    route = "open" if isinstance(campaign_contact_id, int) else "message"
+    return f"{base}/api/track/{route}/{campaign_contact_id}"

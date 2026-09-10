@@ -100,16 +100,12 @@ def _thread_has_inbound_reply_from_contact(
             return 0
 
     messages.sort(key=msg_time)
-    last_our_ms = -1
+    # Anchor to the tracked send, never the newest reminder in this thread.
+    last_our_ms = max(0, sent_at_ms - 1)
     for m in messages:
-        hdr = _headers_dict(m)
-        from_e = _parseaddr_email(hdr.get("from", ""))
-        t = msg_time(m)
-        if from_e == owner_email:
-            last_our_ms = max(last_our_ms, t)
-
-    if last_our_ms < 0:
-        last_our_ms = max(0, sent_at_ms - 1)
+        if _stored_message_id and m.get("id") == _stored_message_id:
+            last_our_ms = msg_time(m)
+            break
 
     for m in messages:
         hdr = _headers_dict(m)
@@ -192,125 +188,19 @@ async def apply_contacted_auto_sort(db, sent_by_user_id: int) -> int:
 
 
 async def sync_replies_for_user(user_id: int, *, auto_sort_contacted: bool = True) -> dict[str, Any]:
-    """
-    Scan gmail threads for this user's sent campaign rows; mark replies and pipeline.
-    """
-    result = await get_valid_access_token(user_id)
-    if not result:
-        return {
-            "ok": False,
-            "error": "no_gmail_token",
-            "message": "No Gmail OAuth token. Sign in with Google.",
-            "marked_replied": 0,
-            "marked_bounced": 0,
-            "skipped": 0,
-            "errors": [],
-        }
-    access_token, owner_email = result
-
-    db = await get_db()
-    marked = 0
-    bounced = 0
-    skipped = 0
-    errors: list[dict] = []
-    try:
-        cursor = await db.execute(
-            """
-            SELECT cc.id, cc.contact_id, cc.gmail_thread_id, cc.gmail_message_id, cc.sent_at, c.email
-            FROM campaign_contacts cc
-            JOIN contacts c ON c.id = cc.contact_id
-            WHERE cc.sent_by_user_id = ?
-              AND cc.status = 'sent'
-              AND cc.replied_at IS NULL
-              AND cc.gmail_thread_id IS NOT NULL
-            """,
-            (user_id,),
-        )
-        rows = await cursor.fetchall()
-
-        for row in rows:
-            tid = row["gmail_thread_id"]
-            if not tid:
-                skipped += 1
-                continue
-            try:
-                thread = await _fetch_thread(access_token, tid)
-                if not thread:
-                    skipped += 1
-                    continue
-                sent_ms = _sent_at_to_ms(row["sent_at"])
-                if thread_has_bounce(thread):
-                    await _mark_campaign_contact_bounced(db, row["id"], row["contact_id"])
-                    await db.commit()
-                    bounced += 1
-                elif _thread_has_inbound_reply_from_contact(
-                    thread,
-                    row["email"] or "",
-                    owner_email,
-                    row["gmail_message_id"],
-                    sent_ms,
-                ):
-                    await _mark_campaign_contact_replied(db, row["id"], row["contact_id"])
-                    await db.commit()
-                    marked += 1
-                else:
-                    skipped += 1
-            except PermissionError as e:
-                errors.append({"campaign_contact_id": row["id"], "error": str(e)})
-                break
-            except Exception as e:
-                errors.append({"campaign_contact_id": row["id"], "error": str(e)})
-
-        promoted = 0
-        if auto_sort_contacted:
-            promoted = await apply_contacted_auto_sort(db, user_id)
-
-        return {
-            "ok": True,
-            "marked_replied": marked,
-            "marked_bounced": bounced,
-            "skipped_no_reply": skipped,
-            "pipeline_promoted_contacted": promoted,
-            "errors": errors,
-        }
-    finally:
-        await db.close()
+    from app.services.message_tracking import sync_sender
+    return await sync_sender(user_id, auto_sort_contacted=auto_sort_contacted)
 
 
 async def sync_replies_all_senders() -> dict[str, Any]:
-    """Scheduled job: every user who has pending threads."""
     db = await get_db()
-    total_marked = 0
-    total_bounced = 0
-    total_promoted = 0
-    all_errors: list[dict] = []
     try:
-        cursor = await db.execute(
-            """
-            SELECT DISTINCT sent_by_user_id FROM campaign_contacts
-            WHERE sent_by_user_id IS NOT NULL
-              AND status = 'sent'
-              AND replied_at IS NULL
-            """
-        )
-        user_ids = [r["sent_by_user_id"] for r in await cursor.fetchall()]
+        rows = await (await db.execute(
+            "SELECT DISTINCT sent_by_user_id FROM campaign_contacts WHERE sent_by_user_id IS NOT NULL AND sent_at IS NOT NULL"
+        )).fetchall()
     finally:
         await db.close()
-
-    for uid in user_ids:
-        if not uid:
-            continue
-        res = await sync_replies_for_user(int(uid), auto_sort_contacted=True)
-        total_marked += int(res.get("marked_replied") or 0)
-        total_bounced += int(res.get("marked_bounced") or 0)
-        total_promoted += int(res.get("pipeline_promoted_contacted") or 0)
-        all_errors.extend(res.get("errors") or [])
-
-    return {
-        "ok": True,
-        "users_processed": len(user_ids),
-        "marked_replied": total_marked,
-        "marked_bounced": total_bounced,
-        "pipeline_promoted_contacted": total_promoted,
-        "errors": all_errors,
-    }
+    results = [await sync_replies_for_user(r["sent_by_user_id"]) for r in rows]
+    return {"ok": all(r.get("ok") for r in results), "users_processed": len(results),
+            "marked_replied": sum(r.get("marked_replied", 0) for r in results),
+            "marked_bounced": sum(r.get("marked_bounced", 0) for r in results)}

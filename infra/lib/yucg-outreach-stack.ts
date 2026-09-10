@@ -37,8 +37,8 @@ export class YucgOutreachStack extends cdk.Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       versioned: true,
-      removalPolicy: envName === "prod" ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: envName !== "prod",
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      autoDeleteObjects: false,
       lifecycleRules: [
         { prefix: "exports/", expiration: cdk.Duration.days(30) },
         { prefix: "discovery/", expiration: cdk.Duration.days(30) },
@@ -133,6 +133,11 @@ export class YucgOutreachStack extends cdk.Stack {
       ec2.Peer.prefixList(cfOriginFacing.prefixListId),
       ec2.Port.tcp(80),
       "CloudFront origin-facing only",
+    );
+    sg.addIngressRule(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Port.tcp(80),
+      "CloudFront VPC-origin ENI in this VPC",
     );
 
     const userData = ec2.UserData.forLinux();

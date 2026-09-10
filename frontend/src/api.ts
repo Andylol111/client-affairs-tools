@@ -1,3 +1,117 @@
+export type MemberProfile = { projects?: string; experience?: string; role_title?: string; linkedin_url?: string; slack_handle?: string; other_handles?: string };
+export type Project = { id: number; name: string; semester?: string; description?: string; role_in_project?: string };
+export type Attachment = { id: number; filename: string; display_name?: string; file_size: number };
+export type Template = { id: number; name: string; subject: string; body: string; industry?: string; use_case?: string };
+export type Sequence = { id: number; name: string; steps?: { days_after: number; subject: string; body: string }[] };
+export type ContactNote = { id: number; note: string; created_at: string; user_id?: number };
+export type ContactActivity = { id: number; activity_type: string; details?: string; created_at: string; user_id?: number };
+export type ContactProfile = { value_proposition?: string; role_summary?: string; online_sentiment?: string; receptiveness_notes?: string };
+export type Sentiment = { error?: string; sentiment_score?: number; sentiment_label?: string; industry_fit?: string; suggested_improvements?: string };
+export type Worklist = { owner_email?: string; owner_name?: string; id: number; name: string; type: string; description?: string; contact_count?: number; contacts?: Contact[] };
+export type ReleasePerson = { id: number; full_name?: string; title?: string; email?: string; company?: string; company_domain?: string; kept: number; email_status?: string; vendor_check?: string };
+export type Release = { id: number; name: string; status: string; people?: ReleasePerson[]; targets?: { id: number; company: string; company_domain?: string }[] };
+export type InboxItem = { name?: string; email?: string; status?: string; email_verification_status?: string; id: number; subject?: string; body?: string; from_email?: string; received_at?: string };
+export type Member = { id: number; email: string; name?: string; role: string; is_active: number; last_login?: string };
+export type LogEntry = { user_id?: number; name?: string; id: number; created_at: string; email?: string; user_email?: string; action?: string; details?: string; ip_address?: string; event_type?: string; resource_type?: string };
+export type ApiKey = { key_prefix?: string; id: number; name: string; scopes?: string; created_at?: string; last_used_at?: string };
+export type StoredObject = { byte_size?: number; source?: string; id: number; kind: string; s3_key: string; bytes?: number; created_at?: string };
+export type CustomFormat = { id: number; name: string; pattern: string; priority?: number };
+export type Settings = { signature?: string; signature_image_url?: string; attachments_enabled?: string | boolean };
+export type PipelineMetrics = { by_status: { pipeline_status: string; count: number }[] };
+export type OneDriveItem = { id: string; name: string; folder?: object; size?: number };
+
+export type Contact = {
+  id: number;
+  name?: string | null;
+  email: string;
+  title?: string | null;
+  company?: string | null;
+  company_domain?: string | null;
+  linkedin_url?: string | null;
+  confidence?: string | null;
+  department?: string | null;
+  pipeline_status?: string | null;
+  contact_source?: string | null;
+  scrape_source?: string;
+  source_url?: string;
+  scrape_source_url?: string;
+  ai_rejected?: boolean;
+  email_verification_status?: string | null;
+  ai_verdict?: string | null;
+  ai_reason?: string | null;
+  last_sent_at?: string | null;
+  last_send_status?: string | null;
+  last_campaign_id?: number | null;
+  last_campaign_name?: string | null;
+  [key: string]: unknown;
+};
+
+export type ContactPage = {
+  items: Contact[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type CampaignContact = Contact & {
+  id: number;
+  contact_id: number;
+  campaign_id: number;
+  email_subject?: string | null;
+  email_body?: string | null;
+  status: string;
+  last_error?: string | null;
+  sent_at?: string | null;
+  opened_at?: string | null;
+  replied_at?: string | null;
+  messages?: Array<{
+    id: number;
+    sent_at?: string | null;
+    events: Array<{ kind: string; occurred_at: string; detail?: string | null }>;
+  }>;
+};
+
+export type Campaign = {
+  id: number;
+  name: string;
+  status: 'draft' | 'releasing' | 'paused' | 'needs_attention' | 'sent' | string;
+  owner_user_id?: number | null;
+  sender_user_id?: number | null;
+  sequence_id?: number | null;
+  contact_count?: number;
+  sent_count?: number;
+  pending_count?: number;
+  failed_count?: number;
+  readiness?: { ready: boolean; issues: string[] };
+  counts?: Record<string, number>;
+  contacts?: CampaignContact[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type GeneratedEmail = {
+  id: number;
+  user_id: number;
+  contact_id: number;
+  campaign_id?: number | null;
+  subject: string;
+  body: string;
+  signature?: string;
+  created_at: string;
+  name?: string | null;
+  email?: string | null;
+  company?: string | null;
+};
+
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 export type DiscoveryLogEntry = {
   email?: string;
   name?: string;
@@ -11,7 +125,7 @@ export type DiscoveryLogEntry = {
 };
 
 export type ScrapeResult = {
-  contacts: any[];
+  contacts: Contact[];
   count: number;
   found_total?: number;
   duplicates_skipped?: number;
@@ -78,6 +192,8 @@ export type YucgProspectsMeta = {
   sheet?: string;
   row_count: number;
   sectors: string[];
+  source_kind?: 's3' | 'file';
+  source_updated_at?: string | null;
   contact_types: string[];
 };
 
@@ -131,26 +247,29 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
   const text = await res.text();
 
   if (!res.ok) {
-    if (!text.trim()) {
-      throw new Error(`Request failed: ${res.status} ${res.statusText || ''}`.trim());
+    let message = `Request failed: ${res.status} ${res.statusText || ''}`.trim();
+    if (text.trim()) {
+      try {
+        const parsed = JSON.parse(text) as {
+          detail?: string | { msg?: string }[] | { message?: string; issues?: string[] };
+        };
+        const detail = parsed.detail;
+        message = typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
+            ? String(detail[0]?.msg || message)
+            : detail?.message
+              ? [detail.message, ...(detail.issues || [])].join(' ')
+              : text.replace(/\s+/g, ' ').trim().slice(0, 320);
+      } catch (error) {
+        if (!isParseFailure(error)) throw error;
+        message = text.replace(/\s+/g, ' ').trim().slice(0, 320) || message;
+      }
     }
-    try {
-      const j = JSON.parse(text) as { detail?: string | { msg?: string }[] };
-      const d = j.detail;
-      const msg =
-        typeof d === 'string'
-          ? d
-          : Array.isArray(d)
-            ? String(d[0]?.msg ?? '')
-            : '';
-      throw new Error(msg || text);
-    } catch (e) {
-      if (e instanceof Error && !isParseFailure(e)) throw e;
-      const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 320);
-      throw new Error(
-        snippet || `Request failed (${res.status}). The server did not return JSON. Is the API running?`
-      );
+    if (res.status === 401 && path !== '/api/auth/me' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('yucg:unauthorized'));
     }
+    throw new ApiError(message, res.status);
   }
 
   if (!text.trim()) {
@@ -164,11 +283,6 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
   }
 }
 
-/** Per-page cursor heatmap grid. Separate type avoids OXC parse issues with nested generics. */
-export type CursorHeatmapPage = { grid: number[][], bins: number };
-/** Cursor heatmap API response. */
-export type CursorHeatmapResponse = { days: number, pages: Record<string, CursorHeatmapPage> };
-
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
   ai: {
@@ -181,7 +295,7 @@ export const api = {
   },
   telemetry: {
     event: (data: { event_type: string; resource_type?: string; details?: Record<string, unknown> }) =>
-      fetchApi<any>('/api/telemetry/event', { method: 'POST', body: JSON.stringify(data) }).catch(() => {}),
+      fetchApi<unknown>('/api/telemetry/event', { method: 'POST', body: JSON.stringify(data) }).catch(() => {}),
     batch: (events: { event_type: string; resource_type?: string; details?: Record<string, unknown> }[]) =>
       fetchApi<{ ok: boolean; count: number }>('/api/telemetry/batch', {
         method: 'POST',
@@ -202,7 +316,8 @@ export const api = {
       employee_only?: boolean;
       release_id?: number;
       limit?: number;
-    }) => {
+      offset?: number;
+    }, signal?: AbortSignal) => {
       const params = new URLSearchParams();
       if (opts?.company) params.set('company', opts.company);
       if (opts?.companies) params.set('companies', opts.companies);
@@ -212,13 +327,14 @@ export const api = {
       if (opts?.employee_only) params.set('employee_only', 'true');
       if (opts?.release_id != null) params.set('release_id', String(opts.release_id));
       if (opts?.limit != null) params.set('limit', String(opts.limit));
-      return fetchApi<any[]>(`/api/contacts${params.toString() ? '?' + params : ''}`);
+      if (opts?.offset != null) params.set('offset', String(opts.offset));
+      return fetchApi<ContactPage>(`/api/contacts${params.toString() ? '?' + params : ''}`, { signal });
     },
-    get: (id: number) => fetchApi<any>(`/api/contacts/${id}`),
-    create: (data: any) =>
-      fetchApi<any>('/api/contacts', { method: 'POST', body: JSON.stringify(data) }),
+    get: (id: number) => fetchApi<Contact>(`/api/contacts/${id}`),
+    create: (data: Partial<Contact> & { email: string }) =>
+      fetchApi<Contact>('/api/contacts', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: number) =>
-      fetchApi<any>(`/api/contacts/${id}`, { method: 'DELETE' }),
+      fetchApi<{ ok: boolean }>(`/api/contacts/${id}`, { method: 'DELETE' }),
     importFile: (file: File, skipDuplicates = true) => {
       const form = new FormData();
       form.append('file', file);
@@ -229,10 +345,10 @@ export const api = {
       }).then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         return res.json();
-      }) as Promise<{ contacts: any[]; count: number; duplicates_skipped?: number }>;
+      }) as Promise<{ contacts: Contact[]; count: number; duplicates_skipped?: number }>;
     },
     scrape: (data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number }) =>
-      fetchApi<{ contacts: any[]; count: number; duplicates_skipped?: number }>('/api/contacts/scrape', {
+      fetchApi<{ contacts: Contact[]; count: number; duplicates_skipped?: number }>('/api/contacts/scrape', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
@@ -281,7 +397,7 @@ export const api = {
         onEvent(ev);
         if (ev.type === 'complete') {
           result = {
-            contacts: (ev.contacts as any[]) || [],
+            contacts: (ev.contacts as Contact[]) || [],
             count: Number(ev.count) || 0,
             found_total: Number(ev.found_total) || Number(ev.count) || 0,
             duplicates_skipped: Number(ev.duplicates_skipped) || 0,
@@ -292,7 +408,7 @@ export const api = {
         }
         if (ev.type === 'cancelled') {
           result = {
-            contacts: (ev.contacts as any[]) || [],
+            contacts: (ev.contacts as Contact[]) || [],
             count: Number(ev.count) || 0,
             found_total: Number(ev.found_total) || Number(ev.count) || 0,
             duplicates_skipped: Number(ev.duplicates_skipped) || 0,
@@ -386,9 +502,15 @@ export const api = {
         body: JSON.stringify(data),
       }),
     testSend: (data: { to_email: string; subject: string; body: string; attachment_ids?: number[] }) =>
-      fetchApi<any>('/api/emails/test-send', { method: 'POST', body: JSON.stringify(data) }),
+      fetchApi<unknown>('/api/emails/test-send', { method: 'POST', body: JSON.stringify(data) }),
     generated: (params?: { contact_id?: number; sort?: string }) =>
-      fetchApi<any[]>(`/api/emails/generated${params && Object.keys(params).length ? '?' + new URLSearchParams(params as any) : ''}`),
+      fetchApi<GeneratedEmail[]>(`/api/emails/generated${params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>) : ''}`),
+    saveDraft: (data: { contact_id: number; subject: string; body: string }) =>
+      fetchApi<GeneratedEmail>('/api/emails/generated', { method: 'POST', body: JSON.stringify(data) }),
+    updateDraft: (id: number, data: { subject: string; body: string }) =>
+      fetchApi<{ ok: boolean; id: number }>(`/api/emails/generated/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    deleteDraft: (id: number) =>
+      fetchApi<{ ok: boolean; id: number }>(`/api/emails/generated/${id}`, { method: 'DELETE' }),
     clearGeneratedCache: () =>
       fetchApi<{ ok: boolean; deleted: number }>('/api/emails/generated', { method: 'DELETE' }),
     generateTemplate: (data: {
@@ -409,30 +531,36 @@ export const api = {
       }),
   },
   campaigns: {
-    list: () => fetchApi<any[]>('/api/campaigns'),
-    get: (id: number) => fetchApi<any>(`/api/campaigns/${id}`),
-    delete: (id: number) => fetchApi<any>(`/api/campaigns/${id}`, { method: 'DELETE' }),
+    list: () => fetchApi<Campaign[]>('/api/campaigns'),
+    get: (id: number) => fetchApi<Campaign>(`/api/campaigns/${id}`),
+    delete: (id: number) => fetchApi<{ ok: boolean }>(`/api/campaigns/${id}`, { method: 'DELETE' }),
     create: (name: string) =>
-      fetchApi<any>('/api/campaigns', { method: 'POST', body: JSON.stringify({ name }) }),
+      fetchApi<Campaign>('/api/campaigns', { method: 'POST', body: JSON.stringify({ name }) }),
     addContacts: (id: number, data: { contact_ids: number[]; email_subjects?: Record<string, string>; email_bodies?: Record<string, string> }) =>
-      fetchApi<any>(`/api/campaigns/${id}/contacts`, {
+      fetchApi<unknown>(`/api/campaigns/${id}/contacts`, {
         method: 'POST',
         body: JSON.stringify(data),
       }),
     send: (id: number) =>
-      fetchApi<any>(`/api/campaigns/${id}/send`, { method: 'POST' }),
+      fetchApi<{ ok: boolean; sent: number; failed: number; pending_left: number; status: string }>(`/api/campaigns/${id}/send`, { method: 'POST' }),
     release: (id: number) =>
-      fetchApi<any>(`/api/campaigns/${id}/release`, { method: 'POST' }),
+      fetchApi<{ ok: boolean; status: string; counts: Record<string, number> }>(`/api/campaigns/${id}/release`, { method: 'POST' }),
+    pause: (id: number) =>
+      fetchApi<{ ok: boolean; status: string }>(`/api/campaigns/${id}/pause`, { method: 'POST' }),
+    resume: (id: number) =>
+      fetchApi<{ ok: boolean; status: string; counts: Record<string, number> }>(`/api/campaigns/${id}/resume`, { method: 'POST' }),
+    retryFailed: (id: number) =>
+      fetchApi<{ ok: boolean; status: string; retried: number }>(`/api/campaigns/${id}/retry-failed`, { method: 'POST' }),
     updateContactEmail: (campaignId: number, ccId: number, subject?: string, body?: string) =>
-      fetchApi<any>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
+      fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
         method: 'PATCH',
       }),
     update: (id: number, data: { sequence_id?: number | null }) =>
-      fetchApi<any>(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+      fetchApi<unknown>(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
   analytics: {
-    dashboard: () => fetchApi<any>('/api/analytics/dashboard'),
-    campaignMetrics: (id: number) => fetchApi<any>(`/api/analytics/campaigns/${id}/metrics`),
+    dashboard: () => fetchApi<{ contacts_discovered_today: number; emails_in_queue: number; active_campaigns: number; total_sent: number; opened: number; open_rate: number; reply_rate: number }>('/api/analytics/dashboard'),
+    campaignMetrics: (id: number) => fetchApi<unknown>(`/api/analytics/campaigns/${id}/metrics`),
     insights: () => fetchApi<{ insights: string[] }>('/api/analytics/insights'),
     dueFollowUps: () => fetchApi<{ count: number }>('/api/analytics/due-follow-ups'),
     timeSeries: (days?: number) =>
@@ -453,21 +581,21 @@ export const api = {
   },
   auth: {
     profile: {
-      get: () => fetchApi<any>('/api/auth/profile'),
+      get: () => fetchApi<MemberProfile>('/api/auth/profile'),
       update: (data: { projects?: string; experience?: string; role_title?: string; linkedin_url?: string; slack_handle?: string; other_handles?: string }) =>
-        fetchApi<any>('/api/auth/profile', { method: 'PUT', body: JSON.stringify(data) }),
+        fetchApi<MemberProfile>('/api/auth/profile', { method: 'PUT', body: JSON.stringify(data) }),
     },
-    team: () => fetchApi<any[]>('/api/auth/team'),
-    myProjects: () => fetchApi<any[]>('/api/auth/my-projects'),
+    team: () => fetchApi<Member[]>('/api/auth/team'),
+    myProjects: () => fetchApi<Project[]>('/api/auth/my-projects'),
     notificationPrefs: {
-      get: () => fetchApi<any>('/api/auth/notification-preferences'),
+      get: () => fetchApi<{ admin_digest: boolean; campaign_summary: boolean }>('/api/auth/notification-preferences'),
       update: (data: { admin_digest?: boolean; campaign_summary?: boolean }) =>
-        fetchApi<any>('/api/auth/notification-preferences', { method: 'PUT', body: JSON.stringify(data) }),
+        fetchApi<{ admin_digest: boolean; campaign_summary: boolean }>('/api/auth/notification-preferences', { method: 'PUT', body: JSON.stringify(data) }),
     },
     slack: {
       connectUrl: () => fetchApi<{ redirect_url: string }>('/api/auth/slack/connect'),
       status: () => fetchApi<{ connected: boolean; team_name?: string }>('/api/auth/slack/status'),
-      disconnect: () => fetchApi<any>('/api/auth/slack/disconnect', { method: 'DELETE' }),
+      disconnect: () => fetchApi<unknown>('/api/auth/slack/disconnect', { method: 'DELETE' }),
     },
     complete2fa: (code: string) =>
       fetchApi<{ ok: boolean }>('/api/auth/2fa/login', {
@@ -479,18 +607,18 @@ export const api = {
     catalog: () =>
       fetchApi<{
         bucket: string | null;
-        objects: any[];
-        prefixes: { prefix: string; objects: any[] }[];
+        objects: StoredObject[];
+        prefixes: { prefix: string; objects: StoredObject[] }[];
       }>('/api/admin/catalog'),
-    loginLog: () => fetchApi<any[]>('/api/admin/login-log'),
+    loginLog: () => fetchApi<LogEntry[]>('/api/admin/login-log'),
     users: {
-      list: () => fetchApi<any[]>('/api/admin/users'),
+      list: () => fetchApi<Member[]>('/api/admin/users'),
       invite: (email: string) =>
-        fetchApi<any>('/api/admin/users/invite', { method: 'POST', body: JSON.stringify({ email }) }),
+        fetchApi<unknown>('/api/admin/users/invite', { method: 'POST', body: JSON.stringify({ email }) }),
       updateRole: (userId: number, role: string) =>
-        fetchApi<any>(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+        fetchApi<unknown>(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
       updateStatus: (userId: number, isActive: boolean) =>
-        fetchApi<any>(`/api/admin/users/${userId}/status`, { method: 'PATCH', body: JSON.stringify({ is_active: isActive }) }),
+        fetchApi<unknown>(`/api/admin/users/${userId}/status`, { method: 'PATCH', body: JSON.stringify({ is_active: isActive }) }),
       exportExcel: async () => {
         const res = await fetch(`${API_BASE}/api/admin/users/export`, { headers: getAuthHeaders() });
         if (!res.ok) {
@@ -514,7 +642,7 @@ export const api = {
       },
     },
     auditLog: (limit?: number) =>
-      fetchApi<any[]>(`/api/admin/audit-log?limit=${limit || 100}`),
+      fetchApi<LogEntry[]>(`/api/admin/audit-log?limit=${limit || 100}`),
     exportAuditLogExcel: async () => {
       const res = await fetch(`${API_BASE}/api/admin/audit-log/export`, { headers: getAuthHeaders() });
       if (!res.ok) {
@@ -558,56 +686,52 @@ export const api = {
       URL.revokeObjectURL(url);
     },
     apiKeys: {
-      list: () => fetchApi<any[]>('/api/admin/api-keys'),
+      list: () => fetchApi<ApiKey[]>('/api/admin/api-keys'),
       create: (name: string, scopes?: string) =>
-        fetchApi<any>('/api/admin/api-keys', { method: 'POST', body: JSON.stringify({ name, scopes }) }),
+        fetchApi<{ key: string }>('/api/admin/api-keys', { method: 'POST', body: JSON.stringify({ name, scopes }) }),
       revoke: (id: number) =>
-        fetchApi<any>(`/api/admin/api-keys/${id}`, { method: 'DELETE' }),
+        fetchApi<unknown>(`/api/admin/api-keys/${id}`, { method: 'DELETE' }),
     },
     twoFactor: {
       status: () => fetchApi<{ status: 'enabled' | 'pending' | 'not_setup' }>('/api/admin/2fa/status'),
-      setup: () => fetchApi<any>('/api/admin/2fa/setup', { method: 'POST' }),
+      setup: () => fetchApi<{ provisioning_uri: string; secret: string }>('/api/admin/2fa/setup', { method: 'POST' }),
       verify: (code: string) =>
-        fetchApi<any>('/api/admin/2fa/verify', { method: 'POST', body: JSON.stringify({ code }) }),
+        fetchApi<unknown>('/api/admin/2fa/verify', { method: 'POST', body: JSON.stringify({ code }) }),
       disable: (code: string) =>
-        fetchApi<any>('/api/admin/2fa/disable', { method: 'POST', body: JSON.stringify({ code }) }),
-      reset: () => fetchApi<any>('/api/admin/2fa/reset', { method: 'POST' }),
+        fetchApi<unknown>('/api/admin/2fa/disable', { method: 'POST', body: JSON.stringify({ code }) }),
+      reset: () => fetchApi<unknown>('/api/admin/2fa/reset', { method: 'POST' }),
     },
     projects: {
-      list: () => fetchApi<any[]>('/api/admin/projects'),
+      list: () => fetchApi<Project[]>('/api/admin/projects'),
       create: (data: { name: string; semester?: string; description?: string }) =>
-        fetchApi<any>('/api/admin/projects', { method: 'POST', body: JSON.stringify(data) }),
-      delete: (id: number) => fetchApi<any>(`/api/admin/projects/${id}`, { method: 'DELETE' }),
-      assignments: (projectId: number) => fetchApi<any[]>(`/api/admin/projects/${projectId}/assignments`),
+        fetchApi<Project>('/api/admin/projects', { method: 'POST', body: JSON.stringify(data) }),
+      delete: (id: number) => fetchApi<unknown>(`/api/admin/projects/${id}`, { method: 'DELETE' }),
+      assignments: (projectId: number) => fetchApi<(Member & { user_id: number; role_in_project?: string })[]>(`/api/admin/projects/${projectId}/assignments`),
       assignUser: (userId: number, data: { project_id: number; role_in_project?: string }) =>
-        fetchApi<any>(`/api/admin/users/${userId}/project`, { method: 'PUT', body: JSON.stringify(data) }),
+        fetchApi<unknown>(`/api/admin/users/${userId}/project`, { method: 'PUT', body: JSON.stringify(data) }),
       unassignUser: (userId: number, projectId: number) =>
-        fetchApi<any>(`/api/admin/users/${userId}/project/${projectId}`, { method: 'DELETE' }),
-      userProjects: (userId: number) => fetchApi<any[]>(`/api/admin/users/${userId}/projects`),
+        fetchApi<unknown>(`/api/admin/users/${userId}/project/${projectId}`, { method: 'DELETE' }),
+      userProjects: (userId: number) => fetchApi<Project[]>(`/api/admin/users/${userId}/projects`),
     },
     operations: {
       events: (params?: { limit?: number; event_type?: string; days?: number }) =>
-        fetchApi<any[]>(`/api/admin/operations/events?${new URLSearchParams(params as any || {})}`),
+        fetchApi<LogEntry[]>(`/api/admin/operations/events?${new URLSearchParams(Object.entries(params || {}).map(([key, value]) => [key, String(value)]))}`),
       heatmap: (params?: { days?: number; group_by?: string }) =>
         fetchApi<{
           group_by: string;
           days: number;
           grid: Record<string, Record<string, number>>;
-          rows: any[];
+          rows: Record<string, unknown>[];
           matrix_2d?: { row_labels: string[]; col_labels: string[]; values: number[][] };
-        }>(`/api/admin/operations/heatmap?${new URLSearchParams(params as any || {})}`),
-      cursorHeatmap: (params?: { days?: number; bins?: number }) =>
-        fetchApi<CursorHeatmapResponse>(
-          `/api/admin/operations/cursor-heatmap?${new URLSearchParams(params as any || {})}`
-        ),
+        }>(`/api/admin/operations/heatmap?${new URLSearchParams(Object.entries(params || {}).map(([key, value]) => [key, String(value)]))}`),
       aggregates: (days?: number) =>
         fetchApi<{ by_event_type: { event_type: string; count: number }[]; by_resource_type: { resource_type: string; count: number }[]; days: number }>(
           `/api/admin/operations/aggregates?days=${days ?? 30}`
         ),
       resources: {
-        list: () => fetchApi<any[]>('/api/admin/operations/resources'),
+        list: () => fetchApi<{ id: number; name: string; content_text: string; content_type?: string; content_length?: number }[]>('/api/admin/operations/resources'),
         create: (data: { name: string; content_text: string; content_type?: string }) =>
-          fetchApi<any>('/api/admin/operations/resources', { method: 'POST', body: JSON.stringify(data) }),
+          fetchApi<unknown>('/api/admin/operations/resources', { method: 'POST', body: JSON.stringify(data) }),
         upload: async (file: File) => {
           const form = new FormData();
           form.append('file', file);
@@ -701,83 +825,84 @@ export const api = {
   },
   outreach: {
     updatePipeline: (contactId: number, status: string) =>
-      fetchApi<any>(`/api/outreach/contacts/${contactId}/pipeline`, {
+      fetchApi<unknown>(`/api/outreach/contacts/${contactId}/pipeline`, {
         method: 'PATCH',
         body: JSON.stringify({ pipeline_status: status }),
       }),
     notes: {
-      list: (contactId: number) => fetchApi<any[]>(`/api/outreach/contacts/${contactId}/notes`),
+      list: (contactId: number) => fetchApi<ContactNote[]>(`/api/outreach/contacts/${contactId}/notes`),
       create: (contactId: number, note: string) =>
-        fetchApi<any>('/api/outreach/notes', {
+        fetchApi<unknown>('/api/outreach/notes', {
           method: 'POST',
           body: JSON.stringify({ contact_id: contactId, note }),
         }),
     },
     activities: {
-      list: (contactId: number) => fetchApi<any[]>(`/api/outreach/contacts/${contactId}/activities`),
+      list: (contactId: number) => fetchApi<ContactActivity[]>(`/api/outreach/contacts/${contactId}/activities`),
       create: (contactId: number, type: string, details?: string) =>
-        fetchApi<any>('/api/outreach/activities', {
+        fetchApi<unknown>('/api/outreach/activities', {
           method: 'POST',
           body: JSON.stringify({ contact_id: contactId, activity_type: type, details }),
         }),
     },
     templates: {
       list: (industry?: string) =>
-        fetchApi<any[]>(industry ? `/api/outreach/templates?industry=${encodeURIComponent(industry)}` : '/api/outreach/templates'),
+        fetchApi<Template[]>(industry ? `/api/outreach/templates?industry=${encodeURIComponent(industry)}` : '/api/outreach/templates'),
       create: (data: { name: string; subject: string; body: string; industry?: string; use_case?: string }) =>
-        fetchApi<any>('/api/outreach/templates', { method: 'POST', body: JSON.stringify(data) }),
-      delete: (id: number) => fetchApi<any>(`/api/outreach/templates/${id}`, { method: 'DELETE' }),
+        fetchApi<unknown>('/api/outreach/templates', { method: 'POST', body: JSON.stringify(data) }),
+      delete: (id: number) => fetchApi<unknown>(`/api/outreach/templates/${id}`, { method: 'DELETE' }),
     },
     sequences: {
-      list: () => fetchApi<any[]>('/api/outreach/sequences'),
+      list: () => fetchApi<Sequence[]>('/api/outreach/sequences'),
       create: (name: string, steps: { days_after: number; subject: string; body: string }[]) =>
-        fetchApi<any>('/api/outreach/sequences', {
+        fetchApi<unknown>('/api/outreach/sequences', {
           method: 'POST',
           body: JSON.stringify({ name, steps }),
         }),
     },
     profile: {
-      get: (contactId: number) => fetchApi<any>(`/api/outreach/contacts/${contactId}/profile`),
+      get: (contactId: number) => fetchApi<ContactProfile>(`/api/outreach/contacts/${contactId}/profile`),
       refresh: (contactId: number) =>
-        fetchApi<any>(`/api/outreach/contacts/${contactId}/profile/refresh`, { method: 'POST' }),
+        fetchApi<ContactProfile>(`/api/outreach/contacts/${contactId}/profile/refresh`, { method: 'POST' }),
     },
     sentiment: {
       analyze: (data: { subject: string; body: string; industry?: string; target_role?: string }) =>
-        fetchApi<any>('/api/outreach/sentiment/analyze', { method: 'POST', body: JSON.stringify(data) }),
+        fetchApi<Sentiment>('/api/outreach/sentiment/analyze', { method: 'POST', body: JSON.stringify(data) }),
     },
     markReplied: (ccId: number) =>
-      fetchApi<any>(`/api/outreach/campaign-contacts/${ccId}/mark-replied`, { method: 'POST' }),
+      fetchApi<unknown>(`/api/outreach/campaign-contacts/${ccId}/mark-replied`, { method: 'POST' }),
     /** Gmail inbox scan: mark campaign replies and optionally cold → contacted. Requires gmail.readonly (re-auth if needed). */
+    syncStatus: () => fetchApi<{ last_success_at?: string; error?: string; in_progress?: boolean }>('/api/outreach/sync-status'),
     syncInboxReplies: (autoSortContacted = true) =>
-      fetchApi<any>(`/api/outreach/sync-inbox-replies?auto_sort_contacted=${autoSortContacted ? 'true' : 'false'}`, {
+      fetchApi<{ ok: boolean; error?: string; in_progress?: boolean; marked_replied?: number; promoted?: number; message?: string; errors?: string[]; pipeline_promoted_contacted?: number }>(`/api/outreach/sync-inbox-replies?auto_sort_contacted=${autoSortContacted ? 'true' : 'false'}`, {
         method: 'POST',
       }),
     /** Promote cold → contacted from sent campaign rows (no Gmail). */
     autoSortPipeline: () =>
       fetchApi<{ ok: boolean; promoted: number }>('/api/outreach/auto-sort-pipeline', { method: 'POST' }),
     verifyEmail: (email: string) =>
-      fetchApi<any>(`/api/outreach/verify-email?email=${encodeURIComponent(email)}`),
-    pipelineMetrics: () => fetchApi<any>('/api/outreach/metrics/pipeline'),
+      fetchApi<{ valid: boolean }>(`/api/outreach/verify-email?email=${encodeURIComponent(email)}`),
+    pipelineMetrics: () => fetchApi<PipelineMetrics>('/api/outreach/metrics/pipeline'),
     campaigns: {
-      list: () => fetchApi<any[]>('/api/outreach/campaigns'),
-      get: (id: number) => fetchApi<any>(`/api/outreach/campaigns/${id}`),
+      list: () => fetchApi<Worklist[]>('/api/outreach/campaigns'),
+      get: (id: number) => fetchApi<Worklist>(`/api/outreach/campaigns/${id}`),
       create: (data: { name: string; type: 'community' | 'individual'; description?: string; priority?: number }) =>
-        fetchApi<any>('/api/outreach/campaigns', { method: 'POST', body: JSON.stringify(data) }),
+        fetchApi<Worklist>('/api/outreach/campaigns', { method: 'POST', body: JSON.stringify(data) }),
       addContacts: (id: number, contactIds: number[]) =>
-        fetchApi<any>(`/api/outreach/campaigns/${id}/contacts`, {
+        fetchApi<unknown>(`/api/outreach/campaigns/${id}/contacts`, {
           method: 'POST',
           body: JSON.stringify({ contact_ids: contactIds }),
         }),
       removeContact: (campaignId: number, contactId: number) =>
-        fetchApi<any>(`/api/outreach/campaigns/${campaignId}/contacts/${contactId}`, { method: 'DELETE' }),
+        fetchApi<unknown>(`/api/outreach/campaigns/${campaignId}/contacts/${contactId}`, { method: 'DELETE' }),
       delete: (id: number) =>
-        fetchApi<any>(`/api/outreach/campaigns/${id}`, { method: 'DELETE' }),
+        fetchApi<unknown>(`/api/outreach/campaigns/${id}`, { method: 'DELETE' }),
     },
     sendTiming: (industry?: string) =>
-      fetchApi<any>(industry ? `/api/outreach/send-timing?industry=${encodeURIComponent(industry)}` : '/api/outreach/send-timing'),
+      fetchApi<unknown>(industry ? `/api/outreach/send-timing?industry=${encodeURIComponent(industry)}` : '/api/outreach/send-timing'),
   },
   attachments: {
-    list: () => fetchApi<any[]>('/api/attachments'),
+    list: () => fetchApi<Attachment[]>('/api/attachments'),
     upload: (file: File, displayName?: string) => {
       const form = new FormData();
       form.append('file', file);
@@ -792,12 +917,12 @@ export const api = {
       }) as Promise<{ id: number; filename: string; display_name?: string; file_size: number }>;
     },
     delete: (id: number) =>
-      fetchApi<any>(`/api/attachments/${id}`, { method: 'DELETE' }),
+      fetchApi<unknown>(`/api/attachments/${id}`, { method: 'DELETE' }),
     downloadUrl: (id: number) => `${API_BASE}/api/attachments/${id}/download`,
     onedrive: {
-      list: () => fetchApi<{ configured: boolean; items: any[] }>('/api/attachments/onedrive'),
+      list: () => fetchApi<{ configured: boolean; items: OneDriveItem[] }>('/api/attachments/onedrive'),
       attach: (item_id: string) =>
-        fetchApi<any>('/api/attachments/onedrive/attach', {
+        fetchApi<unknown>('/api/attachments/onedrive/attach', {
           method: 'POST',
           body: JSON.stringify({ item_id }),
         }),
@@ -828,6 +953,8 @@ export const api = {
         count: res.count ?? res.total ?? (res.prospects ?? res.items ?? []).length,
       }));
     },
+    refreshProspects: () =>
+      fetchApi<YucgProspectsMeta>('/api/yucg/prospects/refresh', { method: 'POST' }),
     recommend: (opts?: {
       sector?: string;
       contact_type?: string;
@@ -883,8 +1010,8 @@ export const api = {
       a.click();
       URL.revokeObjectURL(url);
     },
-    listReleases: () => fetchApi<any[]>('/api/yucg/releases'),
-    getRelease: (id: number) => fetchApi<any>(`/api/yucg/releases/${id}`),
+    listReleases: () => fetchApi<Release[]>('/api/yucg/releases'),
+    getRelease: (id: number) => fetchApi<Release>(`/api/yucg/releases/${id}`),
     createRelease: (data: { name: string; row_indexes: number[]; notes?: string }) =>
       fetchApi<{ id: number; status: string; targets: number }>('/api/yucg/releases', {
         method: 'POST',
@@ -895,18 +1022,18 @@ export const api = {
       targetId: number,
       data: { full_name: string; title?: string; source_url?: string; blurb?: string },
     ) =>
-      fetchApi<any>(`/api/yucg/releases/${releaseId}/targets/${targetId}/mint`, {
+      fetchApi<unknown>(`/api/yucg/releases/${releaseId}/targets/${targetId}/mint`, {
         method: 'POST',
         body: JSON.stringify(data),
       }),
     keepPerson: (releaseId: number, personId: number, keep = true) =>
-      fetchApi<any>(`/api/yucg/releases/${releaseId}/people/${personId}/keep`, {
+      fetchApi<unknown>(`/api/yucg/releases/${releaseId}/people/${personId}/keep`, {
         method: 'POST',
         body: JSON.stringify({ keep }),
       }),
     rebuildPack: (releaseId: number) =>
-      fetchApi<any>(`/api/yucg/releases/${releaseId}/pack`, { method: 'POST' }),
-    releaseInbox: (releaseId: number) => fetchApi<any[]>(`/api/yucg/releases/${releaseId}/inbox`),
+      fetchApi<unknown>(`/api/yucg/releases/${releaseId}/pack`, { method: 'POST' }),
+    releaseInbox: (releaseId: number) => fetchApi<InboxItem[]>(`/api/yucg/releases/${releaseId}/inbox`),
   },
   yucgoutreach: {
     createRun: (data: {
@@ -921,10 +1048,10 @@ export const api = {
         body: JSON.stringify(data),
       }),
     listRuns: (limit?: number) =>
-      fetchApi<any[]>(`/api/yucgoutreach/runs?limit=${limit ?? 50}`),
-    getRun: (id: number) => fetchApi<any>(`/api/yucgoutreach/runs/${id}`),
+      fetchApi<Record<string, unknown>[]>(`/api/yucgoutreach/runs?limit=${limit ?? 50}`),
+    getRun: (id: number) => fetchApi<unknown>(`/api/yucgoutreach/runs/${id}`),
     listProspects: (runId: number, limit?: number) =>
-      fetchApi<any[]>(`/api/yucgoutreach/runs/${runId}/prospects?limit=${limit ?? 500}`),
+      fetchApi<Record<string, unknown>[]>(`/api/yucgoutreach/runs/${runId}/prospects?limit=${limit ?? 500}`),
     importContacts: (runId: number) =>
       fetchApi<{ created: number; updated: number; skipped: number }>(
         `/api/yucgoutreach/runs/${runId}/import-contacts`,
@@ -958,15 +1085,15 @@ export const api = {
     },
   },
   settings: {
-    get: () => fetchApi<any>('/api/settings'),
+    get: () => fetchApi<Settings>('/api/settings'),
     update: (data: { signature?: string; signature_image_url?: string; attachments_enabled?: boolean }) =>
-      fetchApi<any>('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
+      fetchApi<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
     customFormats: {
-      list: () => fetchApi<any[]>('/api/settings/custom-formats'),
+      list: () => fetchApi<CustomFormat[]>('/api/settings/custom-formats'),
       add: (data: { name: string; pattern: string; priority?: number }) =>
-        fetchApi<any>('/api/settings/custom-formats', { method: 'POST', body: JSON.stringify(data) }),
+        fetchApi<unknown>('/api/settings/custom-formats', { method: 'POST', body: JSON.stringify(data) }),
       delete: (id: number) =>
-        fetchApi<any>(`/api/settings/custom-formats/${id}`, { method: 'DELETE' }),
+        fetchApi<unknown>(`/api/settings/custom-formats/${id}`, { method: 'DELETE' }),
     },
   },
 };

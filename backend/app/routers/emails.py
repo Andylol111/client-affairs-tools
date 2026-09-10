@@ -9,7 +9,7 @@ from app.auth_deps import get_current_user, get_current_user_optional
 from app.models import EmailGenerateRequest, EmailGenerateResponse, EmailGenerateTemplateRequest
 from app.services.ollama_email_service import generate_email
 from app.services.gmail_api import send_via_gmail_api
-from app.services.settings_service import get_setting
+from app.services.settings_service import get_member_setting
 from app.services.usage_service import log_event
 
 router = APIRouter()
@@ -20,6 +20,18 @@ class TestSendRequest(BaseModel):
     subject: str
     body: str
     attachment_ids: Optional[list[int]] = None
+
+class DraftSaveRequest(BaseModel):
+    contact_id: int
+    subject: str = ""
+    body: str = ""
+
+
+class DraftUpdateRequest(BaseModel):
+    subject: str
+    body: str
+
+
 
 
 @router.post("/generate", response_model=EmailGenerateResponse)
@@ -50,7 +62,7 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
             value_proposition=req.value_proposition,
             model=req.model,
         )
-        signature = await get_setting("signature") or ""
+        signature = await get_member_setting(user["id"], "signature") or ""
         await db.execute(
             """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
                VALUES (?, ?, ?, ?, ?)""",
@@ -136,7 +148,7 @@ async def generate_email_template(
             contact_id = await _upsert_contact_by_email(
                 db, email=em, name=req.name, title=req.title, company=req.company
             )
-            signature = await get_setting("signature") or ""
+            signature = await get_member_setting(user["id"], "signature") or ""
             await db.execute(
                 """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
                    VALUES (?, ?, ?, ?, ?)""",
@@ -157,8 +169,8 @@ async def test_send_email(req: TestSendRequest, user: dict = Depends(get_current
     """Send a test email via Gmail API. Uses multipart (plain + HTML) with signature and signature image when set."""
     from app.services.gmail_api import send_via_gmail_api_multipart
     try:
-        signature = await get_setting("signature")
-        signature_image_url = await get_setting("signature_image_url") or None
+        signature = await get_member_setting(user["id"], "signature")
+        signature_image_url = await get_member_setting(user["id"], "signature_image_url") or None
         attachments_data = []
         if req.attachment_ids:
             from app.routers.attachments import get_attachment_data_for_send
@@ -178,6 +190,70 @@ async def test_send_email(req: TestSendRequest, user: dict = Depends(get_current
     except Exception as e:
         err = str(e)
         raise HTTPException(500, f"Failed to send: {err}")
+
+
+@router.post("/generated")
+async def save_generated_email_draft(
+    req: DraftSaveRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Persist a member-owned Studio draft for an existing shared contact."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT id FROM contacts WHERE id = ?", (req.contact_id,))
+        if not await cursor.fetchone():
+            raise HTTPException(404, "Contact not found")
+        cursor = await db.execute(
+            """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
+               VALUES (?, ?, ?, ?, ?)""",
+            (user["id"], req.contact_id, req.subject, req.body, await get_member_setting(user["id"], "signature") or ""),
+        )
+        await db.commit()
+        return {"id": int(cursor.lastrowid), "contact_id": req.contact_id, "subject": req.subject, "body": req.body}
+    finally:
+        await db.close()
+
+
+@router.patch("/generated/{draft_id}")
+async def update_generated_email_draft(
+    draft_id: int,
+    req: DraftUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Update a Studio draft only when it belongs to the current member."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE generated_emails SET subject = ?, body = ?
+               WHERE id = ? AND user_id = ?""",
+            (req.subject, req.body, draft_id, user["id"]),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "Draft not found")
+        return {"ok": True, "id": draft_id}
+    finally:
+        await db.close()
+
+
+@router.delete("/generated/{draft_id}")
+async def delete_generated_email_draft(
+    draft_id: int,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a Studio draft only when it belongs to the current member."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM generated_emails WHERE id = ? AND user_id = ?",
+            (draft_id, user["id"]),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "Draft not found")
+        return {"ok": True, "id": draft_id}
+    finally:
+        await db.close()
 
 
 @router.get("/generated")

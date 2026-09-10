@@ -11,6 +11,15 @@ from app.services.prospect_coordinator import load_prospects
 router = APIRouter()
 
 
+async def require_release_owner(db, release_id: int, user_id: int):
+    row = await (await db.execute('SELECT created_by FROM outreach_releases WHERE id=?',(release_id,))).fetchone()
+    if not row:
+        raise HTTPException(404,'Release not found')
+    if row['created_by'] != user_id:
+        raise HTTPException(403,'Only the release owner can change its contents')
+
+
+
 class ReleaseCreate(BaseModel):
     name: str
     row_indexes: list[int] = Field(default_factory=list)
@@ -123,6 +132,7 @@ async def mint_person(
 
     db = await get_db()
     try:
+        await require_release_owner(db, release_id, user["id"])
         cur = await db.execute(
             "SELECT * FROM outreach_release_targets WHERE id = ? AND release_id = ?",
             (target_id, release_id),
@@ -175,6 +185,7 @@ async def keep_or_drop_person(
 ):
     db = await get_db()
     try:
+        await require_release_owner(db, release_id, user["id"])
         cur = await db.execute(
             "SELECT * FROM outreach_release_people WHERE id = ? AND release_id = ?",
             (person_id, release_id),
@@ -277,6 +288,7 @@ async def _verifalia_if_configured(email: str) -> tuple[str | None, str | None]:
 async def rebuild_pack(release_id: int, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        await require_release_owner(db, release_id, user["id"])
         cur = await db.execute("SELECT id FROM outreach_releases WHERE id = ?", (release_id,))
         if not row_to_dict(await cur.fetchone()):
             raise HTTPException(404, "Release not found")

@@ -1,23 +1,22 @@
 import type { ReactNode } from 'react';
-import YucgPhotoBanner from './YucgPhotoBanner';
+
 
 type PageHeaderProps = {
   title: string;
   subtitle?: string;
   imageSrc?: string;
   actions?: ReactNode;
+  hero?: boolean;
 };
 
-export default function PageHeader({
-  title,
-  subtitle,
-  imageSrc = '/yucg-bg/hero-campus.jpg',
-  actions,
-}: PageHeaderProps) {
+export default function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
   return (
-    <div className="app-page-header">
-      <YucgPhotoBanner imageSrc={imageSrc} title={title} subtitle={subtitle} variant="hero" />
+    <header className="app-page-header">
+      <div>
+        <h1 className="text-2xl font-bold text-deep-navy dark:text-[var(--text-primary)]">{title}</h1>
+        {subtitle && <p className="mt-2 text-sm text-[var(--text-secondary)]">{subtitle}</p>}
+      </div>
       {actions ? <div className="app-page-header-actions">{actions}</div> : null}
-    </div>
+    </header>
   );
 }

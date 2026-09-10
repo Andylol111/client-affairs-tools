@@ -13,3 +13,16 @@ data
 backend/clientreach.db
 backend/attachments
 **/.DS_Store
+
+terraform/.terraform
+**/*.tfstate*
+**/*.tfplan
+**/backend.hcl
+**/*.auto.tfvars
+**/.env.*
+**/*.db-wal
+**/*.db-shm
+**/coverage.xml
+**/.coverage*
+frontend/test-results
+frontend/playwright-report

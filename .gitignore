@@ -24,3 +24,7 @@ docs/superpowers/
 .cursor/plans/
 **/*.canvas.tsx
 amplify.yml
+
+# Local test coverage artifacts
+backend/.coverage*
+backend/coverage.xml

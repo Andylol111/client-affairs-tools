@@ -1,7 +1,7 @@
 """
 Outreach API - Pipeline, notes, activities, templates, sequences, profile analysis, sentiment
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db, row_to_dict
@@ -349,6 +349,7 @@ async def mark_campaign_contact_replied(cc_id: int, user: dict = Depends(get_cur
 
 @router.post("/sync-inbox-replies")
 async def sync_inbox_replies(
+    background_tasks: BackgroundTasks,
     auto_sort_contacted: bool = True,
     user: dict = Depends(get_current_user),
 ):
@@ -360,7 +361,23 @@ async def sync_inbox_replies(
     """
     from app.services.gmail_reply_sync import sync_replies_for_user
 
-    return await sync_replies_for_user(user["id"], auto_sort_contacted=auto_sort_contacted)
+    background_tasks.add_task(sync_replies_for_user, user["id"], auto_sort_contacted=auto_sort_contacted)
+    return {"ok": True, "in_progress": True}
+
+
+@router.get("/sync-status")
+async def inbox_sync_status(user: dict = Depends(get_current_user)):
+    from app.services.message_tracking import sync_in_progress
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT last_success_at, last_attempt_at, error FROM gmail_sync_state WHERE user_id = ?",
+            (user["id"],),
+        )).fetchone()
+        state = dict(row) if row else {"last_success_at": None, "error": None}
+        return {**state, "in_progress": sync_in_progress(user["id"])}
+    finally:
+        await db.close()
 
 
 @router.post("/auto-sort-pipeline")

@@ -10,7 +10,9 @@ export type NavItemId =
   | 'analytics'
   | 'outreach'
   | 'yucgoutreach'
-  | 'admin';
+  | 'admin'
+  | 'documents'
+  | 'projects';
 
 export type NavItem = {
   id: NavItemId;
@@ -22,12 +24,14 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', to: '/', label: 'Home', shortLabel: 'Home' },
+  { id: 'projects', to: '/projects', label: 'Projects', shortLabel: 'Projects' },
+  { id: 'documents', to: '/documents', label: 'Documents', shortLabel: 'Documents' },
   { id: 'yucgoutreach', to: '/yucgoutreach', label: 'Week', shortLabel: 'Week' },
-  { id: 'studio', to: '/studio', label: 'Studio', shortLabel: 'Write' },
-  { id: 'campaigns', to: '/campaigns', label: 'Send', shortLabel: 'Send' },
-  { id: 'outreach', to: '/outreach', label: 'Pipeline', shortLabel: 'CRM' },
-  { id: 'scraper', to: '/scraper', label: 'Find', shortLabel: 'Find' },
-  { id: 'analytics', to: '/analytics', label: 'Stats', shortLabel: 'Stats' },
+  { id: 'studio', to: '/studio', label: 'Drafts', shortLabel: 'Drafts' },
+  { id: 'campaigns', to: '/campaigns', label: 'Campaigns', shortLabel: 'Campaigns' },
+  { id: 'outreach', to: '/outreach', label: 'Pipeline', shortLabel: 'Pipeline' },
+  { id: 'scraper', to: '/scraper', label: 'Prospects', shortLabel: 'Prospects' },
+  { id: 'analytics', to: '/analytics', label: 'Results', shortLabel: 'Results' },
 ];
 
 export const ADMIN_NAV_ITEM: NavItem = {
