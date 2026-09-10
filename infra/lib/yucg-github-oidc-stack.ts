@@ -6,6 +6,8 @@ export interface YucgGithubOidcStackProps extends cdk.StackProps {
   envName: string;
   githubOwner: string;
   githubRepo: string;
+  deploymentEnvironment?: "beta" | "production";
+  githubProviderArn?: string;
 }
 
 /**
@@ -18,22 +20,23 @@ export class YucgGithubOidcStack extends cdk.Stack {
     const { envName, githubOwner, githubRepo } = props;
     const repo = `${githubOwner}/${githubRepo}`;
 
-    const provider = new iam.OpenIdConnectProvider(this, "GitHub", {
+    const deploymentEnvironment = props.deploymentEnvironment || "production";
+    const provider = props.githubProviderArn
+      ? iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(this, "GitHub", props.githubProviderArn)
+      : new iam.OpenIdConnectProvider(this, "GitHub", {
       url: "https://token.actions.githubusercontent.com",
       clientIds: ["sts.amazonaws.com"],
     });
 
     const role = new iam.Role(this, "Ship", {
       roleName: `yucg-github-ship-${envName}`,
-      description: "GitHub Actions image push + SSM restart on main (OIDC)",
+      description: `GitHub Actions image push + SSM restart for ${deploymentEnvironment} (OIDC)`,
       assumedBy: new iam.FederatedPrincipal(
         provider.openIdConnectProviderArn,
         {
           StringEquals: {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          },
-          StringLike: {
-            "token.actions.githubusercontent.com:sub": `repo:${repo}:environment:production`,
+            "token.actions.githubusercontent.com:sub": `repo:${repo}:environment:${deploymentEnvironment}`,
           },
         },
         "sts:AssumeRoleWithWebIdentity",
@@ -41,6 +44,10 @@ export class YucgGithubOidcStack extends cdk.Stack {
     });
 
     // Application shipping does not own infrastructure or read application secrets.
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["ec2:DescribeInstances", "ec2:DescribeSecurityGroups", "ec2:DescribeVolumes"],
+      resources: ["*"], // EC2 Describe APIs do not support resource-level permissions.
+    }));
     role.addToPolicy(new iam.PolicyStatement({
       actions: ["ecr:GetAuthorizationToken", "ssm:GetCommandInvocation"], resources: ["*"],
     }));

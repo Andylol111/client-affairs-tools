@@ -71,24 +71,19 @@ CRITICAL: The email must read like it was written by a human who did their homew
 Respond with ONLY valid JSON in this exact format (no markdown, no explanation):
 {{"subject": "Your compelling subject line here", "body": "Full email body here. Use \\n for line breaks."}}"""
 
+    from fastapi import HTTPException
     try:
         from app.services.llm import complete_json
 
         data = complete_json(prompt, model_id=model)
-        if data:
-            subject = data.get("subject", "Quick question")
-            body = (data.get("body") or "").replace("\\n", "\n")
+        if data and isinstance(data.get('subject'), str) and isinstance(data.get('body'), str) and data['body'].strip():
+            subject = data['subject']
+            body = data['body'].replace("\\n", "\n")
             return subject, body
         raise RuntimeError("Model returned no JSON")
 
-    except Exception as e:
-        # Fallback to a simple template if Ollama fails
-        subject = f"Quick question for {contact_name or 'you'} at {company_name or 'your company'}"
-        body = f"""Hi {contact_name or 'there'},
-
-I noticed you're {contact_title or 'in a key role'} at {company_name or 'your company'}. I'd love to share how {value_proposition or 'we help companies like yours'} achieve better results.
-
-Would you be open to a brief conversation this week?
-
-Best regards"""
-        return subject, body
+    except HTTPException:
+        raise
+    except Exception as error:
+        # Never present a fabricated template as a successful AI generation.
+        raise HTTPException(502, 'Draft generation failed. Your existing draft is unchanged; please retry.') from error

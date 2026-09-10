@@ -32,3 +32,9 @@ Both promotion branches use the same aggregate gate: `feature-ruleset.proposed.j
 When feature is behind main, synchronize main into develop and promote that merge through a passing develop-to-feature PR. Direct protected-head updates are rejected by design; do not bypass the rule to synchronize branches.
 
 The deployed ship role was found to have account-wide infrastructure permissions. The reviewed replacement in `ship-role-policy.proposed.json` limits it to reading the existing stack, pushing to the existing ECR repository, sending `AWS-RunShellScript` to the existing instance, and reading that command's result. `ship-role-trust.proposed.json` limits OIDC to this repository's protected `production` environment. Preserve the old documents privately before applying either change, update policy before trust, and verify both afterward.
+
+Staged delivery activation that is still local:
+
+- Create the `beta` environment from `beta-environment.proposed.json` and bind it to `feature` with `beta-branch.proposed.json`. Do not point beta at `i-09a071e22270b027c`.
+- Configure `PROMOTION_APP_ID` and `PROMOTION_APP_PRIVATE_KEY` for the repository-scoped GitHub App. Until those exist, `Promote verified changes` fails visibly instead of silently stalling.
+- Keep required status check context `required-checks` on feature and main. Intake, Beta, and Production each still emit that job name.

@@ -399,10 +399,11 @@ async def auto_sort_pipeline(user: dict = Depends(get_current_user)):
 # --- Email verification ---
 @router.get("/verify-email")
 async def verify_email(email: str, user: dict = Depends(get_current_user)):
-    from app.services.email_verifier import verify_email_format
+    from app.services.email_verifier import verify_email_format, verify_email_deliverability
     result = verify_email_format(email)
     if result["valid"]:
-        return {"valid": True, "email": email.strip().lower()}
+        checks = await verify_email_deliverability(email, smtp_probe=False)
+        return {"valid": True, "email": email.strip().lower(), "syntax_valid": True, **checks}
     return {"valid": False, "reason": result.get("reason", "Invalid")}
 
 

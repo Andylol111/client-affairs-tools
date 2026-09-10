@@ -28,6 +28,8 @@ critical_modules = [
     'app/routers/invitations.py', 'app/routers/workspace.py',
     'app/services/dispatch_service.py', 'app/services/dispatch_recovery.py',
     'app/services/mail_address.py',
+    'app/services/delivery_policy.py', 'app/services/generation_policy.py',
+    'app/services/llm.py', 'app/services/email_verifier.py',
 ]
 for module in critical_modules:
     if execute('report', '--include=' + module, '--fail-under=80'):

@@ -13,6 +13,7 @@ from email.mime.base import MIMEBase
 from typing import Optional, Any
 import httpx
 from app.services.mail_address import validate_recipient, validate_header
+from app.services.delivery_policy import require_delivery_enabled
 
 GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
 GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
@@ -127,6 +128,7 @@ async def send_via_gmail_api(
     Send email via Gmail API using the user's OAuth tokens.
     Returns True on success, raises on failure.
     """
+    require_delivery_enabled()
     validate_recipient(to_email)
     validate_header(subject)
     validate_header(from_name or "")
@@ -212,6 +214,7 @@ async def send_via_gmail_api_multipart(
     attachments: Optional[list[tuple[bytes, str, str]]] = None,
 ) -> bool:
     """Send email as multipart (plain + HTML) with optional signature and signature image. No tracking pixel."""
+    require_delivery_enabled()
     validate_recipient(to_email)
     validate_header(subject)
     validate_header(from_name or "")
@@ -272,6 +275,7 @@ async def send_via_gmail_api_with_tracking(
     """
     from app.routers.track import get_tracking_pixel_url
 
+    require_delivery_enabled()
     validate_recipient(to_email)
     validate_header(subject)
     validate_header(from_name or "")
