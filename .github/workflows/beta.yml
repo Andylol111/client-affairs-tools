@@ -107,7 +107,7 @@ jobs:
         run: python3 scripts/release_version.py
   promote:
     needs: outcome
-    if: success()
+    if: ${{ !cancelled() && needs.outcome.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

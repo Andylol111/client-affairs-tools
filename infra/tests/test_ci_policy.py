@@ -35,6 +35,13 @@ class PolicyTests(unittest.TestCase):
         text = Path(__file__).parents[2].joinpath('.github/workflows/intake.yml').read_text()
         self.assertIn('mode=promote', text)
         self.assertIn("needs.route.outputs.mode == 'tests'", text)
+        self.assertIn("needs.required-checks.result == 'success'", text)
+
+    def test_promote_runs_when_an_optional_job_is_skipped(self):
+        root = Path(__file__).parents[2].joinpath('.github/workflows')
+        for name in ('intake.yml', 'beta.yml', 'production.yml'):
+            text = root.joinpath(name).read_text()
+            self.assertNotIn('if: success()', text, name)
 
     def test_security_is_skippable_on_ship(self):
         text = Path(__file__).parents[2].joinpath('.github/workflows/verify.yml').read_text()
