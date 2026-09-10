@@ -32,46 +32,39 @@ jobs:
       EXPECTED_ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
       DATA_OWNER_MIGRATION_APPROVED: ${{ vars.DATA_OWNER_MIGRATION_APPROVED }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Require an explicit environment binding
-        id: bind
         env:
           ROLE: ${{ vars.AWS_SHIP_ROLE_ARN }}
         run: |
-          if [ -z "$ROLE" ] || [ -z "$AWS_REGION" ] || [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$AWS_STACK_NAME" ] || [ -z "$AWS_INSTANCE_ID" ] || [ -z "$YUCG_ENV" ]; then
-            echo 'Ship binding is incomplete. Verification already passed; the live box was not touched.' >> "$GITHUB_STEP_SUMMARY"
-            echo bound=false >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          test -n "$ROLE"
+          test -n "$AWS_REGION"
+          test -n "$AWS_ACCOUNT_ID"
+          test -n "$AWS_STACK_NAME"
+          test -n "$AWS_INSTANCE_ID"
+          test -n "$YUCG_ENV"
           [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]
           case "$DEPLOYMENT_ENV:$GITHUB_REF" in
             beta:refs/heads/feature|production:refs/heads/main) ;;
             *) exit 1 ;;
           esac
-          echo bound=true >> "$GITHUB_OUTPUT"
-      - if: steps.bind.outputs.bound == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - if: steps.bind.outputs.bound == 'true'
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
           role-to-assume: ${{ vars.AWS_SHIP_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
           retry-max-attempts: 3
-      - if: steps.bind.outputs.bound == 'true'
-        name: Install the ECR credential helper
+      - name: Install the ECR credential helper
         run: sudo apt-get update -qq && sudo apt-get install -y amazon-ecr-credential-helper
-      - if: steps.bind.outputs.bound == 'true'
-        name: Verify actual AWS target security before deployment
+      - name: Verify actual AWS target security before deployment
         run: python3 infra/scripts/check_deployment.py
-      - if: steps.bind.outputs.bound == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: yucg-image-${{ github.sha }}
           path: /tmp/yucg-image
-      - if: steps.bind.outputs.bound == 'true'
-        name: Push verified image and restart box
+      - name: Push verified image and restart box
         run: |
           set -euo pipefail
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
@@ -125,8 +118,7 @@ jobs:
           aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$ID" --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}'
           test "$STATUS" = Success
 
-      - if: steps.bind.outputs.bound == 'true'
-        name: Verify public application health
+      - name: Verify public application health
         env:
           HEALTH_URL: ${{ vars.HEALTH_URL }}
         run: |

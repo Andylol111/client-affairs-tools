@@ -42,7 +42,7 @@ jobs:
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
     needs: [required-checks, verify]
-    if: needs.verify.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.AWS_INSTANCE_ID != '' && vars.AWS_SHIP_ROLE_ARN != ''
+    if: needs.verify.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/deploy.yml
     with:
       environment: production
@@ -63,18 +63,11 @@ jobs:
           RUNTIME: ${{ needs.verify.outputs.runtime }}
           VERIFIED: ${{ needs.required-checks.result }}
           DEPLOYED: ${{ needs.deploy.result }}
-          ROLE: ${{ vars.AWS_SHIP_ROLE_ARN }}
-          HOST: ${{ vars.AWS_INSTANCE_ID }}
         run: |
           test "$VERIFIED" = success
           if { [ "$EVENT" = push ] || [ "$EVENT" = workflow_dispatch ]; } && [ "$REF" = refs/heads/main ] && [ "$RUNTIME" = true ]; then
-            if [ -z "$ROLE" ] || [ -z "$HOST" ]; then
-              test "$DEPLOYED" = skipped
-              echo 'Production verification passed. No ship binding (AWS_SHIP_ROLE_ARN / AWS_INSTANCE_ID), so the live box was not touched.' >> "$GITHUB_STEP_SUMMARY"
-            else
-              test "$DEPLOYED" = success
-              echo 'production deployment and health checks passed.' >> "$GITHUB_STEP_SUMMARY"
-            fi
+            test "$DEPLOYED" = success
+            echo 'production deployment and health checks passed.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'No deployment: PR/manual verification, non-main ref, or no runtime changes. All selected checks passed.' >> "$GITHUB_STEP_SUMMARY"
           fi

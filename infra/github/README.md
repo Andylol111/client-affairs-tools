@@ -36,5 +36,5 @@ The deployed ship role was found to have account-wide infrastructure permissions
 Staged delivery activation that is still local:
 
 - Create the `beta` environment from `beta-environment.proposed.json` and bind it to `feature` with `beta-branch.proposed.json`. Do not point beta at `i-09a071e22270b027c`. Until a separate box exists, leave repository variable `BETA_AWS_INSTANCE_ID` empty so Beta verifies and explains the skipped deploy.
-- Intake, Beta, and Production advance the next club branch themselves after required checks pass. There is no separate Promote workflow. Production ship stays skipped until `AWS_SHIP_ROLE_ARN` and `AWS_INSTANCE_ID` are set on the production environment.
+- Intake, Beta, and Production advance the next club branch themselves after required checks pass. There is no separate Promote workflow. Production ship uses the `production` environment bindings (role, instance, health URL). Beta still skips deploy until `BETA_AWS_INSTANCE_ID` names a box that is not the live instance.
 - Keep required status check context `required-checks` on feature and main. Intake, Beta, and Production each still emit that job name.
