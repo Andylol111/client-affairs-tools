@@ -18,6 +18,11 @@ infra/dist/
 
 # Planning / agent scratch (product docs stay: infra/README.md, data/README.md)
 AGENTS.md
+MEMORY.md
+memory.md
+Modelfile
+IMPLEMENTATION.md
+docs/LOCAL-AI-STRATEGY.md
 docs/plans/
 docs/superpowers/
 **/*.plan.md

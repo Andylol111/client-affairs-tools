@@ -33,7 +33,12 @@ export default function Campaigns() {
   };
 
   useEffect(() => {
-    void refresh();
+    api.campaigns.list().then((rows) => {
+      setCampaigns(rows);
+      setError('');
+    }).catch((requestError) => {
+      setError((requestError as Error).message);
+    });
   }, []);
 
   useEffect(() => {

@@ -46,7 +46,4 @@ bash scripts/ollama_create_yucg.sh
 
 Corpus output: `data/yucg_website_corpus.txt`. Requires `data/YUCG_Prospect_List.xlsx`.
 
-## See also
-
-- **MEMORY.md** (repo root) — Stack, conventions, last worked on; update so both local and cloud models stay in sync.
-- **Modelfile** (repo root) — Ollama system prompt: `ollama create clientreach -f Modelfile` then `ollama run clientreach`.
+Local assistant scratch (`MEMORY.md`, `Modelfile`) stays on the laptop and is gitignored.

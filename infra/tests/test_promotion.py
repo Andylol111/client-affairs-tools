@@ -128,6 +128,79 @@ class PromotionTests(unittest.TestCase):
         self.assertFalse(promotion.dependency_files_allowed([]))
         self.assertTrue(promotion.dependency_files_allowed([{'filename': 'frontend/package-lock.json'}]))
 
+    def test_actions_token_dispatches_next_stage_after_merge_and_open(self):
+        posts = []
+
+        def fake_api(path, method='GET', payload=None):
+            if method == 'POST':
+                posts.append((path, payload))
+                return {'number': 8}
+            if path.endswith('/branches/develop'):
+                return {'commit': {'sha': 'verified'}}
+            if '/compare/' in path:
+                return {'behind_by': 0, 'files': [{'filename': 'backend/main.py'}]}
+            if '/pulls?' in path:
+                return []
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.dict(promotion.os.environ, {'PROMOTION_DISPATCH': '1'}), \
+             patch.object(promotion, 'api', side_effect=fake_api), \
+             patch.object(promotion.subprocess, 'run'):
+            promotion.process(self.event('Intake', 'push', 'develop'), self.repo)
+        self.assertEqual(posts[-1], ('repos/club/tools/actions/workflows/beta.yml/dispatches',
+                                     {'ref': 'develop'}))
+
+        posts.clear()
+        pr = self.pr()
+
+        def merge_api(path, method='GET', payload=None):
+            if method == 'POST':
+                posts.append((path, payload))
+                return {}
+            if path.endswith('/pulls/7'):
+                return deepcopy(pr)
+            if '/reviews?' in path or '/files?' in path:
+                return []
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.dict(promotion.os.environ, {'PROMOTION_DISPATCH': '1'}), \
+             patch.object(promotion, 'api', side_effect=merge_api), \
+             patch.object(promotion.subprocess, 'run'):
+            promotion.process(self.event(), self.repo)
+        self.assertEqual(posts, [('repos/club/tools/actions/workflows/intake.yml/dispatches',
+                                  {'ref': 'develop'})])
+
+    def test_dispatch_verification_merges_promotion_pr_by_head_sha(self):
+        pr = self.pr(labels=[], base={'ref': 'feature'}, head={'ref': 'develop', 'sha': 'verified',
+                                                              'repo': {'full_name': self.repo}})
+        event = self.event('Beta', 'workflow_dispatch', 'develop')
+        event['workflow_run']['pull_requests'] = []
+        reads = {'pull': 0}
+
+        def fake_api(path, method='GET', payload=None):
+            if path.endswith('/pulls?state=open&per_page=100'):
+                return [pr]
+            if path.endswith('/pulls/7'):
+                reads['pull'] += 1
+                return deepcopy(pr)
+            if '/reviews?' in path:
+                return []
+            if path.endswith('/branches/develop'):
+                return {'commit': {'sha': 'verified'}}
+            if '/compare/' in path:
+                return {'behind_by': 0, 'files': []}
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.object(promotion, 'api', side_effect=fake_api), patch.object(promotion.subprocess, 'run') as merge:
+            promotion.process(event, self.repo)
+            self.assertEqual(len(merge.call_args_list), 1)
+
+    def test_promote_workflow_uses_actions_token_without_failing_closed(self):
+        text = Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').read_text()
+        self.assertNotIn('exit 1', text)
+        self.assertIn('github.token', text)
+        self.assertIn('PROMOTION_DISPATCH', text)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -162,27 +162,17 @@ export default function Outreach() {
   }, []);
 
   useEffect(() => {
-    if (selectedCampaign?.id) {
-      api.outreach.campaigns.get(selectedCampaign.id).then((c) => {
-        setCampaignContacts(c.contacts || []);
-      }).catch(() => setCampaignContacts([]));
-    } else {
-      setCampaignContacts([]);
-    }
+    if (!selectedCampaign?.id) return;
+    api.outreach.campaigns.get(selectedCampaign.id).then((c) => {
+      setCampaignContacts(c.contacts || []);
+    }).catch(() => setCampaignContacts([]));
   }, [selectedCampaign?.id]);
 
   useEffect(() => {
-    if (selectedContact?.id) {
-      setEmailVerified(null);
-      api.outreach.notes.list(selectedContact.id).then(setNotes).catch(() => setNotes([]));
-      api.outreach.activities.list(selectedContact.id).then(setActivities).catch(() => setActivities([]));
-      api.outreach.profile.get(selectedContact.id).then(setProfile).catch(() => setProfile(null));
-    } else {
-      setNotes([]);
-      setActivities([]);
-      setProfile(null);
-      setEmailVerified(null);
-    }
+    if (!selectedContact?.id) return;
+    api.outreach.notes.list(selectedContact.id).then(setNotes).catch(() => setNotes([]));
+    api.outreach.activities.list(selectedContact.id).then(setActivities).catch(() => setActivities([]));
+    api.outreach.profile.get(selectedContact.id).then(setProfile).catch(() => setProfile(null));
   }, [selectedContact?.id]);
 
   const updatePipeline = async (contactId: number, status: string) => {
@@ -557,7 +547,7 @@ export default function Outreach() {
                               contacts={companyContacts}
                               selectedContact={selectedContact}
                               selectedIds={selectedContactIds}
-                              onSelect={setSelectedContact}
+                              onSelect={(c) => { setSelectedContact(c); setEmailVerified(null); }}
                               onToggleSelect={toggleContactSelection}
                               onUpdatePipeline={updatePipeline}
                               draggable={!groupByCompany}
@@ -570,7 +560,7 @@ export default function Outreach() {
                               c={c}
                               selectedContact={selectedContact}
                               selectedIds={selectedContactIds}
-                              onSelect={setSelectedContact}
+                              onSelect={(c) => { setSelectedContact(c); setEmailVerified(null); }}
                               onToggleSelect={toggleContactSelection}
                               onUpdatePipeline={updatePipeline}
                               draggable={true}
@@ -804,7 +794,7 @@ export default function Outreach() {
                 <div className="flex justify-between items-start">
                   <h3 className="font-semibold text-deep-navy">Contact: {selectedContact.name || selectedContact.email}</h3>
                   <button
-                    onClick={() => setSelectedContact(null)}
+                    onClick={() => { setSelectedContact(null); setEmailVerified(null); }}
                     className="text-sm text-slate-500 hover:text-slate-700"
                   >
                     ✕ Clear Selection

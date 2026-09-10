@@ -35,6 +35,6 @@ The deployed ship role was found to have account-wide infrastructure permissions
 
 Staged delivery activation that is still local:
 
-- Create the `beta` environment from `beta-environment.proposed.json` and bind it to `feature` with `beta-branch.proposed.json`. Do not point beta at `i-09a071e22270b027c`.
-- Configure `PROMOTION_APP_ID` and `PROMOTION_APP_PRIVATE_KEY` for the repository-scoped GitHub App. Until those exist, `Promote verified changes` fails visibly instead of silently stalling.
+- Create the `beta` environment from `beta-environment.proposed.json` and bind it to `feature` with `beta-branch.proposed.json`. Do not point beta at `i-09a071e22270b027c`. Until a separate box exists, leave repository variable `BETA_AWS_INSTANCE_ID` empty so Beta verifies and explains the skipped deploy.
+- Promotion uses `GITHUB_TOKEN` by default and dispatches the next stage after a merge or after opening develop→feature / feature→main. Optional `PROMOTION_APP_ID` / `PROMOTION_APP_PRIVATE_KEY` avoid the dispatch step because App-created events start workflows on their own. Repository Actions must allow GitHub Actions to create pull requests.
 - Keep required status check context `required-checks` on feature and main. Intake, Beta, and Production each still emit that job name.

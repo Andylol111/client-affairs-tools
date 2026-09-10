@@ -192,16 +192,6 @@ function CoordinatorPanel() {
   const [boardTotal, setBoardTotal] = useState<number | null>(null);
   const [sourceMeta, setSourceMeta] = useState<YucgProspectsMeta | null>(null);
 
-  const loadMeta = useCallback(async () => {
-    try {
-      const meta = await api.yucg.prospectsMeta();
-      setSourceMeta(meta);
-      if (meta.sectors?.length) setSectors([...meta.sectors].sort());
-    } catch {
-      /* meta optional — sectors fall back from board rows */
-    }
-  }, []);
-
   const loadBoard = useCallback(async () => {
     setLoadingBoard(true);
     setBoardError(null);
@@ -243,8 +233,13 @@ function CoordinatorPanel() {
   }, [loadBoard]);
 
   useEffect(() => {
-    loadMeta();
-  }, [loadMeta]);
+    api.yucg.prospectsMeta().then((meta) => {
+      setSourceMeta(meta);
+      if (meta.sectors?.length) setSectors([...meta.sectors].sort());
+    }).catch(() => {
+      /* meta optional — sectors fall back from board rows */
+    });
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -658,10 +653,6 @@ function CombPanel() {
   const [mintTitle, setMintTitle] = useState('');
   const [mintTargetId, setMintTargetId] = useState<number | ''>('');
 
-  const loadReleases = useCallback(() => {
-    api.yucg.listReleases().then(setReleases).catch(() => setReleases([]));
-  }, []);
-
   const loadRelease = useCallback(async (id: number) => {
     setBusy(true);
     setError(null);
@@ -677,24 +668,25 @@ function CombPanel() {
   }, []);
 
   useEffect(() => {
-    loadReleases();
-  }, [loadReleases]);
+    api.yucg.listReleases().then(setReleases).catch(() => setReleases([]));
+  }, []);
 
   useEffect(() => {
-    if (releaseId) loadRelease(Number(releaseId));
-    else {
-      setRelease(null);
-      setInbox([]);
-    }
-  }, [releaseId, loadRelease]);
+    if (!releaseId) return;
+    Promise.all([api.yucg.getRelease(Number(releaseId)), api.yucg.releaseInbox(Number(releaseId)).catch(() => [])])
+      .then(([rel, box]) => {
+        setRelease(rel);
+        setInbox(box);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Could not load release'));
+  }, [releaseId]);
 
-  useEffect(() => {
-    const first = release?.targets?.[0]?.id;
-    if (first && mintTargetId === '') setMintTargetId(first);
-  }, [release, mintTargetId]);
-
-  const people = useMemo(() => release?.people || [], [release]);
-  const targets: NonNullable<Release["targets"]> = release?.targets || [];
+  const activeRelease = typeof releaseId === 'number' && release?.id === releaseId ? release : null;
+  const people = useMemo(() => activeRelease?.people || [], [activeRelease]);
+  const targets = useMemo(() => activeRelease?.targets || [], [activeRelease]);
+  const targetIds = useMemo(() => new Set(targets.map((t) => t.id)), [targets]);
+  const resolvedMintTarget = mintTargetId !== '' && targetIds.has(mintTargetId) ? mintTargetId : (targets[0]?.id ?? '');
+  const activeInbox = activeRelease ? inbox : [];
   const grouped = useMemo(() => {
     const map = new Map<string, ReleasePerson[]>();
     for (const p of people) {
@@ -719,10 +711,10 @@ function CombPanel() {
   };
 
   const mint = async () => {
-    if (!releaseId || !mintTargetId || !mintName.trim()) return;
+    if (!releaseId || !resolvedMintTarget || !mintName.trim()) return;
     setBusy(true);
     try {
-      await api.yucg.mintPerson(Number(releaseId), Number(mintTargetId), {
+      await api.yucg.mintPerson(Number(releaseId), Number(resolvedMintTarget), {
         full_name: mintName.trim(),
         title: mintTitle.trim() || undefined,
       });
@@ -766,14 +758,14 @@ function CombPanel() {
         {error && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
       </div>
 
-      {release && (
+      {activeRelease && (
         <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 space-y-4">
           <h2 className="text-lg font-semibold text-deep-navy">Mint a candidate</h2>
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-slate-600">
               Company
               <select aria-label="Target company"
-                value={mintTargetId}
+                value={resolvedMintTarget}
                 onChange={(e) => setMintTargetId(e.target.value ? Number(e.target.value) : '')}
                 className="block mt-1 px-3 py-2 rounded-lg border border-pale-sky text-sm bg-white"
               >
@@ -798,7 +790,7 @@ function CombPanel() {
             />
             <button
               type="button"
-              disabled={busy || !mintName.trim() || !mintTargetId}
+              disabled={busy || !mintName.trim() || !resolvedMintTarget}
               onClick={mint}
               className="px-3 py-2 rounded-lg bg-deep-navy text-white text-sm disabled:opacity-50"
             >
@@ -847,10 +839,10 @@ function CombPanel() {
         </div>
       ))}
 
-      {release && (
+      {activeRelease && (
         <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 space-y-3">
           <h2 className="text-lg font-semibold text-deep-navy">Inbox (sent / replied / bounced)</h2>
-          {inbox.length === 0 ? (
+          {activeInbox.length === 0 ? (
             <p className="text-sm text-slate-600">No campaign rows for kept people yet.</p>
           ) : (
             <table className="min-w-full text-sm ingestion-table">
@@ -862,7 +854,7 @@ function CombPanel() {
                 </tr>
               </thead>
               <tbody>
-                {inbox.map((row) => (
+                {activeInbox.map((row) => (
                   <tr key={row.id} className="border-t border-pale-sky/60">
                     <td className="px-3 py-2">{row.name || '—'}</td>
                     <td className="px-3 py-2 font-mono text-xs">{row.email}</td>
