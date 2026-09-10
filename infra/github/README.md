@@ -30,3 +30,5 @@ When another maintainer is available, review `main-ruleset.future-reviewers.json
 Both promotion branches use the same aggregate gate: `feature-ruleset.proposed.json` targets ruleset 22605434 and `main-ruleset.proposed.json` targets 22605433. Both were activated after candidate d616543 passed all hosted checks. Branch progression remains develop → feature → main, with topic PRs also permitted.
 
 When feature is behind main, synchronize main into develop and promote that merge through a passing develop-to-feature PR. Direct protected-head updates are rejected by design; do not bypass the rule to synchronize branches.
+
+The deployed ship role was found to have account-wide infrastructure permissions. The reviewed replacement in `ship-role-policy.proposed.json` limits it to reading the existing stack, pushing to the existing ECR repository, sending `AWS-RunShellScript` to the existing instance, and reading that command's result. `ship-role-trust.proposed.json` limits OIDC to this repository's protected `production` environment. Preserve the old documents privately before applying either change, update policy before trust, and verify both afterward.
