@@ -208,6 +208,7 @@ class PromotionTests(unittest.TestCase):
     def test_intake_advances_branches_without_a_fourth_workflow(self):
         text = Path(__file__).parents[2].joinpath('.github/workflows/intake.yml').read_text()
         self.assertIn('PROMOTION_STAGE: Intake', text)
+        self.assertIn("needs.required-checks.result == 'success'", text)
         self.assertFalse(Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').exists())
 
 

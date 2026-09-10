@@ -36,5 +36,6 @@ The deployed ship role was found to have account-wide infrastructure permissions
 Staged delivery activation that is still local:
 
 - Create the `beta` environment from `beta-environment.proposed.json` and bind it to `feature` with `beta-branch.proposed.json`. Do not point beta at `i-09a071e22270b027c`. Until a separate box exists, leave repository variable `BETA_AWS_INSTANCE_ID` empty so Beta verifies and explains the skipped deploy.
-- Intake, Beta, and Production advance the next club branch themselves after required checks pass. There is no separate Promote workflow. Production ship uses the `production` environment bindings (role, instance, health URL). Beta still skips deploy until `BETA_AWS_INSTANCE_ID` names a box that is not the live instance.
+- Intake, Beta, and Production are three different waterfalls. Intake tests topic PRs and never builds an image or deploys; a develop push only promotes. Beta PRs run the full candidate including image; a feature push rebuilds the image and deploys only if `BETA_AWS_INSTANCE_ID` names a box that is not the live instance. Production PRs prove every boundary; a main push rebuilds the image and ships the live box. There is no separate Promote workflow.
 - Keep required status check context `required-checks` on feature and main. Intake, Beta, and Production each still emit that job name.
+- Dependabot opens at most one monthly npm PR on develop. Actions and Terraform ecosystems are not polled. The Actions "Copilot" entry is a GitHub-owned reviewer and cannot be disabled from the workflow list.
