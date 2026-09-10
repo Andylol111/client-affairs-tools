@@ -4,9 +4,23 @@
 
 Review date: 2026-09-09. Proposed workflow, not deployed configuration. Complements [the application review](FRONTEND-AND-MEMBERSHIP-REVIEW.md). Repository rules, GitHub plan entitlements and deployed IAM policies were not inspected in this pass.
 
-## Current workflow findings
+## Current staged delivery
 
-`.github/workflows/ci.yml` permits only develop → feature, develop → main and feature → main PRs. Develop pushes skip verification. A permanent branch called feature adds a promotion step without giving each change an isolated review. Prefer short-lived topic branches into main; if a shared integration environment is necessary, retain develop deliberately rather than keeping both integration branches by default. Changing branch policy requires coordinating repository rules and contributor practice.
+The single `verify and ship` workflow is gone. Three named workflows share `.github/workflows/verify.yml`:
+
+| Stage | Trigger | Deploys |
+| --- | --- | --- |
+| **Intake** | PR/push to `develop` | Never |
+| **Beta** | PR `develop` → `feature`; push to `feature` | Beta box on runtime pushes |
+| **Production** | PR `feature` → `main`; push to `main` | Live box on runtime pushes, after the `production` environment approval |
+
+`scripts/ci_policy.py` chooses which checks a diff requires. A skipped job is a failure unless that policy excluded it. `scripts/promote.py` opens the next promotion PR after a successful push, and merges an eligible PR only after that stage's own required checks pass on the exact head SHA. Holds, drafts, requested changes, and closed-unmerged promotions stop the candidate. Terraform apply and optional static publishing stay on separate reviewed workflows.
+
+Docker no longer stores an ECR password in `~/.docker/config.json`; runners and the box use `amazon-ecr-credential-helper`. Publish-static is not part of every main run: it publishes the frontend already baked into a successful Production image, and only after a manual dispatch with that run ID.
+
+## Review-baseline workflow findings
+
+The 2026-09-09 review described `.github/workflows/ci.yml`, which permitted only develop → feature, develop → main and feature → main PRs and skipped verification on develop pushes. A permanent branch called feature added a promotion step without giving each change an isolated review. Prefer short-lived topic branches into main; if a shared integration environment is necessary, retain develop deliberately rather than keeping both integration branches by default. Changing branch policy requires coordinating repository rules and contributor practice.
 
 Existing positives: read-only default token, AWS OIDC for shipping, serialized main workflow runs, backend scripts, frontend TypeScript/build, and infrastructure TypeScript checks.
 

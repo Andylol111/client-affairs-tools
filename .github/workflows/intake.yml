@@ -1,0 +1,39 @@
+name: Intake
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce promotion direction
+        env:
+          EVENT: ${{ github.event_name }}
+          SAME_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          # Device → develop: any same-repo topic branch. Forks stay out of Intake.
+          if [ "$EVENT" = pull_request ]; then
+            test "$SAME_REPOSITORY" = true
+          fi
+  verify:
+    needs: route
+    uses: ./.github/workflows/verify.yml
+    with:
+      stage: intake
+  required-checks:
+    if: always()
+    needs: [route, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful stage verification
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'

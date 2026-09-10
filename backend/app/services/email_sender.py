@@ -46,6 +46,8 @@ async def send_email(
     Send email via Gmail SMTP.
     Returns True on success, raises on failure.
     """
+    from app.services.delivery_policy import require_delivery_enabled
+    require_delivery_enabled()
     gmail_email, gmail_password = await get_gmail_credentials()
     if not gmail_email or not gmail_password:
         raise ValueError("Gmail not configured. Go to Settings to add your Gmail credentials.")

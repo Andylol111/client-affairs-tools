@@ -4,13 +4,13 @@ Operator notes for the live host. Members use [`README.md`](../README.md) and `A
 
 Stack: `YucgOutreach-dev` in `us-east-1`. Image: `docker/app.Dockerfile`. SQLite: `/data/clientreach.db` on a retained 8 GB volume. HTTPS: CloudFront VPC origin. No ALB, NAT, Amplify, or Aurora.
 
-**Do not** `cdk deploy YucgOutreach-dev`. User-data is baked into the instance (`userDataCausesReplacement: true`). A deploy mints a new box; CloudFront cannot rebind the VPC origin and the SQLite volume is already attached. Website updates are GitHub **verify and ship** (ECR + SSM restart). Never CodeBuild.
+**Do not** `cdk deploy YucgOutreach-dev`. User-data is baked into the instance (`userDataCausesReplacement: true`). A deploy mints a new box; CloudFront cannot rebind the VPC origin and the SQLite volume is already attached. Website updates are GitHub **Beta** (`feature`) or **Production** (`main`) via ECR + SSM restart. Never CodeBuild.
 
 **CodeBuild is not used.** Ship is GitHub Actions. If AWS is charging for CodeBuild, paste `infra/scripts/stop-codebuild.sh` in CloudShell now. That deletes `YucgPipeline-dev` and leftover Amplify apps. Do not recreate them.
 
 ## GitHub
 
-Repo **Settings → Actions → General**: allow GitHub-hosted runners. Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+Repo **Settings → Actions → General**: allow GitHub-hosted runners. Stage workflows: [Intake](../.github/workflows/intake.yml), [Beta](../.github/workflows/beta.yml), [Production](../.github/workflows/production.yml). Required check name: `required-checks`.
 
 The local workflow now runs validation on topic PRs and pushes, with `required-checks` as the aggregate gate. Configure required review and this check in repository settings; the old `gate-branch` check was removed. Production jobs reference the `production` environment, which must have verified reviewers and main-only deployment rules.
 

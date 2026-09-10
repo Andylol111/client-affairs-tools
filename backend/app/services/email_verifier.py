@@ -9,6 +9,8 @@ import os
 import re
 import smtplib
 import socket
+import ipaddress
+from datetime import datetime, timezone
 from typing import Any
 
 import dns.resolver
@@ -31,16 +33,31 @@ def _effective_smtp_probe(requested: bool) -> bool:
         return False
     if INBOX_VERIFY_MODE == "smtp":
         return True
-    return requested  # auto — caller sets per-item
+    return requested if INBOX_VERIFY_MODE == 'auto' else False
 
 
-async def verify_mx(domain: str) -> tuple[bool, list[str]]:
+async def verify_mx(domain: str) -> tuple[bool | None, list[str]]:
     try:
-        answers = await asyncio.to_thread(dns.resolver.resolve, domain, "MX")
-        hosts = sorted(str(r.exchange).rstrip(".") for r in answers)
+        answers = await asyncio.to_thread(dns.resolver.resolve, domain, "MX", lifetime=3)
+        if any(str(r.exchange) == '.' for r in answers):
+            return False, []  # RFC 7505 null MX: domain explicitly accepts no mail.
+        hosts = [str(r.exchange).rstrip('.') for r in sorted(answers, key=lambda r: r.preference)]
         return bool(hosts), hosts
-    except Exception:
+    except dns.resolver.NXDOMAIN:
         return False, []
+    except dns.resolver.NoAnswer:
+        # RFC 5321 implicit MX: use domain A/AAAA when there is no MX record.
+        for kind in ('A', 'AAAA'):
+            try:
+                await asyncio.to_thread(dns.resolver.resolve, domain, kind, lifetime=3)
+                return True, [domain]
+            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+                continue
+            except Exception:
+                return None, []
+        return False, []
+    except Exception:
+        return None, []  # DNS failure is inconclusive, not an invalid mailbox.
 
 
 async def get_mx_cached(
@@ -82,14 +99,18 @@ async def _smtp_rcpt_probe(email: str, mx_host: str, timeout: float) -> str:
 
     def _probe() -> str:
         try:
+            ips = [item[4][0] for item in socket.getaddrinfo(mx_host, 25, type=socket.SOCK_STREAM)]
+            if not ips or not all(ipaddress.ip_address(ip).is_global for ip in ips):
+                return 'unknown'
             with smtplib.SMTP(timeout=timeout) as smtp:
-                smtp.connect(mx_host, 25)
+                smtp.connect(ips[0], 25)  # Pin the checked IP to prevent DNS rebinding.
                 smtp.helo(socket.gethostname() or "clientreach.local")
                 smtp.mail("verify@clientreach.local")
-                code, _ = smtp.rcpt(email)
+                code, response = smtp.rcpt(email)
+                smtp.rset()  # Never issue DATA or send a message.
                 if 200 <= code < 300:
-                    return "valid"
-                if 500 <= code < 600:
+                    return "accepted"  # Includes accept-all servers.
+                if 500 <= code < 600 and re.search(rb'\b5\.1\.1\b', response):
                     return "invalid"
                 return "unknown"
         except smtplib.SMTPServerDisconnected:
@@ -111,12 +132,12 @@ async def _smtp_rcpt_probe(email: str, mx_host: str, timeout: float) -> str:
 def verify_email_format(email: str) -> dict[str, Any]:
     """Syntax only. Used by GET /outreach/verify-email. Not inbox existence."""
     raw = (email or "").strip().lower()
-    if not raw or "@" not in raw:
+    if not raw or raw.count('@') != 1 or len(raw) > 254:
         return {"valid": False, "reason": "Invalid format"}
     local, _, domain = raw.partition("@")
-    if not re.match(r"^[a-z0-9._+-]+$", local):
+    if len(local) > 64 or local.startswith('.') or local.endswith('.') or '..' in local or not re.match(r"^[a-z0-9._+-]+$", local):
         return {"valid": False, "reason": "Invalid local part"}
-    if "." not in domain or not re.match(r"^[a-z0-9.-]+\.[a-z]{2,}$", domain):
+    if "." not in domain or any(not label or label.startswith('-') or label.endswith('-') or len(label) > 63 for label in domain.split('.')) or not re.match(r"^[a-z0-9.-]+\.[a-z]{2,}$", domain):
         return {"valid": False, "reason": "Invalid domain"}
     return {"valid": True}
 
@@ -133,7 +154,7 @@ async def verify_email_deliverability(
     Returns status: valid | likely_valid | invalid | unknown
     """
     email = (email or "").strip().lower()
-    if not email or "@" not in email:
+    if not verify_email_format(email)['valid']:
         return {"status": "invalid", "mx_valid": False, "reason": "bad_format"}
 
     local, domain = email.rsplit("@", 1)
@@ -141,6 +162,8 @@ async def verify_email_deliverability(
         return {"status": "invalid", "mx_valid": False, "reason": "bad_local"}
 
     mx_valid, mx_hosts = await get_mx_cached(domain, mx_cache)
+    if mx_valid is None:
+        return {"status": "unknown", "mx_valid": None, "reason": "dns_unavailable", "mailbox_exists": None}
     if not mx_valid:
         return {"status": "invalid", "mx_valid": False, "reason": "no_mx"}
 
@@ -150,19 +173,20 @@ async def verify_email_deliverability(
         "mx_hosts": mx_hosts[:3],
         "matched_pattern": pattern_for_email(email, full_name) if full_name else None,
         "smtp_probe": None,
+        "mailbox_exists": None,
+        "reason": "mail_route_found_mailbox_unconfirmed",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    if not smtp_probe or not mx_hosts:
+    if not _effective_smtp_probe(smtp_probe) or not mx_hosts:
         return result
 
     timeout = smtp_timeout if smtp_timeout is not None else SMTP_PROBE_TIMEOUT
     probe = await _smtp_rcpt_probe(email, mx_hosts[0], timeout)
     result["smtp_probe"] = probe
-    if probe == "valid":
-        result["status"] = "valid"
-    elif probe == "invalid":
+    if probe == "invalid":
         result["status"] = "invalid"
-        result["reason"] = "smtp_rejected"
+        result["reason"] = "recipient_rejected_5.1.1"
     else:
         result["status"] = "likely_valid"
     return result
@@ -174,14 +198,16 @@ def _verify_mx_only(
     cache: dict[str, tuple[bool, list[str]]],
 ) -> dict[str, Any]:
     email = (email or "").strip().lower()
-    if not email or "@" not in email:
+    if not verify_email_format(email)['valid']:
         return {"status": "invalid", "mx_valid": False, "reason": "bad_format"}
 
     local, domain = email.rsplit("@", 1)
     if not re.match(r"^[a-z0-9._+-]+$", local):
         return {"status": "invalid", "mx_valid": False, "reason": "bad_local"}
 
-    mx_valid, mx_hosts = cache.get(domain, (False, []))
+    mx_valid, mx_hosts = cache.get(domain, (None, []))
+    if mx_valid is None:
+        return {"status": "unknown", "mx_valid": None, "reason": "dns_unavailable", "mailbox_exists": None}
     if not mx_valid:
         return {"status": "invalid", "mx_valid": False, "reason": "no_mx"}
 
@@ -191,6 +217,9 @@ def _verify_mx_only(
         "mx_hosts": mx_hosts[:3],
         "matched_pattern": pattern_for_email(email, full_name) if full_name else None,
         "smtp_probe": None,
+        "mailbox_exists": None,
+        "reason": "mail_route_found_mailbox_unconfirmed",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

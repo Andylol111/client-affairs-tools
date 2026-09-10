@@ -253,7 +253,7 @@ async def _verifalia_if_configured(email: str) -> tuple[str | None, str | None]:
     import os
 
     key = (os.getenv("VERIFALIA_API_KEY") or "").strip()
-    if not key:
+    if not key or os.getenv('EXTERNAL_EMAIL_VERIFICATION_ENABLED', 'false').lower() != 'true':
         return None, None
     try:
         import httpx

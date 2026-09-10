@@ -94,7 +94,7 @@ test('workspace scroll keeps navigation stable without a fixed backdrop', async 
   await page.screenshot({ path: testInfo.outputPath('documents-scrolled.png'), fullPage: false });
 });
 
-for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Prospects'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Outreach week'], ['/admin', 'Admin']]) {
+for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Email studio'], ['/scraper', 'Prospects'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Outreach week'], ['/admin', 'Admin']]) {
   test(`accessible page: ${title}`, async ({ page }, testInfo) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -152,7 +152,7 @@ test('campaign deletion confirmation contains keyboard focus', async ({ page }) 
 test('studio workbench fills the desktop viewport instead of leaving a short generator column', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop');
   await page.goto('/studio');
-  await expect(page.getByRole('heading', { name: 'AI Email Generator' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'AI assistance' })).toBeVisible();
   const generator = page.locator('#email-generator-section');
   const editor = page.locator('#email-editor-section');
   const brief = page.getByPlaceholder('e.g. Cold outreach for consulting services');
@@ -165,10 +165,33 @@ test('studio workbench fills the desktop viewport instead of leaving a short gen
   expect(Math.abs((genBox?.height || 0) - (editBox?.height || 0))).toBeLessThan(48);
   expect(briefBox?.height || 0).toBeGreaterThan(70);
   expect(bodyBox?.height || 0).toBeGreaterThanOrEqual(280);
-  await expect(page.getByRole('button', { name: 'Generate email' })).toBeInViewport();
-  await expect(page.getByText('Value Proposition', { exact: true })).toBeInViewport();
-  await expect(page.getByText('Custom Instructions', { exact: true })).toBeInViewport();
+  expect(editBox!.width).toBeGreaterThan(genBox!.width * 1.5);
+  const save = page.getByRole('button', { name: 'Save Draft', exact: true });
+  await save.scrollIntoViewIfNeeded();
+  await expect(save).toBeInViewport({ ratio: 1 });
+  await page.locator('.email-studio-editor-column').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath('studio-workbench.png'), fullPage: false });
+});
+
+test('studio supports writing and preview without invoking generation or sending', async ({ page }, testInfo) => {
+  const mutations = await mockWorkspace(page);
+  await page.goto('/studio');
+  await page.getByLabel('Subject', { exact: true }).fill('A consulting idea');
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Hello, I would like to discuss a project.');
+  await expect(page.getByRole('heading', { name: 'Email preview', exact: true })).toBeHidden();
+  if (testInfo.project.name === 'desktop') {
+    const before = await page.getByRole('textbox', { name: 'Message', exact: true }).boundingBox();
+    await page.getByRole('button', { name: 'Focus on writing' }).click();
+    await expect(page.locator('#email-generator-section')).toBeHidden();
+    const after = await page.getByRole('textbox', { name: 'Message', exact: true }).boundingBox();
+    expect(after!.width).toBeGreaterThan(before!.width);
+  }
+  await page.getByRole('button', { name: 'Preview email', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Email preview', exact: true })).toBeVisible();
+  await expect(page.locator('.email-studio-gmail-body')).toContainText('A consulting idea');
+  await expect(page.locator('.email-studio-gmail-body')).toContainText('alice@yale.edu');
+  await expect(page.locator('.email-studio-gmail-body')).not.toContainText('you@gmail.com');
+  expect(mutations.some(path => /test-send|generate/.test(path))).toBe(false);
 });
 
 const maliciousHtml = '<p><strong>Safe bold</strong> and <em>safe emphasis</em></p><img src="x" onerror="window.__xss=1"><a href="javascript:window.__xss=2">Unsafe link</a><svg onload="window.__xss=3"></svg><script>window.__xss=4</script><iframe srcdoc="<script>parent.__xss=5</script>"></iframe><img src="data:image/svg+xml;base64,PHN2Zy8+"><img alt="Allowed image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jqysAAAAASUVORK5CYII=">';

@@ -45,6 +45,10 @@ CORS_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _co
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    if os.getenv('APP_ENV', 'production').lower() == 'beta':
+        # Beta neither sends mail nor synchronizes real Gmail accounts in background jobs.
+        yield
+        return
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         run_follow_up_sequences,

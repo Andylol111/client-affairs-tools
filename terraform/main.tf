@@ -45,47 +45,28 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "storage" {
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
-data "aws_iam_policy_document" "tls" {
-  for_each = aws_s3_bucket.storage
-  statement {
-    sid       = "DenyInsecureTransport"
-    effect    = "Deny"
-    actions   = ["s3:*"]
-    resources = [each.value.arn, "${each.value.arn}/*"]
-    principals {
-      type        = "*"
-      identifiers = ["*"]
-    }
-    condition {
-      test     = "Bool"
-      variable = "aws:SecureTransport"
-      values   = ["false"]
-    }
-  }
-  dynamic "statement" {
-    for_each = each.key == "static" && local.adopt_cdn ? [1] : []
-    content {
-      sid       = "CloudFrontReadOnly"
-      effect    = "Allow"
-      actions   = ["s3:GetObject"]
-      resources = ["${each.value.arn}/*"]
-      principals {
-        type        = "Service"
-        identifiers = ["cloudfront.amazonaws.com"]
-      }
-      condition {
-        test     = "StringEquals"
-        variable = "AWS:SourceArn"
-        values   = ["arn:aws:cloudfront::${var.account_id}:distribution/${var.existing_distribution_id}"]
-      }
-    }
-  }
-
-}
 resource "aws_s3_bucket_policy" "tls" {
   for_each = aws_s3_bucket.storage
   bucket   = each.value.id
-  policy   = data.aws_iam_policy_document.tls[each.key].json
+  # All policy fields are input-derived and inspectable in the first saved plan.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat([{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Action    = ["s3:*"]
+      Resource  = ["arn:aws:s3:::${var.bucket_prefix}-${each.key}", "arn:aws:s3:::${var.bucket_prefix}-${each.key}/*"]
+      Principal = "*"
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      }], each.key == "static" && local.adopt_cdn ? [{
+      Sid       = "CloudFrontReadOnly"
+      Effect    = "Allow"
+      Action    = ["s3:GetObject"]
+      Resource  = ["arn:aws:s3:::${var.bucket_prefix}-static/*"]
+      Principal = { Service = "cloudfront.amazonaws.com" }
+      Condition = { StringEquals = { "AWS:SourceArn" = "arn:aws:cloudfront::${var.account_id}:distribution/${var.existing_distribution_id}" } }
+    }] : [])
+  })
 }
 output "storage_buckets" { value = { for k, b in aws_s3_bucket.storage : k => b.id } }
 
@@ -133,7 +114,7 @@ resource "aws_iam_role_policy" "documents" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["s3:PutObject", "s3:GetObject", "s3:GetObjectVersion"]
-      Resource = "${aws_s3_bucket.storage["documents"].arn}/documents/*"
+      Resource = "arn:aws:s3:::${var.bucket_prefix}-documents/documents/*"
     }]
   })
 }
@@ -151,7 +132,7 @@ resource "aws_iam_role_policy" "backup_upload" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["s3:PutObject"]
-      Resource = "${aws_s3_bucket.storage["backups"].arn}/sqlite/*"
+      Resource = "arn:aws:s3:::${var.bucket_prefix}-backups/sqlite/*"
     }]
   })
 }
@@ -169,7 +150,7 @@ resource "aws_iam_role_policy" "static_publish" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["s3:PutObject"]
-      Resource = "${aws_s3_bucket.storage["static"].arn}/*"
+      Resource = "arn:aws:s3:::${var.bucket_prefix}-static/*"
       }, {
       Effect   = "Allow"
       Action   = ["cloudfront:CreateInvalidation"]

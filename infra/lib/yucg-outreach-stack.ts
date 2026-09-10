@@ -108,8 +108,15 @@ export class YucgOutreachStack extends cdk.Stack {
     logGroup.grantWrite(role);
     role.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-        resources: ["*"],
+        actions: ["bedrock:InvokeModel"],
+        // Same finite models exposed by the backend; no arbitrary model marketplace access.
+        resources: [
+          ...["us.anthropic.claude-opus-5", "us.anthropic.claude-sonnet-5", "us.anthropic.claude-haiku-4-5-20251001-v1:0"]
+            .map(model => `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${model}`),
+          ...["us-east-1", "us-east-2", "us-west-2"].flatMap(region =>
+            ["anthropic.claude-opus-5", "anthropic.claude-sonnet-5", "anthropic.claude-haiku-4-5-20251001-v1:0"]
+              .map(model => `arn:aws:bedrock:${region}::foundation-model/${model}`)),
+        ],
       }),
     );
 
