@@ -181,7 +181,7 @@ jobs:
       DATA_OWNER_MIGRATION_APPROVED: ${{ vars.DATA_OWNER_MIGRATION_APPROVED }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
           role-to-assume: ${{ vars.AWS_SHIP_ROLE_ARN }}
           aws-region: us-east-1
@@ -262,7 +262,7 @@ jobs:
         with:
           name: yucg-frontend-${{ github.sha }}
           path: /tmp/yucg-frontend
-      - uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
         with:
           role-to-assume: ${{ vars.AWS_STATIC_ROLE_ARN }}
           aws-region: us-east-1
