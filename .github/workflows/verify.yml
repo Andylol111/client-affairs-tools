@@ -5,6 +5,9 @@ on:
       stage:
         type: string
         required: true
+      phase:
+        type: string
+        default: verify
     outputs:
       runtime:
         value: ${{ jobs.scope.outputs.runtime }}
@@ -21,6 +24,7 @@ jobs:
       frontend: ${{ steps.changes.outputs.frontend }}
       infra: ${{ steps.changes.outputs.infra }}
       image: ${{ steps.changes.outputs.image }}
+      security: ${{ steps.changes.outputs.security }}
       runtime: ${{ steps.changes.outputs.runtime }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -31,6 +35,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           STAGE: ${{ inputs.stage }}
+          PHASE: ${{ inputs.phase }}
         run: python3 scripts/ci_policy.py "$STAGE"
   backend:
     timeout-minutes: 15
@@ -126,6 +131,8 @@ jobs:
 
   security:
     timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.security == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -185,12 +192,12 @@ jobs:
             -c 'import glob, subprocess, sys; tests=sorted(glob.glob("tests/test_*.py")); assert tests, "No regression scripts found"; results=[subprocess.run([sys.executable, path], timeout=180).returncode for path in tests]; sys.exit(any(results))'
       - name: Preserve verified image
         id: archive
-        if: github.event_name == 'push' && inputs.stage != 'intake' && needs.scope.outputs.runtime == 'true'
+        if: inputs.phase == 'ship' && inputs.stage != 'intake' && needs.scope.outputs.runtime == 'true'
         run: |
           docker save yucg-check:${{ github.sha }} -o /tmp/yucg-image.tar
           echo "sha256=$(sha256sum /tmp/yucg-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: github.event_name == 'push' && inputs.stage != 'intake' && needs.scope.outputs.runtime == 'true'
+        if: inputs.phase == 'ship' && inputs.stage != 'intake' && needs.scope.outputs.runtime == 'true'
         with:
           name: yucg-image-${{ github.sha }}
           path: /tmp/yucg-image.tar
@@ -198,7 +205,7 @@ jobs:
           if-no-files-found: error
 
       - name: Extract optional static release from the verified image
-        if: github.event_name == 'push' && inputs.stage == 'production' && needs.scope.outputs.runtime == 'true'
+        if: inputs.phase == 'ship' && inputs.stage == 'production' && needs.scope.outputs.runtime == 'true'
         run: |
           set -euo pipefail
           mkdir -p /tmp/yucg-static/dist
@@ -209,7 +216,7 @@ jobs:
           cd /tmp/yucg-static
           sha256sum frontend.tar.gz > SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: github.event_name == 'push' && inputs.stage == 'production' && needs.scope.outputs.runtime == 'true'
+        if: inputs.phase == 'ship' && inputs.stage == 'production' && needs.scope.outputs.runtime == 'true'
         with:
           name: yucg-static-${{ github.sha }}
           path: |

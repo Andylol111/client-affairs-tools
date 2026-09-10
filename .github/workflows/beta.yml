@@ -15,25 +15,37 @@ concurrency:
 jobs:
   route:
     runs-on: ubuntu-latest
+    outputs:
+      phase: ${{ steps.contract.outputs.phase }}
     steps:
-      - name: Enforce promotion direction
+      - id: contract
+        name: Choose Beta waterfall
         env:
           EVENT: ${{ github.event_name }}
           SOURCE: ${{ github.head_ref }}
+          REF: ${{ github.ref }}
           SAME_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             test "$SAME_REPOSITORY" = true
             test "$SOURCE" = 'develop'
           fi
-  verify:
+          if [ "$EVENT" = pull_request ] || { [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/feature ]; }; then
+            echo phase=verify >> "$GITHUB_OUTPUT"
+            echo 'Beta: develop → feature. Full candidate including image. Live box is not this stage.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo phase=ship >> "$GITHUB_OUTPUT"
+            echo 'Beta: feature push. Image only. Deploy only if BETA_AWS_INSTANCE_ID names a non-production box.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  candidate:
     needs: route
     uses: ./.github/workflows/verify.yml
     with:
       stage: beta
+      phase: ${{ needs.route.outputs.phase }}
   required-checks:
     if: ${{ always() && !cancelled() }}
-    needs: [route, verify]
+    needs: [route, candidate]
     runs-on: ubuntu-latest
     steps:
       - name: Require successful stage verification
@@ -41,26 +53,26 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
-    needs: [required-checks, verify]
-    if: needs.verify.outputs.runtime == 'true' && vars.BETA_AWS_INSTANCE_ID != '' && github.ref == 'refs/heads/feature' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [required-checks, candidate]
+    if: needs.candidate.outputs.runtime == 'true' && vars.BETA_AWS_INSTANCE_ID != '' && github.ref == 'refs/heads/feature' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/deploy.yml
     with:
       environment: beta
-      archive_sha256: ${{ needs.verify.outputs.archive_sha256 }}
+      archive_sha256: ${{ needs.candidate.outputs.archive_sha256 }}
     secrets: inherit
     permissions:
       contents: read
       id-token: write
   outcome:
     if: ${{ always() && !cancelled() }}
-    needs: [required-checks, verify, deploy]
+    needs: [required-checks, candidate, deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Explain deployment eligibility and reject unexpected skips
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          RUNTIME: ${{ needs.verify.outputs.runtime }}
+          RUNTIME: ${{ needs.candidate.outputs.runtime }}
           VERIFIED: ${{ needs.required-checks.result }}
           DEPLOYED: ${{ needs.deploy.result }}
           BETA_HOST: ${{ vars.BETA_AWS_INSTANCE_ID }}

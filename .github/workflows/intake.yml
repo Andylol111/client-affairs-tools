@@ -15,30 +15,51 @@ concurrency:
 jobs:
   route:
     runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.contract.outputs.mode }}
     steps:
-      - name: Enforce promotion direction
+      - id: contract
+        name: Choose Intake waterfall
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           SAME_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           # Device → develop: any same-repo topic branch. Forks stay out of Intake.
           if [ "$EVENT" = pull_request ]; then
             test "$SAME_REPOSITORY" = true
           fi
-  verify:
+          if [ "$EVENT" = pull_request ] || { [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/develop ]; }; then
+            echo mode=tests >> "$GITHUB_OUTPUT"
+            echo 'Intake: topic → develop. Tests only. No image. No deploy.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo mode=promote >> "$GITHUB_OUTPUT"
+            echo 'Intake: develop is current. Open or advance Beta. Do not re-run tests.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  tests:
     needs: route
+    if: needs.route.outputs.mode == 'tests'
     uses: ./.github/workflows/verify.yml
     with:
       stage: intake
+      phase: verify
   required-checks:
     if: ${{ always() && !cancelled() }}
-    needs: [route, verify]
+    needs: [route, tests]
     runs-on: ubuntu-latest
     steps:
-      - name: Require successful stage verification
+      - name: Require tests on topic PRs and skip them on develop push
         env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+          MODE: ${{ needs.route.outputs.mode }}
+          ROUTE: ${{ needs.route.result }}
+          TESTS: ${{ needs.tests.result }}
+        run: |
+          test "$ROUTE" = success
+          if [ "$MODE" = tests ]; then
+            test "$TESTS" = success
+          else
+            test "$TESTS" = skipped
+          fi
   promote:
     needs: required-checks
     if: success()

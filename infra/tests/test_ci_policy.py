@@ -17,8 +17,29 @@ class PolicyTests(unittest.TestCase):
     def test_unknown_and_workflow_changes_run_all_checks(self):
         for path in ['new-entrypoint.sh', '.github/workflows/intake.yml']:
             scope = policy.classify([path], 'intake')
-            self.assertTrue(all(scope[k] for k in ('backend', 'frontend', 'infra', 'image', 'security')))
+            self.assertTrue(all(scope[k] for k in ('backend', 'frontend', 'infra', 'security')))
+            self.assertFalse(scope['image'])
             self.assertFalse(scope['runtime'])
+
+    def test_intake_never_builds_image(self):
+        scope = policy.classify(['frontend/src/App.tsx'], 'intake')
+        self.assertTrue(scope['frontend'] and scope['security'] and scope['runtime'])
+        self.assertFalse(scope['image'])
+
+    def test_ship_phase_only_rebuilds_the_image(self):
+        scope = policy.classify(['frontend/src/App.tsx'], 'production', 'ship')
+        self.assertTrue(scope['image'] and scope['runtime'])
+        self.assertFalse(any(scope[k] for k in ('backend', 'frontend', 'infra', 'security')))
+
+    def test_intake_push_does_not_rerun_verify(self):
+        text = Path(__file__).parents[2].joinpath('.github/workflows/intake.yml').read_text()
+        self.assertIn('mode=promote', text)
+        self.assertIn("needs.route.outputs.mode == 'tests'", text)
+
+    def test_security_is_skippable_on_ship(self):
+        text = Path(__file__).parents[2].joinpath('.github/workflows/verify.yml').read_text()
+        self.assertIn('phase:', text)
+        self.assertIn("needs.scope.outputs.security == 'true'", text)
 
     def test_api_contract_checks_frontend(self):
         self.assertTrue(policy.classify(['backend/app/routers/emails.py'], 'intake')['frontend'])
