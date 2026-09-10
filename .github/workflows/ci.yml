@@ -4,7 +4,9 @@ on:
   pull_request:
     branches: [develop, feature, main]
   push:
-    branches: [develop, feature, main]
+    # Promotion branches are verified by their PR merge commit. Running again on
+    # develop/feature push duplicates the full browser and image pipeline.
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
