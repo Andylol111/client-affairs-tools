@@ -1,9 +1,9 @@
-"""Trusted workflow_run controller. Reads GitHub metadata; never executes PR code.
+"""Advance develop → feature → main after a stage passes.
 
-A repository GitHub App is optional. The default identity is GITHUB_TOKEN, which
-cannot start workflows from the pull_request or push events it creates, so this
-controller dispatches the next stage (Intake, Beta, Production) after a merge
-or after opening a promotion PR. Repository rules stay authoritative; this
+Runs as a job on Intake, Beta, and Production. Reads GitHub metadata only;
+never executes PR code. GITHUB_TOKEN cannot start workflows from the events
+it creates, so this controller dispatches the next stage after a merge or
+after opening a promotion PR. Repository rules stay authoritative; this
 controller never uses an admin bypass.
 """
 import json
@@ -162,8 +162,26 @@ def process_branch(run, repo):
     dispatch_workflow(repo, WORKFLOW_FOR_BRANCH[target], source)
 
 
+def stage_run(event, repo):
+    """Accept a workflow_run payload or the native Intake/Beta/Production event."""
+    if 'workflow_run' in event:
+        return event['workflow_run']
+    pull = event.get('pull_request') or {}
+    head = pull.get('head') or {}
+    return {
+        'name': os.environ['PROMOTION_STAGE'],
+        'event': os.environ['GITHUB_EVENT_NAME'],
+        'conclusion': 'success',
+        'head_sha': head.get('sha') or os.environ['GITHUB_SHA'],
+        'head_branch': head.get('ref') or os.environ['GITHUB_REF_NAME'],
+        'head_repository': {'full_name': repo},
+        'html_url': f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
+        'pull_requests': [{'number': pull['number']}] if pull.get('number') else [],
+    }
+
+
 def process(event, repo):
-    run = event['workflow_run']
+    run = stage_run(event, repo)
     if run['head_repository']['full_name'] != repo or run['conclusion'] != 'success':
         return
     if run['name'] not in {'Intake', 'Beta', 'Production'}:
