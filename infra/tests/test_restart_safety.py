@@ -7,6 +7,7 @@ SCRIPT = (Path(__file__).parents[1] / "scripts/restart-yucg.sh").read_text()
 
 class RestartSafetyTests(unittest.TestCase):
     def test_owner_migration_is_opt_in_and_backup_first(self):
+        self.assertLess(SCRIPT.index('umask 0077'), SCRIPT.index('BACKUP="/data/backups/predeploy-'))
         backup = SCRIPT.index('BACKUP="/data/backups/predeploy-')
         gate = SCRIPT.index('DATA_OWNER_MIGRATION_APPROVED}')
         ownership = SCRIPT.index('chown 10001:10001 /data /data/clientreach.db')
