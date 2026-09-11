@@ -231,7 +231,7 @@ jobs:
       # Restore the default-branch ref after this revision reaches main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 99ed113547e011fd2368795b6da33468f2fbaaa4
+          ref: 83b14800c71d1242d17a5eca47ef39804d6e2ebd
           persist-credentials: false
       - name: Advance the next club branch
         env:
