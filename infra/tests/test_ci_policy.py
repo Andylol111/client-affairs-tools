@@ -11,6 +11,15 @@ spec.loader.exec_module(policy)
 
 
 class PolicyTests(unittest.TestCase):
+    def test_quick_patch_lane_is_narrow_and_never_changes_production_scope(self):
+        self.assertEqual(policy.delivery_lane(['docs/guide.md']), 'patch')
+        self.assertEqual(policy.delivery_lane(['frontend/src/theme.css']), 'patch')
+        for paths in (['backend/app/main.py'], ['frontend/src/App.tsx'],
+                      ['frontend/package-lock.json'], ['.github/workflows/intake.yml'],
+                      ['terraform/main.tf']):
+            self.assertEqual(policy.delivery_lane(paths), 'standard')
+        self.assertTrue(all(policy.classify(['frontend/src/theme.css'], 'production').values()))
+
     def test_dispatch_uses_target_for_verification_and_first_parent_for_shipping(self):
         for stage, phase, expected in [('intake', 'verify', 'origin/develop'),
                                        ('beta', 'verify', 'origin/feature'),
@@ -95,6 +104,19 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(names, ['beta.yml', 'intake.yml', 'production.yml'])
         self.assertIn("needs.scope.outputs.security == 'true'", root.joinpath('beta.yml').read_text())
 
+    def test_stage_runners_increase_in_intensity(self):
+        root = Path(__file__).parents[2]
+        backend = root.joinpath('.github/actions/backend/action.yml').read_text()
+        frontend = root.joinpath('.github/actions/frontend/action.yml').read_text()
+        self.assertIn("if: inputs.stage == 'intake'", backend)
+        self.assertIn("if: inputs.stage != 'intake'", backend)
+        self.assertIn('test_sender_isolation.py', backend)
+        self.assertIn("if: inputs.stage != 'intake'", frontend)
+        for name, stage in [('intake.yml', 'intake'), ('beta.yml', 'beta'),
+                            ('production.yml', 'production')]:
+            workflow = root.joinpath('.github/workflows', name).read_text()
+            self.assertIn(f'stage: {stage}', workflow)
+
     def test_api_contract_checks_frontend(self):
         self.assertTrue(policy.classify(['backend/app/routers/emails.py'], 'intake')['frontend'])
 
@@ -118,6 +140,16 @@ class PolicyTests(unittest.TestCase):
     def test_gate_does_not_fail_a_superseded_run(self):
         text = Path(__file__).parents[2].joinpath('.github/workflows/beta.yml').read_text()
         self.assertIn('always() && !cancelled()', text)
+
+    def test_deploy_jobs_account_for_skipped_needs_before_environment_approval(self):
+        root = Path(__file__).parents[2].joinpath('.github/workflows')
+        for workflow in ('beta.yml', 'production.yml'):
+            text = root.joinpath(workflow).read_text()
+            deploy = text.split('\n  deploy:', 1)[1].split('\n  outcome:', 1)[0]
+            self.assertIn('always() && !cancelled()', deploy)
+            self.assertIn("needs.required-checks.result == 'success'", deploy)
+            self.assertIn("needs.scope.result == 'success'", deploy)
+            self.assertIn("needs.image.result == 'success'", deploy)
 
 
 if __name__ == '__main__':

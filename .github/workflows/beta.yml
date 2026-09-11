@@ -1,4 +1,4 @@
-name: Beta
+name: Beta · Develop to Feature
 on:
   push:
     branches: [feature]
@@ -34,6 +34,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      lane: ${{ steps.classify.outputs.lane }}
       scope: ${{ steps.classify.outputs.scope }}
       backend: ${{ steps.classify.outputs.backend }}
       frontend: ${{ steps.classify.outputs.frontend }}
@@ -77,6 +78,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/frontend
+        with:
+          stage: beta
   infra:
     timeout-minutes: 15
     needs: scope
@@ -145,7 +148,7 @@ jobs:
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
     needs: [required-checks, scope, image]
-    if: needs.scope.outputs.runtime == 'true' && vars.BETA_AWS_INSTANCE_ID != '' && github.ref == 'refs/heads/feature' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: ${{ always() && !cancelled() && needs.required-checks.result == 'success' && needs.scope.result == 'success' && needs.image.result == 'success' && needs.scope.outputs.runtime == 'true' && vars.BETA_AWS_INSTANCE_ID != '' && github.ref == 'refs/heads/feature' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: beta

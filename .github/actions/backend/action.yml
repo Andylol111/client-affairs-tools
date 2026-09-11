@@ -14,17 +14,41 @@ runs:
         cache-dependency-path: |
           backend/requirements.lock
           backend/requirements-dev.txt
-    - name: Install and test
+    - name: Install test dependencies
+      shell: bash
+      working-directory: backend
+      run: |
+        python -m pip install --require-hashes -q -r requirements.lock
+        python -m pip install -q -r requirements-dev.txt
+    - name: Run fast Intake boundary tests
+      if: inputs.stage == 'intake'
       shell: bash
       working-directory: backend
       env:
         JWT_SECRET: p2-test-secret-not-a-known-default-xx
       run: |
-        python -m pip install --require-hashes -q -r requirements.lock
-        python -m pip install -q -r requirements-dev.txt
+        for test in \
+          test_environment_security.py \
+          test_sender_isolation.py \
+          test_dispatch_safety.py \
+          test_workspace_boundaries.py \
+          test_membership_admission.py \
+          test_telemetry_security.py \
+          test_tracking.py \
+          test_oauth_challenges.py
+        do
+          python "tests/$test"
+        done
+    - name: Run full isolated suite and critical-module coverage
+      if: inputs.stage != 'intake'
+      shell: bash
+      working-directory: backend
+      env:
+        JWT_SECRET: p2-test-secret-not-a-known-default-xx
+      run: |
         python scripts/test_suite.py
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
+      if: always() && inputs.stage != 'intake'
       with:
         name: coverage-${{ inputs.stage }}-${{ github.sha }}
         path: backend/coverage.xml
