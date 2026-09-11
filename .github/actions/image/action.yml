@@ -1,0 +1,79 @@
+name: Image build
+description: Image build for staged club delivery.
+inputs:
+  stage:
+    description: Stage supplied by the stage workflow.
+    required: true
+  phase:
+    description: Phase supplied by the stage workflow.
+    required: true
+  runtime:
+    description: Runtime supplied by the stage workflow.
+    required: true
+outputs:
+  archive_sha256:
+    value: ${{ steps.archive.outputs.sha256 }}
+runs:
+  using: composite
+  steps:
+    - name: Docker build
+      shell: bash
+      run: docker build --platform linux/amd64 -f docker/app.Dockerfile -t yucg-check:${{ github.sha }} .
+    - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      with:
+        version: v0.70.0
+        image-ref: yucg-check:${{ github.sha }}
+        scanners: vuln,secret
+        severity: HIGH,CRITICAL
+        exit-code: '1'
+    - name: Verify non-root container startup and database initialization
+      shell: bash
+      run: |
+        docker run --rm --network none --entrypoint python \
+          -e JWT_SECRET=ci-container-test-secret-not-for-production \
+          -e DATABASE_URL=sqlite:////data/smoke.db \
+          "yucg-check:${GITHUB_SHA}" \
+          scripts/container_smoke.py
+    - name: Verify backend behavior on the runtime libc
+      shell: bash
+      run: |
+        docker run --rm --network none --entrypoint python \
+          --mount "type=bind,source=${GITHUB_WORKSPACE}/infra/lib,target=/infra/lib,readonly" \
+          -e JWT_SECRET=ci-container-test-secret-not-for-production \
+          "yucg-check:${GITHUB_SHA}" \
+          -c 'import glob, subprocess, sys; tests=sorted(glob.glob("tests/test_*.py")); assert tests, "No regression scripts found"; results=[subprocess.run([sys.executable, path], timeout=180).returncode for path in tests]; sys.exit(any(results))'
+    - name: Preserve verified image
+      id: archive
+      if: inputs.phase == 'ship' && inputs.stage != 'intake' && inputs.runtime == 'true'
+      shell: bash
+      run: |
+        docker save yucg-check:${{ github.sha }} -o /tmp/yucg-image.tar
+        echo "sha256=$(sha256sum /tmp/yucg-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: inputs.phase == 'ship' && inputs.stage != 'intake' && inputs.runtime == 'true'
+      with:
+        name: yucg-image-${{ github.sha }}
+        path: /tmp/yucg-image.tar
+        retention-days: 2
+        if-no-files-found: error
+    - name: Extract optional static release from the verified image
+      if: inputs.phase == 'ship' && inputs.stage == 'production' && inputs.runtime == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p /tmp/yucg-static/dist
+        STATIC_CONTAINER="$(docker create "yucg-check:${GITHUB_SHA}")"
+        trap 'docker rm "$STATIC_CONTAINER"' EXIT
+        docker cp "$STATIC_CONTAINER:/app/frontend_dist/." /tmp/yucg-static/dist/
+        tar -czf /tmp/yucg-static/frontend.tar.gz -C /tmp/yucg-static/dist .
+        cd /tmp/yucg-static
+        sha256sum frontend.tar.gz > SHA256SUMS
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: inputs.phase == 'ship' && inputs.stage == 'production' && inputs.runtime == 'true'
+      with:
+        name: yucg-static-${{ github.sha }}
+        path: |
+          /tmp/yucg-static/frontend.tar.gz
+          /tmp/yucg-static/SHA256SUMS
+        retention-days: 3
+        if-no-files-found: error

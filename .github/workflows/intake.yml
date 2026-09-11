@@ -6,42 +6,157 @@ on:
     branches: [develop]
   workflow_dispatch:
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   route:
     runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.contract.outputs.mode }}
     steps:
-      - name: Enforce promotion direction
+      - id: contract
+        name: Choose Intake waterfall
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           SAME_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
-          # Device → develop: any same-repo topic branch. Forks stay out of Intake.
           if [ "$EVENT" = pull_request ]; then
             test "$SAME_REPOSITORY" = true
           fi
-  verify:
+          if [ "$EVENT" = pull_request ] || { [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/develop ]; }; then
+            echo mode=tests >> "$GITHUB_OUTPUT"
+            echo 'Intake: topic → develop. Tests only. No image. No deploy.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo mode=promote >> "$GITHUB_OUTPUT"
+            echo 'Intake: develop is current. Open or advance Beta. Do not re-run tests.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  scope:
     needs: route
-    uses: ./.github/workflows/verify.yml
-    with:
-      stage: intake
+    if: needs.route.outputs.mode == 'tests'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      scope: ${{ steps.classify.outputs.scope }}
+      backend: ${{ steps.classify.outputs.backend }}
+      frontend: ${{ steps.classify.outputs.frontend }}
+      infra: ${{ steps.classify.outputs.infra }}
+      image: ${{ steps.classify.outputs.image }}
+      security: ${{ steps.classify.outputs.security }}
+      runtime: ${{ steps.classify.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/scope
+        id: classify
+        with:
+          stage: intake
+          phase: verify
+  backend:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/backend
+        with:
+          stage: intake
+  frontend:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/frontend
+  infra:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/infra
+  security:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.security == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/security
+  image:
+    timeout-minutes: 20
+    needs: scope
+    if: needs.scope.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/image
+        with:
+          stage: intake
+          phase: verify
+          runtime: ${{ needs.scope.outputs.runtime }}
+  gate:
+    if: ${{ always() && !cancelled() && needs.route.outputs.mode == 'tests' }}
+    needs: [route, scope, backend, frontend, infra, security, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/gate
+        with:
+          scope: ${{ needs.scope.outputs.scope }}
+          results: ${{ toJSON(needs) }}
   required-checks:
     if: ${{ always() && !cancelled() }}
-    needs: [route, verify]
+    needs: [route, gate]
     runs-on: ubuntu-latest
     steps:
-      - name: Require successful stage verification
+      - name: Require tests on topic PRs and skip them on develop push
         env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
+          MODE: ${{ needs.route.outputs.mode }}
+          ROUTE: ${{ needs.route.result }}
+          GATE: ${{ needs.gate.result }}
+        run: |
+          test "$ROUTE" = success
+          if [ "$MODE" = tests ]; then
+            test "$GATE" = success
+          else
+            test "$GATE" = skipped
+          fi
   promote:
     needs: required-checks
-    if: success()
+    if: ${{ !cancelled() && needs.required-checks.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -49,32 +164,14 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      # Load trusted code already on main; the new composites need not exist there yet.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - name: Merge or open the next club branch
+      - name: Advance the next club branch
         env:
           GH_TOKEN: ${{ github.token }}
           PROMOTION_DISPATCH: '1'
           PROMOTION_STAGE: Intake
-        run: |
-          python3 - <<'PY'
-          import json, os
-          path = os.environ['GITHUB_EVENT_PATH']
-          event = json.load(open(path, encoding='utf-8'))
-          if 'workflow_run' not in event:
-              pull = event.get('pull_request') or {}
-              head = pull.get('head') or {}
-              json.dump({'workflow_run': {
-                  'name': os.environ['PROMOTION_STAGE'],
-                  'event': os.environ['GITHUB_EVENT_NAME'],
-                  'conclusion': 'success',
-                  'head_sha': head.get('sha') or os.environ['GITHUB_SHA'],
-                  'head_branch': head.get('ref') or os.environ['GITHUB_REF_NAME'],
-                  'head_repository': {'full_name': os.environ['GITHUB_REPOSITORY']},
-                  'html_url': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-                  'pull_requests': [{'number': pull['number']}] if pull.get('number') else [],
-              }}, open(path, 'w', encoding='utf-8'))
-          PY
-          python3 scripts/promote.py
+        run: python3 scripts/promote.py

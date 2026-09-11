@@ -1,39 +1,142 @@
 name: Beta
 on:
-  pull_request:
-    branches: [feature]
   push:
     branches: [feature]
   workflow_dispatch:
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 jobs:
   route:
     runs-on: ubuntu-latest
+    outputs:
+      phase: ${{ steps.contract.outputs.phase }}
     steps:
-      - name: Enforce promotion direction
+      - id: contract
+        name: Choose Beta waterfall
         env:
           EVENT: ${{ github.event_name }}
-          SOURCE: ${{ github.head_ref }}
-          SAME_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          REF: ${{ github.ref }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
-            test "$SAME_REPOSITORY" = true
-            test "$SOURCE" = 'develop'
+          case "$REF" in refs/heads/develop|refs/heads/feature) ;; *) exit 1 ;; esac
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/feature ]; then
+            echo phase=verify >> "$GITHUB_OUTPUT"
+            echo 'Beta: develop → feature. Full candidate including image. Live box is not this stage.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo phase=ship >> "$GITHUB_OUTPUT"
+            echo 'Beta: feature. Image only. Deploy only if BETA_AWS_INSTANCE_ID names a non-production box.' >> "$GITHUB_STEP_SUMMARY"
           fi
-  verify:
+  scope:
     needs: route
-    uses: ./.github/workflows/verify.yml
-    with:
-      stage: beta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      scope: ${{ steps.classify.outputs.scope }}
+      backend: ${{ steps.classify.outputs.backend }}
+      frontend: ${{ steps.classify.outputs.frontend }}
+      infra: ${{ steps.classify.outputs.infra }}
+      image: ${{ steps.classify.outputs.image }}
+      security: ${{ steps.classify.outputs.security }}
+      runtime: ${{ steps.classify.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/scope
+        id: classify
+        with:
+          stage: beta
+          phase: ${{ needs.route.outputs.phase }}
+  backend:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/backend
+        with:
+          stage: beta
+  frontend:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/frontend
+  infra:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/infra
+  security:
+    timeout-minutes: 15
+    needs: scope
+    if: needs.scope.outputs.security == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/security
+  image:
+    timeout-minutes: 20
+    needs: [route, scope]
+    if: needs.scope.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      archive_sha256: ${{ steps.build.outputs.archive_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/image
+        id: build
+        with:
+          stage: beta
+          phase: ${{ needs.route.outputs.phase }}
+          runtime: ${{ needs.scope.outputs.runtime }}
+  gate:
+    if: ${{ always() && !cancelled() }}
+    needs: [scope, backend, frontend, infra, security, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/gate
+        with:
+          scope: ${{ needs.scope.outputs.scope }}
+          results: ${{ toJSON(needs) }}
   required-checks:
     if: ${{ always() && !cancelled() }}
-    needs: [route, verify]
+    needs: [route, gate]
     runs-on: ubuntu-latest
     steps:
       - name: Require successful stage verification
@@ -41,26 +144,42 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
-    needs: [required-checks, verify]
-    if: needs.verify.outputs.runtime == 'true' && vars.BETA_AWS_INSTANCE_ID != '' && github.ref == 'refs/heads/feature' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    uses: ./.github/workflows/deploy.yml
-    with:
-      environment: beta
-      archive_sha256: ${{ needs.verify.outputs.archive_sha256 }}
-    secrets: inherit
+    needs: [required-checks, scope, image]
+    if: needs.scope.outputs.runtime == 'true' && vars.BETA_AWS_INSTANCE_ID != '' && github.ref == 'refs/heads/feature' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: beta
     permissions:
       contents: read
       id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_STACK_NAME: ${{ vars.AWS_STACK_NAME }}
+      AWS_INSTANCE_ID: ${{ vars.BETA_AWS_INSTANCE_ID }}
+      PRODUCTION_INSTANCE_ID: ${{ vars.PRODUCTION_INSTANCE_ID }}
+      YUCG_ENV: ${{ vars.YUCG_ENV }}
+      DEPLOYMENT_ENV: beta
+      EXPECTED_ARCHIVE_SHA256: ${{ needs.image.outputs.archive_sha256 }}
+      DATA_OWNER_MIGRATION_APPROVED: ${{ vars.DATA_OWNER_MIGRATION_APPROVED }}
+      HEALTH_URL: ${{ vars.HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ship
+        with:
+          role: ${{ vars.AWS_SHIP_ROLE_ARN }}
   outcome:
     if: ${{ always() && !cancelled() }}
-    needs: [required-checks, verify, deploy]
+    needs: [required-checks, scope, deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Explain deployment eligibility and reject unexpected skips
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          RUNTIME: ${{ needs.verify.outputs.runtime }}
+          RUNTIME: ${{ needs.scope.outputs.runtime }}
           VERIFIED: ${{ needs.required-checks.result }}
           DEPLOYED: ${{ needs.deploy.result }}
           BETA_HOST: ${{ vars.BETA_AWS_INSTANCE_ID }}
@@ -95,7 +214,7 @@ jobs:
         run: python3 scripts/release_version.py
   promote:
     needs: outcome
-    if: success()
+    if: ${{ !cancelled() && needs.outcome.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -103,32 +222,14 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      # Load trusted code already on main; the new composites need not exist there yet.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - name: Merge or open the next club branch
+      - name: Advance the next club branch
         env:
           GH_TOKEN: ${{ github.token }}
           PROMOTION_DISPATCH: '1'
           PROMOTION_STAGE: Beta
-        run: |
-          python3 - <<'PY'
-          import json, os
-          path = os.environ['GITHUB_EVENT_PATH']
-          event = json.load(open(path, encoding='utf-8'))
-          if 'workflow_run' not in event:
-              pull = event.get('pull_request') or {}
-              head = pull.get('head') or {}
-              json.dump({'workflow_run': {
-                  'name': os.environ['PROMOTION_STAGE'],
-                  'event': os.environ['GITHUB_EVENT_NAME'],
-                  'conclusion': 'success',
-                  'head_sha': head.get('sha') or os.environ['GITHUB_SHA'],
-                  'head_branch': head.get('ref') or os.environ['GITHUB_REF_NAME'],
-                  'head_repository': {'full_name': os.environ['GITHUB_REPOSITORY']},
-                  'html_url': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-                  'pull_requests': [{'number': pull['number']}] if pull.get('number') else [],
-              }}, open(path, 'w', encoding='utf-8'))
-          PY
-          python3 scripts/promote.py
+        run: python3 scripts/promote.py

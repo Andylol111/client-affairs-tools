@@ -1,0 +1,32 @@
+name: Backend tests
+description: Backend tests for staged club delivery.
+inputs:
+  stage:
+    description: Stage supplied by the stage workflow.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: |
+          backend/requirements.lock
+          backend/requirements-dev.txt
+    - name: Install and test
+      shell: bash
+      working-directory: backend
+      env:
+        JWT_SECRET: p2-test-secret-not-a-known-default-xx
+      run: |
+        python -m pip install --require-hashes -q -r requirements.lock
+        python -m pip install -q -r requirements-dev.txt
+        python scripts/test_suite.py
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: coverage-${{ inputs.stage }}-${{ github.sha }}
+        path: backend/coverage.xml
+        retention-days: 3
+        if-no-files-found: error

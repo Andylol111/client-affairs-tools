@@ -6,7 +6,7 @@ Stack: `YucgOutreach-dev` in `us-east-1`. Image: `docker/app.Dockerfile`. SQLite
 
 **Do not** `cdk deploy YucgOutreach-dev`. User-data is baked into the instance (`userDataCausesReplacement: true`). A deploy mints a new box; CloudFront cannot rebind the VPC origin and the SQLite volume is already attached. Website updates are GitHub **Beta** (`feature`) or **Production** (`main`) via ECR + SSM restart. Never CodeBuild.
 
-**CodeBuild is not used.** Ship is GitHub Actions. If AWS is charging for CodeBuild, paste `infra/scripts/stop-codebuild.sh` in CloudShell now. That deletes `YucgPipeline-dev` and leftover Amplify apps. Do not recreate them.
+**CodeBuild is not used for this delivery path.** Investigate any charges against the actual resource inventory first. `infra/scripts/stop-codebuild.sh` contains destructive cleanup and is not a routine deployment step; review exact ownership and deletion scope before separately authorizing it.
 
 ## GitHub
 
