@@ -1,6 +1,6 @@
 # Delivery sequence and guardrails
 
-Reviewed against local `develop` on 2026-09-11, starting at `ca61ce9`. The three-workflow consolidation is local and uncommitted. This page describes current code; it does not establish current GitHub settings, the deployed revision, or AWS resource state. Historical findings remain in [the original application review](FRONTEND-AND-MEMBERSHIP-REVIEW.md) and [the dated AWS audit](AWS-READONLY-AUDIT-2026-09-09.md).
+Reviewed against `develop` revision `f380bc7` on 2026-09-11. The three-workflow consolidation is committed on develop but does not change the Actions sidebar until it reaches the default branch. This page describes current code; it does not establish current GitHub settings, the deployed revision, or AWS resource state. Historical findings remain in [the original application review](FRONTEND-AND-MEMBERSHIP-REVIEW.md) and [the dated AWS audit](AWS-READONLY-AUDIT-2026-09-09.md).
 
 ## Three stages
 
@@ -62,7 +62,7 @@ A plan binds the reviewed commit, account, region, state bucket/key, target, SHA
 - Behavior and authorization tests must cover sender identity, duplicate claims, invitation admission, private/project access, share expiry and quota races. A shared log must never select another member's Gmail credentials.
 - Coverage gates apply individually to critical modules; historical whole-backend coverage is only about one third. Passing scanners or coverage does not establish secure code or good UX. Test deletion, coverage exclusions and policy changes need explicit review.
 - Studio, invitations, private documents, sender isolation and first-party tracking already exist in source. Avoid rebuilding them from the historical review. Live Gmail/S3 checks still need explicitly authorized controlled accounts and files.
-- Current source review found that public telemetry accepts arbitrary event types in the same table used for inference reservations. Restrict that namespace/authentication and test direct API attempts before claiming quotas are protected against external interference. This is a separate backend follow-up, not fixed by the workflow consolidation.
+- Browser telemetry requires an authenticated active member and accepts only bounded `page_view` records. Direct API regressions reject forged quota/activity names, oversized details and oversized batches, keeping server reservation events outside the browser namespace.
 - Verify the exact hosted stage results before declaring the consolidation operational. The Actions sidebar change requires the deletion commit to reach main. This local review did not push, merge, approve a release, or change GitHub/AWS settings.
 - Preserve the current sole-maintainer arrangement: automated checks and explicit production approval. A second independent maintainer is deferred, as requested.
 
