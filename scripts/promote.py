@@ -119,6 +119,9 @@ def process_pull_requests(run, repo):
             files = api(f"{prefix}/pulls/{pr['number']}/files?per_page=100")
             if len(files) == 100 or not dependency_files_allowed(files):
                 continue
+        comparison = api(f'{prefix}/compare/{base}...{pr["head"]["sha"]}')
+        if comparison['behind_by']:
+            continue  # Never merge a source that does not contain the current base.
         current = api(f"{prefix}/pulls/{pr['number']}")
         if current['state'] != 'open' or held(current) or current['head']['sha'] != pr['head']['sha']:
             continue

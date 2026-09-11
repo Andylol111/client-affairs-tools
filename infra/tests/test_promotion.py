@@ -38,6 +38,8 @@ class PromotionTests(unittest.TestCase):
                 return reviews or []
             if '/files?' in path:
                 return files or []
+            if '/compare/' in path:
+                return {'behind_by': 0}
             self.fail(f'Unexpected API request: {path}')
 
         with patch.object(promotion, 'api', side_effect=fake_api), patch.object(promotion.subprocess, 'run') as merge:
@@ -76,6 +78,23 @@ class PromotionTests(unittest.TestCase):
         newer = self.pr()
         newer['head']['sha'] = 'newer'
         self.assertFalse(self.run_pr(refreshed=newer))
+
+    def test_source_behind_current_base_cannot_merge(self):
+        pr = self.pr()
+
+        def fake_api(path, method='GET', payload=None):
+            if path.endswith('/pulls/7'):
+                return deepcopy(pr)
+            if '/reviews?' in path:
+                return []
+            if '/compare/' in path:
+                return {'behind_by': 1}
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.object(promotion, 'api', side_effect=fake_api), \
+             patch.object(promotion.subprocess, 'run') as merge:
+            promotion.process(self.event(), self.repo)
+            merge.assert_not_called()
 
     def test_bot_workflow_update_requires_manual_review(self):
         pr = self.pr(user={'login': 'dependabot[bot]'}, labels=[])
@@ -181,6 +200,8 @@ class PromotionTests(unittest.TestCase):
                 return deepcopy(pr)
             if '/reviews?' in path or '/files?' in path:
                 return []
+            if '/compare/' in path:
+                return {'behind_by': 0}
             self.fail(f'Unexpected API request: {path}')
 
         with patch.dict(promotion.os.environ, {'PROMOTION_DISPATCH': '1'}), \
