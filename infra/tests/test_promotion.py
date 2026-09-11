@@ -20,7 +20,8 @@ class PromotionTests(unittest.TestCase):
 
     def pr(self, **changes):
         return dict({'number': 7, 'state': 'open', 'draft': False,
-                     'labels': [{'name': 'automerge'}], 'base': {'ref': 'develop'},
+                     'labels': [{'name': 'automerge'}],
+                     'base': {'ref': 'develop', 'sha': 'tested-base'},
                      'head': {'ref': 'topic', 'sha': 'verified', 'repo': {'full_name': self.repo}},
                      'user': {'login': 'member'}}, **changes)
 
@@ -78,6 +79,14 @@ class PromotionTests(unittest.TestCase):
         newer = self.pr()
         newer['head']['sha'] = 'newer'
         self.assertFalse(self.run_pr(refreshed=newer))
+
+    def test_target_base_change_cannot_receive_a_successful_merge_check(self):
+        changed_base = self.pr(base={'ref': 'develop', 'sha': 'new-untested-base'},
+                               merge_commit_sha='untested-merge')
+        with patch.dict(promotion.os.environ, {'PROMOTION_PUBLISH_CHECK': '1'}), \
+             patch.object(promotion, 'publish_merge_check') as publish:
+            self.assertFalse(self.run_pr(refreshed=changed_base))
+        publish.assert_not_called()
 
     def test_source_behind_current_base_cannot_merge(self):
         pr = self.pr()
@@ -236,7 +245,8 @@ class PromotionTests(unittest.TestCase):
                                   {'ref': 'develop'})])
 
     def test_dispatch_verification_merges_promotion_pr_by_head_sha(self):
-        pr = self.pr(labels=[], base={'ref': 'feature'}, head={'ref': 'develop', 'sha': 'verified',
+        pr = self.pr(labels=[], base={'ref': 'feature', 'sha': 'tested-feature'},
+                     head={'ref': 'develop', 'sha': 'verified',
                                                               'repo': {'full_name': self.repo}})
         event = self.event('Beta', 'workflow_dispatch', 'develop')
         event['workflow_run']['pull_requests'] = []
@@ -294,7 +304,9 @@ class PromotionTests(unittest.TestCase):
                 return {'sha': 'merged'}
             if path.endswith('/branches/main'):
                 return {'commit': {'sha': 'verified'}}
-            if path.endswith('/compare/develop...main'):
+            if path.endswith('/branches/develop'):
+                return {'commit': {'sha': 'develop-base'}}
+            if path.endswith('/compare/develop-base...verified'):
                 return {'ahead_by': 1}
             self.fail(f'Unexpected API request: {path}')
 
@@ -302,7 +314,7 @@ class PromotionTests(unittest.TestCase):
              patch.object(promotion, 'api', side_effect=fake_api):
             promotion.process(self.event('Production', 'push', 'main'), self.repo)
         self.assertEqual(posts[0], ('repos/club/tools/merges', {
-            'base': 'develop', 'head': 'main',
+            'base': 'develop', 'head': 'verified',
             'commit_message': 'Synchronize main (verified) into develop',
         }))
         self.assertEqual(posts[1], ('repos/club/tools/actions/workflows/intake.yml/dispatches',
