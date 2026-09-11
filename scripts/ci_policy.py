@@ -5,6 +5,35 @@ import os
 import subprocess
 
 
+SENSITIVE_PATCH_PREFIXES = (
+    '.github/', 'backend/', 'docker/', 'infra/', 'terraform/',
+)
+SENSITIVE_PATCH_FILES = {
+    '.dockerignore', '.github/dependabot.yml',
+    'frontend/package.json', 'frontend/package-lock.json',
+}
+
+
+def delivery_lane(paths):
+    """Classify cheap early verification without weakening Production.
+
+    Documentation and frontend presentation/test edits use the quick patch lane.
+    Runtime, dependency, workflow and infrastructure changes use the standard lane.
+    The lane is explanatory: required checks still come from ``classify`` and
+    Production verification expands every executable change to every boundary.
+    """
+    relevant = [path for path in paths if path]
+    if relevant and all(
+        (path.startswith('docs/') or path.endswith('.md') or
+         (path.startswith('frontend/') and path not in SENSITIVE_PATCH_FILES and
+          path.endswith(('.css', '.md', '.test.ts', '.test.tsx', '.spec.ts', '.spec.tsx'))))
+        and not path.startswith(SENSITIVE_PATCH_PREFIXES)
+        for path in relevant
+    ):
+        return 'patch'
+    return 'standard'
+
+
 def classify(paths, stage, phase='verify'):
     selected = dict.fromkeys(('backend', 'frontend', 'infra', 'image'), False)
     for path in paths:
@@ -75,12 +104,14 @@ if __name__ == '__main__':
     else:
         paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', base, head]).decode().split('\0')
     scope = classify([p for p in paths if p], args.stage, phase)
+    lane = delivery_lane([p for p in paths if p])
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         for name, enabled in scope.items():
             output.write(f'{name}={str(enabled).lower()}\n')
         output.write('scope=' + json.dumps(scope) + '\n')
+        output.write('lane=' + lane + '\n')
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-        summary.write(f'## {args.stage.title()} {os.environ.get("PHASE", "verify")}\n\n')
+        summary.write(f'## {args.stage.title()} {os.environ.get("PHASE", "verify")} · {lane} lane\n\n')
         summary.write('| Check | Decision |\n| --- | --- |\n')
         for name, enabled in scope.items():
             summary.write(f'| {name} | {"Required" if enabled else "Not affected by this diff"} |\n')

@@ -105,7 +105,9 @@ def process_pull_requests(run, repo):
             continue
         promotion = (base, head) in PROMOTION_EDGES
         dependency = base == 'develop' and pr['user']['login'] == 'dependabot[bot]'
-        requested = base == 'develop' and 'automerge' in {label['name'] for label in pr.get('labels', [])}
+        # Every same-repository topic PR enters through Intake. Drafts, hold
+        # labels and requested changes remain explicit brakes.
+        requested = base == 'develop' and pr['user']['login'] != 'dependabot[bot]'
         sync_source = head.split('/')[1].split('-')[0] if head.startswith('sync/') else ''
         sync = base == 'develop' and sync_source in {'main', 'feature'} and pr['head']['sha'] == api(f'{prefix}/branches/{sync_source}')['commit']['sha']
         if not promotion and not dependency and not sync and not requested:
@@ -117,6 +119,9 @@ def process_pull_requests(run, repo):
             files = api(f"{prefix}/pulls/{pr['number']}/files?per_page=100")
             if len(files) == 100 or not dependency_files_allowed(files):
                 continue
+        comparison = api(f'{prefix}/compare/{base}...{pr["head"]["sha"]}')
+        if comparison['behind_by']:
+            continue  # Never merge a source that does not contain the current base.
         current = api(f"{prefix}/pulls/{pr['number']}")
         if current['state'] != 'open' or held(current) or current['head']['sha'] != pr['head']['sha']:
             continue
@@ -143,7 +148,12 @@ def process_branch(run, repo):
     if not comparison['files']:
         return
     existing = api(f'{prefix}/pulls?state=all&base={target}&head={repo.split("/")[0]}:{source}&per_page=100')
-    if any(p['state'] == 'open' for p in existing):
+    open_candidates = [p for p in existing if p['state'] == 'open']
+    if open_candidates:
+        # A long-lived develop→feature or feature→main PR follows its source
+        # branch automatically. Verify its new exact head instead of leaving a
+        # stale candidate waiting with checks from the previous revision.
+        dispatch_workflow(repo, WORKFLOW_FOR_BRANCH[target], source)
         return
     if any(p['state'] == 'closed' and not p.get('merged_at') and p['head']['sha'] == run['head_sha'] for p in existing):
         return

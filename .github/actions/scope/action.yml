@@ -8,6 +8,9 @@ inputs:
     description: Phase supplied by the stage workflow.
     required: true
 outputs:
+  lane:
+    description: Fast patch or standard progression lane.
+    value: ${{ steps.changes.outputs.lane }}
   scope:
     description: Scope computed for this revision.
     value: ${{ steps.changes.outputs.scope }}

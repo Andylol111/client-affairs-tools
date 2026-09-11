@@ -38,13 +38,15 @@ class PromotionTests(unittest.TestCase):
                 return reviews or []
             if '/files?' in path:
                 return files or []
+            if '/compare/' in path:
+                return {'behind_by': 0}
             self.fail(f'Unexpected API request: {path}')
 
         with patch.object(promotion, 'api', side_effect=fake_api), patch.object(promotion.subprocess, 'run') as merge:
             promotion.process(event or self.event(), self.repo)
             return merge.call_args_list
 
-    def test_opted_in_topic_merges_exact_head_without_deferred_or_admin_bypass(self):
+    def test_same_repository_topic_merges_exact_head_without_admin_bypass(self):
         calls = self.run_pr()
         self.assertEqual(len(calls), 1)
         args = calls[0].args[0]
@@ -69,13 +71,30 @@ class PromotionTests(unittest.TestCase):
         self.assertFalse(self.run_pr(pr=self.pr(draft=True)))
         self.assertFalse(self.run_pr(pr=self.pr(labels=[{'name': 'release:hold'}])))
         self.assertFalse(self.run_pr(reviews=[{'state': 'CHANGES_REQUESTED', 'user': {'login': 'owner'}}]))
-        self.assertFalse(self.run_pr(pr=self.pr(labels=[])))
+        self.assertEqual(len(self.run_pr(pr=self.pr(labels=[]))), 1)
 
     def test_last_moment_hold_or_new_head_cannot_merge(self):
         self.assertFalse(self.run_pr(refreshed=self.pr(labels=[{'name': 'hold'}])))
         newer = self.pr()
         newer['head']['sha'] = 'newer'
         self.assertFalse(self.run_pr(refreshed=newer))
+
+    def test_source_behind_current_base_cannot_merge(self):
+        pr = self.pr()
+
+        def fake_api(path, method='GET', payload=None):
+            if path.endswith('/pulls/7'):
+                return deepcopy(pr)
+            if '/reviews?' in path:
+                return []
+            if '/compare/' in path:
+                return {'behind_by': 1}
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.object(promotion, 'api', side_effect=fake_api), \
+             patch.object(promotion.subprocess, 'run') as merge:
+            promotion.process(self.event(), self.repo)
+            merge.assert_not_called()
 
     def test_bot_workflow_update_requires_manual_review(self):
         pr = self.pr(user={'login': 'dependabot[bot]'}, labels=[])
@@ -105,6 +124,26 @@ class PromotionTests(unittest.TestCase):
                     self.assertEqual(bool(creates), expected)
                     if creates:
                         self.assertEqual(creates[0].args[2]['base'], 'feature')
+
+    def test_existing_promotion_pr_dispatches_verification_for_updated_source(self):
+        previous = [{'state': 'open', 'head': {'sha': 'verified'}}]
+
+        def fake_api(path, method='GET', payload=None):
+            if '/branches/' in path:
+                return {'commit': {'sha': 'verified'}}
+            if '/compare/' in path:
+                return {'behind_by': 0, 'files': [{'filename': 'backend/main.py'}]}
+            if method == 'POST':
+                return {}
+            return previous
+
+        with patch.dict(promotion.os.environ, {'PROMOTION_DISPATCH': '1'}), \
+             patch.object(promotion, 'api', side_effect=fake_api) as api:
+            promotion.process(self.event('Intake', 'push', 'develop'), self.repo)
+        dispatches = [call for call in api.call_args_list
+                      if len(call.args) > 1 and call.args[1] == 'POST']
+        self.assertEqual(dispatches[-1].args[0],
+                         'repos/club/tools/actions/workflows/beta.yml/dispatches')
 
     def test_history_only_push_does_not_promote_forever(self):
         with patch.object(promotion, 'api', side_effect=[{'commit': {'sha': 'verified'}}, {'behind_by': 0, 'files': []}]) as api:
@@ -161,6 +200,8 @@ class PromotionTests(unittest.TestCase):
                 return deepcopy(pr)
             if '/reviews?' in path or '/files?' in path:
                 return []
+            if '/compare/' in path:
+                return {'behind_by': 0}
             self.fail(f'Unexpected API request: {path}')
 
         with patch.dict(promotion.os.environ, {'PROMOTION_DISPATCH': '1'}), \

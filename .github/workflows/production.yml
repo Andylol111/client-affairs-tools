@@ -1,4 +1,4 @@
-name: Production
+name: Production · Feature to Main
 on:
   push:
     branches: [main]
@@ -62,6 +62,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      lane: ${{ steps.classify.outputs.lane }}
       scope: ${{ steps.classify.outputs.scope }}
       backend: ${{ steps.classify.outputs.backend }}
       frontend: ${{ steps.classify.outputs.frontend }}
@@ -105,6 +106,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/frontend
+        with:
+          stage: production
   infra:
     timeout-minutes: 15
     needs: scope
@@ -173,7 +176,7 @@ jobs:
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
     needs: [required-checks, scope, image]
-    if: needs.scope.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deliver'))
+    if: ${{ always() && !cancelled() && needs.required-checks.result == 'success' && needs.scope.result == 'success' && needs.image.result == 'success' && needs.scope.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deliver')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -318,7 +321,7 @@ jobs:
           [[ "$VERIFIED_RUN" =~ ^[0-9]+$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN" | jq -e \
             --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
-            '.name == "Production" and (.event == "push" or .event == "workflow_dispatch") and .head_branch == "main" and .head_sha == $sha and .head_repository.full_name == $repo and .conclusion == "success"'
+            '.name == "Production · Feature to Main" and (.event == "push" or .event == "workflow_dispatch") and .head_branch == "main" and .head_sha == $sha and .head_repository.full_name == $repo and .conclusion == "success"'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: yucg-static-${{ github.sha }}
