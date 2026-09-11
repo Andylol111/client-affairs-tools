@@ -8,7 +8,7 @@ ROOT = Path(__file__).parents[2]
 
 
 class WorkflowLoadingTests(unittest.TestCase):
-    def test_single_maintainer_rules_do_not_require_unavailable_ai_or_peer_approval(self):
+    def test_single_maintainer_rules_require_current_base_without_peer_approval(self):
         for name in ('feature-ruleset.proposed.json', 'main-ruleset.proposed.json'):
             ruleset = json.loads(ROOT.joinpath('infra/github', name).read_text())
             pull_request = next(rule for rule in ruleset['rules']
@@ -17,7 +17,7 @@ class WorkflowLoadingTests(unittest.TestCase):
                           if rule['type'] == 'required_status_checks')['parameters']
             self.assertEqual(pull_request['required_approving_review_count'], 0)
             self.assertFalse(pull_request['require_extra_approval_for_unattributed_changes'])
-            self.assertFalse(checks['strict_required_status_checks_policy'])
+            self.assertTrue(checks['strict_required_status_checks_policy'])
 
     def test_exactly_three_repository_workflows_back_four_sidebar_entries(self):
         workflows = sorted(path.name for path in (ROOT / '.github/workflows').glob('*.yml'))
@@ -28,6 +28,23 @@ class WorkflowLoadingTests(unittest.TestCase):
                          'name: Beta · Develop to Feature')
         self.assertEqual((ROOT / '.github/workflows/production.yml').read_text().splitlines()[0],
                          'name: Production · Feature to Main')
+
+    def test_each_stage_emits_a_distinct_aggregate_check(self):
+        expected = {
+            'intake.yml': 'name: intake-required-checks',
+            'beta.yml': 'name: feature-required-checks',
+            'production.yml': 'name: production-required-checks',
+        }
+        for workflow, context in expected.items():
+            self.assertIn(context, ROOT.joinpath('.github/workflows', workflow).read_text())
+        for ruleset, context in (
+            ('feature-ruleset.proposed.json', 'feature-required-checks'),
+            ('main-ruleset.proposed.json', 'production-required-checks'),
+        ):
+            payload = json.loads(ROOT.joinpath('infra/github', ruleset).read_text())
+            checks = next(rule for rule in payload['rules']
+                          if rule['type'] == 'required_status_checks')['parameters']
+            self.assertEqual(checks['required_status_checks'][0]['context'], context)
 
     def test_ship_uses_ephemeral_ecr_helper_instead_of_docker_login(self):
         ship = ROOT.joinpath('.github/actions/ship/action.yml').read_text()
@@ -54,9 +71,12 @@ class WorkflowLoadingTests(unittest.TestCase):
         for workflow in (ROOT / '.github/workflows').glob('*.yml'):
             jobs = re.split(r'^  (?=[\w-]+:\s*$)', workflow.read_text(), flags=re.MULTILINE)
             promote = next(job for job in jobs if job.startswith('promote:'))
-            self.assertIn('ref: ${{ github.event.repository.default_branch }}', promote)
+            trusted_refs = ('ref: ${{ github.event.repository.default_branch }}',
+                            'ref: 83b14800c71d1242d17a5eca47ef39804d6e2ebd')
+            self.assertTrue(any(ref in promote for ref in trusted_refs))
             self.assertIn('persist-credentials: false', promote)
             self.assertIn('run: python3 scripts/promote.py', promote)
+            self.assertIn('statuses: write', promote)
             # No dependency on a composite that is not present on main at first rollout.
             self.assertNotIn('uses: ./.github/', promote)
 

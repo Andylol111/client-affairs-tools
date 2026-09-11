@@ -10,10 +10,16 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 STAGE_FOR_BASE = {'develop': 'Intake', 'feature': 'Beta', 'main': 'Production'}
 WORKFLOW_FOR_BRANCH = {'develop': 'intake.yml', 'feature': 'beta.yml', 'main': 'production.yml'}
 PROMOTION_EDGES = {('feature', 'develop'), ('main', 'feature')}
+CHECK_FOR_STAGE = {
+    'Intake': 'intake-required-checks',
+    'Beta': 'feature-required-checks',
+    'Production': 'production-required-checks',
+}
 
 
 def api(path, method='GET', payload=None):
@@ -55,10 +61,33 @@ def dispatch_workflow(repo, workflow, ref):
 
 def merge_now(repo, number, sha, base):
     subprocess.run(['gh', 'pr', 'merge', str(number), '--repo', repo,
-                    '--merge', '--match-head-commit', sha], check=True)
-    workflow = WORKFLOW_FOR_BRANCH.get(base)
-    if workflow:
-        dispatch_workflow(repo, workflow, base)
+                    '--auto', '--merge', '--match-head-commit', sha], check=True)
+    if os.environ.get('PROMOTION_DISPATCH') != '1':
+        return
+    for _ in range(30):
+        merged = api(f'repos/{repo}/pulls/{number}')
+        if merged['state'] == 'closed' and merged.get('merged_at'):
+            workflow = WORKFLOW_FOR_BRANCH.get(base)
+            if workflow:
+                dispatch_workflow(repo, workflow, base)
+            return
+        time.sleep(2)
+    raise RuntimeError(
+        f'Pull request #{number} did not merge within 60 seconds; '
+        'the next delivery stage was not dispatched'
+    )
+
+
+def publish_merge_check(repo, pr, run):
+    """Expose a dispatched stage result as a required status on its exact head."""
+    if os.environ.get('PROMOTION_PUBLISH_CHECK') != '1':
+        return
+    api(f'repos/{repo}/statuses/{run["head_sha"]}', 'POST', {
+        'state': 'success',
+        'context': CHECK_FOR_STAGE[run['name']],
+        'target_url': run['html_url'],
+        'description': f'{run["name"]} passed for the current protected-branch base',
+    })
 
 
 def pull_requests_for(run, repo):
@@ -81,12 +110,13 @@ def synchronize(repo, source):
     """
     prefix = f'repos/{repo}'
     sha = api(f'{prefix}/branches/{source}')['commit']['sha']
-    comparison = api(f'{prefix}/compare/develop...{source}')
+    develop_sha = api(f'{prefix}/branches/develop')['commit']['sha']
+    comparison = api(f'{prefix}/compare/{develop_sha}...{sha}')
     if comparison['ahead_by'] == 0:
         return
     api(f'{prefix}/merges', 'POST', {
         'base': 'develop',
-        'head': source,
+        'head': sha,
         'commit_message': f'Synchronize {source} ({sha[:12]}) into develop',
     })
     dispatch_workflow(repo, 'intake.yml', 'develop')
@@ -119,12 +149,17 @@ def process_pull_requests(run, repo):
             files = api(f"{prefix}/pulls/{pr['number']}/files?per_page=100")
             if len(files) == 100 or not dependency_files_allowed(files):
                 continue
-        comparison = api(f'{prefix}/compare/{base}...{pr["head"]["sha"]}')
+        tested_base_sha = pr['base']['sha']
+        comparison = api(f'{prefix}/compare/{tested_base_sha}...{pr["head"]["sha"]}')
         if comparison['behind_by']:
             continue  # Never merge a source that does not contain the current base.
         current = api(f"{prefix}/pulls/{pr['number']}")
-        if current['state'] != 'open' or held(current) or current['head']['sha'] != pr['head']['sha']:
+        if (current['state'] != 'open' or held(current)
+                or current['head']['sha'] != pr['head']['sha']
+                or current['base']['ref'] != base
+                or current['base']['sha'] != tested_base_sha):
             continue
+        publish_merge_check(repo, current, run)
         merge_now(repo, pr['number'], pr['head']['sha'], base)
 
 
