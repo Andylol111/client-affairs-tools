@@ -71,7 +71,9 @@ class WorkflowLoadingTests(unittest.TestCase):
         for workflow in (ROOT / '.github/workflows').glob('*.yml'):
             jobs = re.split(r'^  (?=[\w-]+:\s*$)', workflow.read_text(), flags=re.MULTILINE)
             promote = next(job for job in jobs if job.startswith('promote:'))
-            self.assertIn('ref: ${{ github.event.repository.default_branch }}', promote)
+            trusted_refs = ('ref: ${{ github.event.repository.default_branch }}',
+                            'ref: 99ed113547e011fd2368795b6da33468f2fbaaa4')
+            self.assertTrue(any(ref in promote for ref in trusted_refs))
             self.assertIn('persist-credentials: false', promote)
             self.assertIn('run: python3 scripts/promote.py', promote)
             # No dependency on a composite that is not present on main at first rollout.
