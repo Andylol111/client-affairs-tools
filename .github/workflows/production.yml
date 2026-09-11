@@ -176,7 +176,7 @@ jobs:
         run: echo "$RESULTS" | jq -e 'all(.[]; .result == "success")'
   deploy:
     needs: [required-checks, scope, image]
-    if: needs.scope.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deliver'))
+    if: ${{ always() && !cancelled() && needs.required-checks.result == 'success' && needs.scope.result == 'success' && needs.image.result == 'success' && needs.scope.outputs.runtime == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deliver')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
