@@ -46,13 +46,13 @@ class PromotionTests(unittest.TestCase):
             promotion.process(event or self.event(), self.repo)
             return merge.call_args_list
 
-    def test_same_repository_topic_merges_exact_head_without_admin_bypass(self):
+    def test_same_repository_topic_queues_exact_head_without_admin_bypass(self):
         calls = self.run_pr()
         self.assertEqual(len(calls), 1)
         args = calls[0].args[0]
         self.assertIn('--match-head-commit', args)
         self.assertEqual(args[-1], 'verified')
-        self.assertNotIn('--auto', args)
+        self.assertIn('--auto', args)
         self.assertNotIn('--admin', args)
 
     def test_failed_run_and_wrong_workflow_cannot_merge(self):
@@ -167,6 +167,23 @@ class PromotionTests(unittest.TestCase):
         self.assertFalse(promotion.dependency_files_allowed([]))
         self.assertTrue(promotion.dependency_files_allowed([{'filename': 'frontend/package-lock.json'}]))
 
+    def test_stage_result_is_bound_to_the_pr_merge_revision(self):
+        pr = self.pr(merge_commit_sha='merge-revision')
+        posts = []
+
+        def fake_api(path, method='GET', payload=None):
+            posts.append((path, method, payload))
+            return {}
+
+        with patch.dict(promotion.os.environ, {'PROMOTION_PUBLISH_CHECK': '1'}), \
+             patch.object(promotion, 'api', side_effect=fake_api):
+            promotion.publish_merge_check(self.repo, pr, self.event()['workflow_run'])
+        path, method, payload = posts[0]
+        self.assertEqual((path, method), ('repos/club/tools/check-runs', 'POST'))
+        self.assertEqual(payload['name'], 'intake-required-checks')
+        self.assertEqual(payload['head_sha'], 'merge-revision')
+        self.assertEqual(payload['conclusion'], 'success')
+
     def test_actions_token_dispatches_next_stage_after_merge_and_open(self):
         posts = []
 
@@ -192,12 +209,19 @@ class PromotionTests(unittest.TestCase):
         posts.clear()
         pr = self.pr()
 
+        reads = 0
+
         def merge_api(path, method='GET', payload=None):
+            nonlocal reads
             if method == 'POST':
                 posts.append((path, payload))
                 return {}
             if path.endswith('/pulls/7'):
-                return deepcopy(pr)
+                reads += 1
+                current = deepcopy(pr)
+                if reads > 2:
+                    current.update(state='closed', merged_at='now')
+                return current
             if '/reviews?' in path or '/files?' in path:
                 return []
             if '/compare/' in path:
@@ -251,6 +275,8 @@ class PromotionTests(unittest.TestCase):
         self.assertIn('PROMOTION_STAGE: Intake', text)
         self.assertIn("needs.required-checks.result == 'success'", text)
         self.assertIn('run: python3 scripts/promote.py', text)
+        self.assertIn('checks: write', text)
+        self.assertIn("PROMOTION_PUBLISH_CHECK: '1'", text)
         self.assertFalse(Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').exists())
 
     def test_bot_promotion_does_not_use_pull_request_triggers(self):

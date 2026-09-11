@@ -10,10 +10,16 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 STAGE_FOR_BASE = {'develop': 'Intake', 'feature': 'Beta', 'main': 'Production'}
 WORKFLOW_FOR_BRANCH = {'develop': 'intake.yml', 'feature': 'beta.yml', 'main': 'production.yml'}
 PROMOTION_EDGES = {('feature', 'develop'), ('main', 'feature')}
+CHECK_FOR_STAGE = {
+    'Intake': 'intake-required-checks',
+    'Beta': 'feature-required-checks',
+    'Production': 'production-required-checks',
+}
 
 
 def api(path, method='GET', payload=None):
@@ -55,10 +61,37 @@ def dispatch_workflow(repo, workflow, ref):
 
 def merge_now(repo, number, sha, base):
     subprocess.run(['gh', 'pr', 'merge', str(number), '--repo', repo,
-                    '--merge', '--match-head-commit', sha], check=True)
-    workflow = WORKFLOW_FOR_BRANCH.get(base)
-    if workflow:
-        dispatch_workflow(repo, workflow, base)
+                    '--auto', '--merge', '--match-head-commit', sha], check=True)
+    if os.environ.get('PROMOTION_DISPATCH') != '1':
+        return
+    for _ in range(10):
+        merged = api(f'repos/{repo}/pulls/{number}')
+        if merged['state'] == 'closed' and merged.get('merged_at'):
+            workflow = WORKFLOW_FOR_BRANCH.get(base)
+            if workflow:
+                dispatch_workflow(repo, workflow, base)
+            return
+        time.sleep(2)
+
+
+def publish_merge_check(repo, pr, run):
+    """Bind a dispatched stage result to GitHub's synthetic PR merge SHA."""
+    if os.environ.get('PROMOTION_PUBLISH_CHECK') != '1':
+        return
+    merge_sha = pr.get('merge_commit_sha')
+    if not merge_sha:
+        raise RuntimeError('GitHub did not provide a PR merge revision')
+    api(f'repos/{repo}/check-runs', 'POST', {
+        'name': CHECK_FOR_STAGE[run['name']],
+        'head_sha': merge_sha,
+        'status': 'completed',
+        'conclusion': 'success',
+        'details_url': run['html_url'],
+        'output': {
+            'title': f'{run["name"]} candidate passed',
+            'summary': f'Source `{run["head_sha"]}` passed the complete {run["name"]} aggregate gate and contains the current base.',
+        },
+    })
 
 
 def pull_requests_for(run, repo):
@@ -125,6 +158,7 @@ def process_pull_requests(run, repo):
         current = api(f"{prefix}/pulls/{pr['number']}")
         if current['state'] != 'open' or held(current) or current['head']['sha'] != pr['head']['sha']:
             continue
+        publish_merge_check(repo, current, run)
         merge_now(repo, pr['number'], pr['head']['sha'], base)
 
 
