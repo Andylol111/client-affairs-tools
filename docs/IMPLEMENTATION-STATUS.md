@@ -2,13 +2,13 @@
 
 ## Current repository reconciliation — 2026-09-11
 
-Local `develop` starts at `ca61ce9`. The existing application work below is already in source; it is not a new implementation backlog. The remaining local change consolidates Actions into three workflow files with eight composite actions for scope/checks/shipping. Promotion invokes the trusted script directly from the default branch, without a GitHub App or new sync PRs.
+The three-workflow consolidation is committed on `develop` at `f380bc7`. The existing application work below is already in source; it is not a new implementation backlog. Eight composite actions provide scope/checks/shipping without appearing as extra workflows. Promotion invokes the trusted script directly from the default branch, without a GitHub App or new sync PRs.
 
 The consolidation now checks out before loading every local action, includes valid action metadata, limits write tokens to the jobs that need them, and compares dispatched runs to the correct target/parent. A regression with real Git history confirms that a workflow-only dispatch does not deploy existing runtime files. Beta uses its explicit separate instance binding; main-only maintenance operations are serialized with delivery. See [current delivery behavior and guardrails](DELIVERY-GUARDRAILS.md).
 
-Current local verification: **48 infrastructure/controller/workflow tests pass**, and **actionlint passes**. Three existing SQLite test-fixture ResourceWarnings remain. Backend/browser suites were not rerun for this workflow-only continuation. Hosted composite execution, current GitHub settings and the live AWS revision were not inspected in this pass. Nothing was committed, pushed, merged or deployed by this continuation.
+Current verification: **48 infrastructure/controller/workflow tests pass**, actionlint passes, Terraform mock tests are **3/3**, and Terraform validation succeeds. The full backend suite passes with **34%** overall branch coverage; telemetry is now an 84%-covered critical module. Frontend lint/build and the browser suite pass (**45 passed, one desktop-only assertion skipped on mobile**). Frontend, infrastructure and locked Python dependency audits report no known vulnerabilities; Bandit reports no high-severity finding. Three existing SQLite test-fixture ResourceWarnings remain. Docker is unavailable locally, so the hosted image build/Trivy/runtime checks remain required. Current GitHub settings, hosted completion and the live AWS revision still require fresh verification. No AWS operation or email was performed in this continuation.
 
-Remaining backend finding: public telemetry accepts arbitrary event types, including server-reserved quota names. Its authentication/event namespace needs a separate fix and API regression tests. Do not treat the inference quota tests alone as proof that clients cannot interfere with reservations.
+Browser telemetry now requires an authenticated active member, accepts only the bounded `page_view` event, and rejects server-reserved quota/activity names. Direct API regressions cover anonymous access, forged quota events, invalid resources, oversized details and oversized batches.
 
 ## Historical implementation and deployment evidence
 
