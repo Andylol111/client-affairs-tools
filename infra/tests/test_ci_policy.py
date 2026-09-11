@@ -141,6 +141,16 @@ class PolicyTests(unittest.TestCase):
         text = Path(__file__).parents[2].joinpath('.github/workflows/beta.yml').read_text()
         self.assertIn('always() && !cancelled()', text)
 
+    def test_deploy_jobs_account_for_skipped_needs_before_environment_approval(self):
+        root = Path(__file__).parents[2].joinpath('.github/workflows')
+        for workflow in ('beta.yml', 'production.yml'):
+            text = root.joinpath(workflow).read_text()
+            deploy = text.split('\n  deploy:', 1)[1].split('\n  outcome:', 1)[0]
+            self.assertIn('always() && !cancelled()', deploy)
+            self.assertIn("needs.required-checks.result == 'success'", deploy)
+            self.assertIn("needs.scope.result == 'success'", deploy)
+            self.assertIn("needs.image.result == 'success'", deploy)
+
 
 if __name__ == '__main__':
     unittest.main()
