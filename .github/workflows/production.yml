@@ -166,6 +166,7 @@ jobs:
           scope: ${{ needs.scope.outputs.scope }}
           results: ${{ toJSON(needs) }}
   required-checks:
+    name: production-required-checks
     if: ${{ always() && !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'deliver') }}
     needs: [route, gate]
     runs-on: ubuntu-latest

@@ -29,6 +29,23 @@ class WorkflowLoadingTests(unittest.TestCase):
         self.assertEqual((ROOT / '.github/workflows/production.yml').read_text().splitlines()[0],
                          'name: Production · Feature to Main')
 
+    def test_each_stage_emits_a_distinct_aggregate_check(self):
+        expected = {
+            'intake.yml': 'name: intake-required-checks',
+            'beta.yml': 'name: feature-required-checks',
+            'production.yml': 'name: production-required-checks',
+        }
+        for workflow, context in expected.items():
+            self.assertIn(context, ROOT.joinpath('.github/workflows', workflow).read_text())
+        for ruleset, context in (
+            ('feature-ruleset.proposed.json', 'feature-required-checks'),
+            ('main-ruleset.proposed.json', 'production-required-checks'),
+        ):
+            payload = json.loads(ROOT.joinpath('infra/github', ruleset).read_text())
+            checks = next(rule for rule in payload['rules']
+                          if rule['type'] == 'required_status_checks')['parameters']
+            self.assertEqual(checks['required_status_checks'][0]['context'], context)
+
     def test_ship_uses_ephemeral_ecr_helper_instead_of_docker_login(self):
         ship = ROOT.joinpath('.github/actions/ship/action.yml').read_text()
         helper = ROOT.joinpath('infra/scripts/ecr-credentials.sh').read_text()
