@@ -209,6 +209,7 @@ class PromotionTests(unittest.TestCase):
         text = Path(__file__).parents[2].joinpath('.github/workflows/intake.yml').read_text()
         self.assertIn('PROMOTION_STAGE: Intake', text)
         self.assertIn("needs.required-checks.result == 'success'", text)
+        self.assertIn('run: python3 scripts/promote.py', text)
         self.assertFalse(Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').exists())
 
     def test_bot_promotion_does_not_use_pull_request_triggers(self):

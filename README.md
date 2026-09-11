@@ -8,9 +8,9 @@ Live club website for Yale Undergraduate Consulting Group outreach. Members shar
 
 ## Members
 
-Use `AppUrl` in any order: Home, Week, Studio, Send, Pipeline, Find, Stats.
+Use `AppUrl`: Home, Projects, Documents, and Outreach (Week, Email studio, Campaigns, Pipeline, Prospects, Results).
 
-- One SQLite file on the box is the warehouse. What you save is what other members see. Browser `localStorage` is not shared.
+- SQLite stores the shared application records and access permissions. Private documents remain private; project and club sharing are explicit. Browser `localStorage` is not shared.
 - Studio generate works against existing contacts (or a quick compose). You do not have to run Find first.
 - AI on the host is Bedrock (`LLM_PROVIDER=bedrock`). There is no Ollama on the box.
 
@@ -22,7 +22,7 @@ Daily loop:
 2. After Intake succeeds, promotion opens `develop` → `feature`. **Beta** must pass; a runtime push to `feature` deploys the beta box.
 3. After Beta succeeds, promotion opens `feature` → `main`. **Production** must pass; a runtime push to `main` deploys the live box after environment approval.
 
-A docs-only or workflow-only change still has to pass its selected checks, but it does not request a deployment. Add `release:hold`, request changes, or close the promotion PR to stop a candidate. Terraform apply is a separate reviewed saved-plan workflow.
+A docs-only or workflow-only change still has to pass its selected checks, but it does not request a deployment. Add `release:hold`, request changes, or close the promotion PR to stop a candidate. Terraform plan/apply are reviewed Production dispatch operations, separate from application delivery. See [the current three-stage contract](docs/DELIVERY-GUARDRAILS.md).
 
 `feature` is the beta hop, not an optional skip. Required checks have no administrator bypass. Random other branches cannot target `feature` or `main`.
 

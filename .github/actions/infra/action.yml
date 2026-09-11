@@ -1,0 +1,37 @@
+name: Infrastructure tests
+description: Infrastructure tests for staged club delivery.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: infra/package-lock.json
+    - shell: bash
+      working-directory: infra
+      run: npm ci
+    - shell: bash
+      working-directory: infra
+      run: npm audit --audit-level=high
+    - shell: bash
+      working-directory: infra
+      run: npx tsc --noEmit
+    - shell: bash
+      working-directory: infra
+      run: for script in scripts/*.sh lib/user-data.sh; do bash -n "$script"; done
+    - shell: bash
+      working-directory: infra
+      run: python3 -m unittest discover -s tests -p 'test_*.py'
+    - name: Install checksum-verified Terraform
+      shell: bash
+      working-directory: infra
+      run: bash scripts/install-terraform.sh
+    - name: Validate infrastructure contracts without AWS credentials
+      shell: bash
+      working-directory: infra
+      run: |
+        terraform -chdir=../terraform fmt -check -recursive
+        terraform -chdir=../terraform init -backend=false -lockfile=readonly
+        terraform -chdir=../terraform validate
+        terraform -chdir=../terraform test
