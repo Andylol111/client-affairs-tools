@@ -40,6 +40,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      lane: ${{ steps.classify.outputs.lane }}
       scope: ${{ steps.classify.outputs.scope }}
       backend: ${{ steps.classify.outputs.backend }}
       frontend: ${{ steps.classify.outputs.frontend }}
@@ -83,6 +84,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/frontend
+        with:
+          stage: intake
   infra:
     timeout-minutes: 15
     needs: scope

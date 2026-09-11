@@ -7,6 +7,23 @@ ROOT = Path(__file__).parents[2]
 
 
 class WorkflowLoadingTests(unittest.TestCase):
+    def test_exactly_three_repository_workflows_back_four_sidebar_entries(self):
+        workflows = sorted(path.name for path in (ROOT / '.github/workflows').glob('*.yml'))
+        self.assertEqual(workflows, ['beta.yml', 'intake.yml', 'production.yml'])
+        self.assertEqual((ROOT / '.github/workflows/intake.yml').read_text().splitlines()[0],
+                         'name: Intake')
+        self.assertEqual((ROOT / '.github/workflows/beta.yml').read_text().splitlines()[0],
+                         'name: Beta · Develop to Feature')
+        self.assertEqual((ROOT / '.github/workflows/production.yml').read_text().splitlines()[0],
+                         'name: Production · Feature to Main')
+
+    def test_ship_uses_ephemeral_ecr_helper_instead_of_docker_login(self):
+        ship = ROOT.joinpath('.github/actions/ship/action.yml').read_text()
+        helper = ROOT.joinpath('infra/scripts/ecr-credentials.sh').read_text()
+        self.assertNotIn('docker login', ship)
+        self.assertIn('DOCKER_CONFIG="$(mktemp -d)"', helper)
+        self.assertIn('"credHelpers"', helper)
+
     def test_local_actions_are_loaded_after_checkout_in_each_job(self):
         for workflow in (ROOT / '.github/workflows').glob('*.yml'):
             checked_out = False
