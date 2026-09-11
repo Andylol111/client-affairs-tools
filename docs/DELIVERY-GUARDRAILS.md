@@ -88,7 +88,7 @@ A quick patch follows the same automatic branch progression. Documentation and p
 
 ## Skips and failure handling
 
-Every selected check must succeed. The aggregate `required-checks` gate rejects missing, failed, or unexpectedly skipped checks. A superseded cancelled run does not start promotion. Each stage explains whether it is verifying or shipping and whether a runtime change exists.
+Every selected check must succeed. The aggregate jobs reject missing, failed, or unexpectedly skipped checks. Their contexts are deliberately distinct: `intake-required-checks`, `feature-required-checks`, and `production-required-checks`. A lower stage can never satisfy a higher branch rule. A superseded cancelled run does not start promotion. Each stage explains whether it is verifying or shipping and whether a runtime change exists.
 
 Native pushes compare against their recorded before SHA. A verification dispatch compares against its target branch. A shipping dispatch compares its revision to its first parent; it must not classify all existing application files as newly changed. Missing dispatch history fails classification rather than guessing. Checkout fetches the history needed for these comparisons.
 
