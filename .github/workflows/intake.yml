@@ -167,7 +167,7 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
-      checks: write
+      statuses: write
     steps:
       # Load trusted code already on main; the new composites need not exist there yet.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

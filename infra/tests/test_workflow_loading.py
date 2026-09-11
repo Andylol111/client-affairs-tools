@@ -8,7 +8,7 @@ ROOT = Path(__file__).parents[2]
 
 
 class WorkflowLoadingTests(unittest.TestCase):
-    def test_single_maintainer_rules_do_not_require_unavailable_ai_or_peer_approval(self):
+    def test_single_maintainer_rules_require_current_base_without_peer_approval(self):
         for name in ('feature-ruleset.proposed.json', 'main-ruleset.proposed.json'):
             ruleset = json.loads(ROOT.joinpath('infra/github', name).read_text())
             pull_request = next(rule for rule in ruleset['rules']
@@ -17,7 +17,7 @@ class WorkflowLoadingTests(unittest.TestCase):
                           if rule['type'] == 'required_status_checks')['parameters']
             self.assertEqual(pull_request['required_approving_review_count'], 0)
             self.assertFalse(pull_request['require_extra_approval_for_unattributed_changes'])
-            self.assertFalse(checks['strict_required_status_checks_policy'])
+            self.assertTrue(checks['strict_required_status_checks_policy'])
 
     def test_exactly_three_repository_workflows_back_four_sidebar_entries(self):
         workflows = sorted(path.name for path in (ROOT / '.github/workflows').glob('*.yml'))
@@ -76,6 +76,7 @@ class WorkflowLoadingTests(unittest.TestCase):
             self.assertTrue(any(ref in promote for ref in trusted_refs))
             self.assertIn('persist-credentials: false', promote)
             self.assertIn('run: python3 scripts/promote.py', promote)
+            self.assertIn('statuses: write', promote)
             # No dependency on a composite that is not present on main at first rollout.
             self.assertNotIn('uses: ./.github/', promote)
 

@@ -176,7 +176,7 @@ class PromotionTests(unittest.TestCase):
         self.assertFalse(promotion.dependency_files_allowed([]))
         self.assertTrue(promotion.dependency_files_allowed([{'filename': 'frontend/package-lock.json'}]))
 
-    def test_stage_result_is_bound_to_the_pr_merge_revision(self):
+    def test_stage_result_is_bound_to_the_verified_head_status(self):
         pr = self.pr(merge_commit_sha='merge-revision')
         posts = []
 
@@ -188,10 +188,9 @@ class PromotionTests(unittest.TestCase):
              patch.object(promotion, 'api', side_effect=fake_api):
             promotion.publish_merge_check(self.repo, pr, self.event()['workflow_run'])
         path, method, payload = posts[0]
-        self.assertEqual((path, method), ('repos/club/tools/check-runs', 'POST'))
-        self.assertEqual(payload['name'], 'intake-required-checks')
-        self.assertEqual(payload['head_sha'], 'merge-revision')
-        self.assertEqual(payload['conclusion'], 'success')
+        self.assertEqual((path, method), ('repos/club/tools/statuses/verified', 'POST'))
+        self.assertEqual(payload['context'], 'intake-required-checks')
+        self.assertEqual(payload['state'], 'success')
 
     def test_actions_token_dispatches_next_stage_after_merge_and_open(self):
         posts = []
@@ -285,7 +284,7 @@ class PromotionTests(unittest.TestCase):
         self.assertIn('PROMOTION_STAGE: Intake', text)
         self.assertIn("needs.required-checks.result == 'success'", text)
         self.assertIn('run: python3 scripts/promote.py', text)
-        self.assertIn('checks: write', text)
+        self.assertIn('statuses: write', text)
         self.assertIn("PROMOTION_PUBLISH_CHECK: '1'", text)
         self.assertFalse(Path(__file__).parents[2].joinpath('.github/workflows/promote.yml').exists())
 
