@@ -1,4 +1,18 @@
-# Implementation status — 2026-09-09
+# Implementation status
+
+## Current repository reconciliation — 2026-09-11
+
+Local `develop` starts at `ca61ce9`. The existing application work below is already in source; it is not a new implementation backlog. The remaining local change consolidates Actions into three workflow files with eight composite actions for scope/checks/shipping. Promotion invokes the trusted script directly from the default branch, without a GitHub App or new sync PRs.
+
+The consolidation now checks out before loading every local action, includes valid action metadata, limits write tokens to the jobs that need them, and compares dispatched runs to the correct target/parent. A regression with real Git history confirms that a workflow-only dispatch does not deploy existing runtime files. Beta uses its explicit separate instance binding; main-only maintenance operations are serialized with delivery. See [current delivery behavior and guardrails](DELIVERY-GUARDRAILS.md).
+
+Current local verification: **48 infrastructure/controller/workflow tests pass**, and **actionlint passes**. Three existing SQLite test-fixture ResourceWarnings remain. Backend/browser suites were not rerun for this workflow-only continuation. Hosted composite execution, current GitHub settings and the live AWS revision were not inspected in this pass. Nothing was committed, pushed, merged or deployed by this continuation.
+
+Remaining backend finding: public telemetry accepts arbitrary event types, including server-reserved quota names. Its authentication/event namespace needs a separate fix and API regression tests. Do not treat the inference quota tests alone as proof that clients cannot interfere with reservations.
+
+## Historical implementation and deployment evidence
+
+The sections below record earlier implementation/tests and the September 10 deployment. Their revision IDs and live observations are historical, not a fresh inventory. Superseded App prerequisites and old branch names are not the current activation plan.
 
 The six stages below are implemented and verified. Independent backend, frontend and infrastructure subagents reviewed and revised their respective changes. The application was deployed through the protected GitHub Actions path on 2026-09-10. No Terraform apply/import or real email delivery was performed.
 
@@ -22,7 +36,7 @@ Database metadata powers permission-filtered search, project membership and fron
 
 ## 5. Delivery and security gates
 
-CI is three named waterfalls: **Intake** tests human topic PRs into `develop` and never builds an image or deploys; **Beta** verifies `develop` → `feature` on dispatch and only rebuilds the image on feature; **Production** proves every boundary on dispatch from `feature` and ships the live box on `main`. Bot PRs do not start a second `pull_request` run. Shared verification classifies the diff and fails if a required job is skipped. Promotion after a green run is automatic; `release:hold`, requested changes, or closing the PR stop the candidate. Actions are pinned and Python dependencies are hash-locked. Shipping uses the scanned image artifact and resolved digest through the ECR credential helper (no plaintext `docker login`). Deployment scripts check the mounted database, create a consistent backup, wait for readiness and support application rollback. Terraform apply and optional static publishing are separate reviewed operations.
+CI is three workflow files: **Intake**, **Beta**, and **Production**. Shared check/ship steps are composite actions, not extra workflows. Intake tests human topic PRs into `develop` and never builds an image or deploys. Beta verifies `develop` → `feature` on dispatch and only rebuilds the image on feature. Production proves every boundary on dispatch from `feature` and ships the live box on `main`. Bot PRs do not start a second `pull_request` run. A skipped required job is a failure. Promotion after a green run is automatic; `release:hold`, requested changes, or closing the PR stop the candidate. Actions are pinned and Python dependencies are hash-locked. Shipping uses the scanned image artifact and resolved digest through the ECR credential helper (no plaintext `docker login`). Deployment scripts check the mounted database, create a consistent backup, wait for readiness and support application rollback. Terraform apply and optional static publishing are Production dispatch operations.
 
 GitHub main and feature rules now require the aggregate GitHub Actions check with no administrator bypass. Production requires owner approval and allows only main. The user deferred a second maintainer, so independent review is a future requirement. Scanners and coverage do not establish that the entire legacy codebase is secure.
 
@@ -34,12 +48,12 @@ The current database implementation remains a single-server SQLite deployment. D
 
 ## Final local verification
 
-Verified on 2026-09-10 for branch `feat/staged-delivery-and-studio` (uncommitted until requested):
+Recorded on 2026-09-10 for the then-local branch `feat/staged-delivery-and-studio`:
 
 - Backend `scripts/test_suite.py` passes, including `test_environment_security.py`. Combined coverage is **34%**. Gated modules: invitations **91%**, workspace **85%**, dispatch claims **88%**, dispatch recovery **99%**, mailbox validation **89%**, delivery policy **100%**, generation policy **100%**, Bedrock/LLM **97%**, email verifier **95%**.
 - Frontend lint and production build pass. Studio Playwright: 5 passed, 1 desktop-only viewport case skipped on mobile. Accessibility title for `/studio` is **Email studio**.
 - `python3 -m unittest discover -s infra/tests` : **29** tests pass. Terraform `storage.tftest.hcl`: **3** passed. `actionlint` is clean.
-- This branch is not on `main` and has not been deployed. Production remains `26969f6`.
+- At that verification point the branch was not on main, and the recorded production revision was `26969f6`. Consult current hosted evidence before identifying today's deployed version.
 
 Earlier hosted verification (already on main):
 
@@ -49,7 +63,7 @@ Earlier hosted verification (already on main):
 ## Approval-dependent production completion
 
 1. Verify live resource ownership, database mount, existing configuration and a restorable backup; review the exact Terraform plan and cost delta before any apply/import.
-2. GitHub required checks and owner-approved production protection are configured. Update the deployed AWS OIDC trust from the legacy main-branch subject to the protected production-environment subject through an approved IAM change.
+2. Reconfirm GitHub required checks, owner-approved production protection and environment-scoped AWS OIDC trust before the next approved release. Earlier OIDC failures and their resolution are recorded in the cutover history; do not reapply an obsolete trust change blindly.
 3. Perform the approved CDK-to-Terraform handoff and configure storage CORS, application environment and optional static origin without replacing data-bearing resources.
 4. Deploy the verified artifact, exercise readiness and rollback, and enable the backup timer only after a controlled restore rehearsal.
 5. Use explicitly authorized test accounts for end-to-end invitation, Google/Gmail connection, send/open/reply/bounce and S3 permission/version/share tests. Reconcile legacy campaign ownership before resuming old outreach.

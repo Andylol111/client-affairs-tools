@@ -1,0 +1,97 @@
+name: Ship the verified image
+description: Ship the verified image for staged club delivery.
+inputs:
+  role:
+    description: Role supplied by the stage workflow.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Require an explicit environment binding
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role }}
+      run: |
+        test -n "$ROLE"
+        test -n "$AWS_REGION"
+        test -n "$AWS_ACCOUNT_ID"
+        test -n "$AWS_STACK_NAME"
+        test -n "$AWS_INSTANCE_ID"
+        test -n "$YUCG_ENV"
+        [[ "$EXPECTED_ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+        case "$DEPLOYMENT_ENV:$GITHUB_REF" in
+          beta:refs/heads/feature|production:refs/heads/main) ;;
+          *) exit 1 ;;
+        esac
+    - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+      with:
+        role-to-assume: ${{ inputs.role }}
+        aws-region: ${{ env.AWS_REGION }}
+        allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+        retry-max-attempts: 3
+    - name: Install the ECR credential helper
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y amazon-ecr-credential-helper
+    - name: Verify actual AWS target security before deployment
+      shell: bash
+      run: python3 infra/scripts/check_deployment.py
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: yucg-image-${{ github.sha }}
+        path: /tmp/yucg-image
+    - name: Push verified image and restart box
+      shell: bash
+      run: |
+        set -euo pipefail
+        ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+        test "$ACCOUNT" = "$AWS_ACCOUNT_ID"
+        ECR_HOST="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        IMAGE="${ECR_HOST}/cdk-hnb659fds-container-assets-${ACCOUNT}-${AWS_REGION}:${GITHUB_SHA}-${GITHUB_RUN_ID}"
+        ID="$(aws cloudformation describe-stacks --stack-name "${AWS_STACK_NAME}" \
+          --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" --output text)"
+        test -n "$ID"
+        test "$ID" = "$AWS_INSTANCE_ID"
+        if [ "$DEPLOYMENT_ENV" = beta ]; then
+          test -n "$PRODUCTION_INSTANCE_ID"
+          test "$ID" != "$PRODUCTION_INSTANCE_ID"
+        fi
+        source infra/scripts/ecr-credentials.sh
+        echo "${EXPECTED_ARCHIVE_SHA256}  /tmp/yucg-image/yucg-image.tar" | sha256sum -c -
+        docker load -i /tmp/yucg-image/yucg-image.tar
+        docker tag "yucg-check:${GITHUB_SHA}" "$IMAGE"
+        docker push "$IMAGE"
+        DIGEST="$(aws ecr describe-images --repository-name "cdk-hnb659fds-container-assets-${ACCOUNT}-${AWS_REGION}" --image-ids imageTag="${GITHUB_SHA}-${GITHUB_RUN_ID}" --query 'imageDetails[0].imageDigest' --output text)"
+        IMAGE="${IMAGE%:*}@${DIGEST}"
+        [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+        export IMAGE ECR_HOST AWS_REGION YUCG_ENV DATA_OWNER_MIGRATION_APPROVED DEPLOYMENT_ENV
+        # envsubst must receive the variable names, not their values.
+        # shellcheck disable=SC2016
+        envsubst '$IMAGE $ECR_HOST $AWS_REGION $YUCG_ENV $DATA_OWNER_MIGRATION_APPROVED $DEPLOYMENT_ENV' < infra/scripts/restart-yucg.sh > /tmp/restart-yucg.sh
+        jq -n --rawfile script /tmp/restart-yucg.sh \
+          --arg id "$ID" \
+          '{
+            InstanceIds: [$id],
+            DocumentName: "AWS-RunShellScript",
+            Comment: "yucg ship",
+            Parameters: { commands: [$script] }
+          }' > /tmp/ssm-send.json
+        CMD_ID="$(aws ssm send-command --cli-input-json file:///tmp/ssm-send.json --query Command.CommandId --output text)"
+        STATUS=Pending
+        remaining=120
+        while [ "$remaining" -gt 0 ]; do
+          STATUS="$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$ID" --query Status --output text 2>/dev/null || echo Pending)"
+          case "$STATUS" in
+            Success|Failed|Cancelled|TimedOut) break ;;
+          esac
+          remaining=$((remaining - 1))
+          sleep 5
+        done
+        aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$ID" --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}'
+        test "$STATUS" = Success
+    - name: Verify public application health
+      shell: bash
+      env:
+        HEALTH_URL: ${{ env.HEALTH_URL }}
+      run: |
+        [[ "$HEALTH_URL" == https://* ]]
+        curl --fail --silent --show-error --max-time 20 --retry 3 "$HEALTH_URL" | jq -e '.status == "ok"'

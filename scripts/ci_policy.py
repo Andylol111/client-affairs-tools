@@ -50,17 +50,31 @@ def check_results(scope, results):
     return errors
 
 
+def comparison_base(stage, phase, event, head, supplied_base=''):
+    if supplied_base and set(supplied_base) != {'0'}:
+        return supplied_base
+    if event == 'workflow_dispatch':
+        # Dispatch has no event.before. Comparing every tracked file would turn
+        # a workflow-only merge into an unintended application deployment.
+        ref = f'{head}^1' if phase == 'ship' else 'origin/' + {
+            'intake': 'develop', 'beta': 'feature', 'production': 'main'}[stage]
+        return subprocess.check_output(['git', 'rev-parse', '--verify', ref], text=True).strip()
+    return None
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('stage', choices=['intake', 'beta', 'production'])
     args = parser.parse_args()
-    base = os.environ.get('BASE_SHA', '')
     head = os.environ['GITHUB_SHA']
-    if not base or set(base) == {'0'}:
+    phase = os.environ.get('PHASE', 'verify')
+    base = comparison_base(args.stage, phase, os.environ.get('GITHUB_EVENT_NAME', ''),
+                           head, os.environ.get('BASE_SHA', ''))
+    if base is None:
         paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
     else:
         paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', base, head]).decode().split('\0')
-    scope = classify([p for p in paths if p], args.stage, os.environ.get('PHASE', 'verify'))
+    scope = classify([p for p in paths if p], args.stage, phase)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         for name, enabled in scope.items():
             output.write(f'{name}={str(enabled).lower()}\n')

@@ -1,0 +1,28 @@
+name: Frontend tests
+description: Frontend tests for staged club delivery.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+    - shell: bash
+      working-directory: frontend
+      run: npm ci
+    - shell: bash
+      working-directory: frontend
+      run: npm run lint
+    - shell: bash
+      working-directory: frontend
+      run: npm audit --audit-level=high
+    - shell: bash
+      working-directory: frontend
+      run: npm run build
+    - shell: bash
+      working-directory: frontend
+      run: npx playwright install --with-deps chromium
+    - shell: bash
+      working-directory: frontend
+      run: npm run test:ui

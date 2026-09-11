@@ -11,7 +11,7 @@ Nothing here is applied. New storage defaults off. Existing CloudFront adoption 
 7. Copy legacy attachments, verify hashes and counts, update metadata transactionally, test owner/project/outsider access, keep originals until reviewed cutover. Backup SQLite via its backup API, upload encrypted snapshots, test restoration and record RPO/RTO. EBS snapshots alone are not the application restore test.
 8. Agree retention and storage budget before adding lifecycle expiration. Count current versions, noncurrent versions, backups, requests and egress. Monitor these separately from promotional credits.
 
-Required production GitHub environment: trusted reviewers, prevent self-review, main-only deployment branches. The application ship role trust now expects this environment; its CDK change must be approved and deployed before the new shipping workflow can assume the role. This intentionally blocks mismatched deployment configuration.
+Current production policy uses the sole maintainer's explicit approval and main-only deployment branches; a second reviewer and preventing self-review are deferred. Verify the actual environment and environment-scoped OIDC trust before an approved release. Do not redeploy the replacement-sensitive app stack merely to update IAM.
 
 Local recurring AWS cost delta: $0. Proposed buckets have usage-based charges; no cost has been incurred by this configuration.
 
@@ -62,4 +62,4 @@ These are reviewable instructions, not executed operations. Disable with `sudo s
 
 ## Saved-plan safety check
 
-After generating a plan for a reviewed revision with a scoped identity, store its JSON in a private local directory and run `python3 infra/scripts/check_handoff_plan.py /private/path/plan.json`. The check rejects deletion/replacement, compute/database mutations, incomplete plans and observed drift. It does not approve IAM changes or prove CloudFormation relinquishment. Review the full plan separately, record its SHA-256 and revision, and never publish the raw JSON (it may contain secrets). No apply automation is introduced.
+After generating a plan for a reviewed revision with a scoped identity, store its JSON in a private local directory and run `python3 infra/scripts/check_handoff_plan.py /private/path/plan.json`. The check rejects deletion/replacement, compute/database mutations, incomplete plans and observed drift. It does not approve IAM changes or prove CloudFormation relinquishment. Review the full plan separately, record its SHA-256 and revision, and never publish the raw JSON (it may contain secrets). The current local three-workflow consolidation exposes plan/apply as explicit Production dispatch operations, with protected infrastructure environments and private saved plans. Ordinary application delivery never applies Terraform. See [delivery guardrails](../docs/DELIVERY-GUARDRAILS.md).

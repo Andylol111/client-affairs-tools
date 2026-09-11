@@ -1,0 +1,24 @@
+name: Security scans
+description: Security scans for staged club delivery.
+runs:
+  using: composite
+  steps:
+    - name: Lint workflow permissions, expressions, dependencies, and shell
+      shell: bash
+      run: bash infra/scripts/lint-workflows.sh
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+    - shell: bash
+      run: python -m pip install pip-audit==2.9.0 bandit==1.8.3
+    - shell: bash
+      run: pip-audit -r backend/requirements.lock
+    - shell: bash
+      run: bandit -r backend/app backend/main.py -lll -iii
+    - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      with:
+        version: v0.70.0
+        scan-type: fs
+        scanners: secret,misconfig
+        severity: HIGH,CRITICAL
+        exit-code: '1'
