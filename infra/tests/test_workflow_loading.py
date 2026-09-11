@@ -72,7 +72,7 @@ class WorkflowLoadingTests(unittest.TestCase):
             jobs = re.split(r'^  (?=[\w-]+:\s*$)', workflow.read_text(), flags=re.MULTILINE)
             promote = next(job for job in jobs if job.startswith('promote:'))
             trusted_refs = ('ref: ${{ github.event.repository.default_branch }}',
-                            'ref: 99ed113547e011fd2368795b6da33468f2fbaaa4')
+                            'ref: 83b14800c71d1242d17a5eca47ef39804d6e2ebd')
             self.assertTrue(any(ref in promote for ref in trusted_refs))
             self.assertIn('persist-credentials: false', promote)
             self.assertIn('run: python3 scripts/promote.py', promote)
