@@ -1,5 +1,9 @@
 name: Frontend tests
 description: Frontend tests for staged club delivery.
+inputs:
+  stage:
+    description: Stage supplied by the stage workflow.
+    required: true
 runs:
   using: composite
   steps:
@@ -21,8 +25,10 @@ runs:
       working-directory: frontend
       run: npm run build
     - shell: bash
+      if: inputs.stage != 'intake'
       working-directory: frontend
       run: npx playwright install --with-deps chromium
     - shell: bash
+      if: inputs.stage != 'intake'
       working-directory: frontend
       run: npm run test:ui
