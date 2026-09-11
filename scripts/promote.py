@@ -79,22 +79,14 @@ def merge_now(repo, number, sha, base):
 
 
 def publish_merge_check(repo, pr, run):
-    """Bind a dispatched stage result to GitHub's synthetic PR merge SHA."""
+    """Expose a dispatched stage result as a required status on its exact head."""
     if os.environ.get('PROMOTION_PUBLISH_CHECK') != '1':
         return
-    merge_sha = pr.get('merge_commit_sha')
-    if not merge_sha:
-        raise RuntimeError('GitHub did not provide a PR merge revision')
-    api(f'repos/{repo}/check-runs', 'POST', {
-        'name': CHECK_FOR_STAGE[run['name']],
-        'head_sha': merge_sha,
-        'status': 'completed',
-        'conclusion': 'success',
-        'details_url': run['html_url'],
-        'output': {
-            'title': f'{run["name"]} candidate passed',
-            'summary': f'Source `{run["head_sha"]}` passed the complete {run["name"]} aggregate gate and contains the current base.',
-        },
+    api(f'repos/{repo}/statuses/{run["head_sha"]}', 'POST', {
+        'state': 'success',
+        'context': CHECK_FOR_STAGE[run['name']],
+        'target_url': run['html_url'],
+        'description': f'{run["name"]} passed for the current protected-branch base',
     })
 
 

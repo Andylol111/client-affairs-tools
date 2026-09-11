@@ -247,7 +247,7 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
-      checks: write
+      statuses: write
     steps:
       # Bootstrap the race-safe controller already verified by Intake on develop.
       # Restore the default-branch ref after this revision reaches main.
