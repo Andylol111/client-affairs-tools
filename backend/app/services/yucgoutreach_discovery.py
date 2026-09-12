@@ -441,7 +441,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     await _run_update(
         run_id,
         progress_pct=32.0,
-        progress_message=f"Verifying {len(to_verify)} contact(s) — MX inbox check + AI review…",
+        progress_message=f"Reviewing {len(to_verify)} contact address(es) — mail-domain and source evidence…",
     )
 
     async def _pipe_progress(phase: str, done: int, total: int, detail: str = "") -> None:

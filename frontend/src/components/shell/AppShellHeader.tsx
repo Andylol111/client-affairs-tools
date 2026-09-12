@@ -10,18 +10,25 @@ type AppShellHeaderProps = {
 };
 
 export default function AppShellHeader({ user, navItems, onLogout }: AppShellHeaderProps) {
-  const dropdown = useRef<HTMLDetailsElement>(null);
+  const dropdowns = useRef<Array<HTMLDetailsElement | null>>([]);
   const { pathname } = useLocation();
   useEffect(() => {
     const closeOutside = (event: PointerEvent) => {
-      if (dropdown.current && event.target instanceof Node && !dropdown.current.contains(event.target)) dropdown.current.open = false;
+      if (!(event.target instanceof Node)) return;
+      dropdowns.current.forEach(dropdown => {
+        if (dropdown && !dropdown.contains(event.target as Node)) dropdown.open = false;
+      });
     };
     document.addEventListener('pointerdown', closeOutside);
     return () => document.removeEventListener('pointerdown', closeOutside);
   }, []);
-  const outreachIds = ['yucgoutreach', 'studio', 'campaigns', 'outreach', 'scraper', 'analytics'];
-  const outreach = navItems.filter(item => outreachIds.includes(item.id));
-  const primary = navItems.filter(item => !outreachIds.includes(item.id) && item.id !== 'admin').sort((a, b) => ['dashboard', 'projects', 'documents'].indexOf(a.id) - ['dashboard', 'projects', 'documents'].indexOf(b.id));
+  const groups = [
+    { label: 'Projects', ids: ['projects', 'documents'] },
+    { label: 'Contacts', ids: ['scraper', 'yucgoutreach'] },
+    { label: 'Outreach', ids: ['studio', 'campaigns', 'outreach', 'analytics'] },
+  ];
+  const groupedIds = new Set(groups.flatMap(group => group.ids));
+  const primary = navItems.filter(item => !groupedIds.has(item.id) && item.id !== 'admin');
   return (
     <header className="app-shell-header app-top-nav sticky top-0 z-50">
       <div className="app-shell-header-inner">
@@ -37,12 +44,21 @@ export default function AppShellHeader({ user, navItems, onLogout }: AppShellHea
           {primary.map((item) => (
             <AppNavLink key={item.id} item={item} variant="desktop" />
           ))}
-          <details key={pathname} ref={dropdown} className="app-nav-group" onKeyDown={event => { if (event.key === 'Escape' && dropdown.current) { dropdown.current.open = false; dropdown.current.querySelector('summary')?.focus(); } }}>
-            <summary className={`app-nav-link ${outreach.some(item => pathname === item.to || pathname.startsWith(item.to + '/')) ? 'app-nav-link--active' : ''}`}>Outreach ▾</summary>
-            <div className="app-nav-group-panel" onClick={() => { if (dropdown.current) dropdown.current.open = false; }}>
-              {outreach.map(item => <AppNavLink key={item.id} item={item} variant="desktop" />)}
-            </div>
-          </details>
+          {groups.map((group, index) => {
+            const items = navItems.filter(item => group.ids.includes(item.id));
+            const active = items.some(item => pathname === item.to || pathname.startsWith(item.to + '/'));
+            return <details key={`${pathname}:${group.label}`} ref={node => { dropdowns.current[index] = node; }} className="app-nav-group" onKeyDown={event => {
+              if (event.key === 'Escape') {
+                const dropdown = dropdowns.current[index];
+                if (dropdown) { dropdown.open = false; dropdown.querySelector('summary')?.focus(); }
+              }
+            }}>
+              <summary className={`app-nav-link ${active ? 'app-nav-link--active' : ''}`}>{group.label} ▾</summary>
+              <div className="app-nav-group-panel" onClick={() => { const dropdown = dropdowns.current[index]; if (dropdown) dropdown.open = false; }}>
+                {items.map(item => <AppNavLink key={item.id} item={item} variant="desktop" />)}
+              </div>
+            </details>;
+          })}
           {navItems.filter(item => item.id === 'admin').map(item => <AppNavLink key={item.id} item={item} variant="desktop" />)}
         </nav>
 

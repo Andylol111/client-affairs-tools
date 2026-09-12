@@ -12,7 +12,7 @@ type AppShellMobileProps = {
  */
 export default function AppShellMobile({ items, onOpenMenu }: AppShellMobileProps) {
   const primaryItems = items.filter((item) =>
-    ['dashboard', 'projects', 'documents', 'campaigns'].includes(item.id),
+    ['dashboard', 'projects', 'scraper', 'studio'].includes(item.id),
   );
   return (
     <div className="app-mobile-shell">
