@@ -10,9 +10,9 @@ Stack: `YucgOutreach-dev` in `us-east-1`. Image: `docker/app.Dockerfile`. SQLite
 
 ## GitHub
 
-Repo **Settings → Actions → General**: allow GitHub-hosted runners. Stage workflows: [Intake](../.github/workflows/intake.yml), [Beta](../.github/workflows/beta.yml), [Production](../.github/workflows/production.yml). Required check name: `required-checks`.
+Repo **Settings → Actions → General**: allow GitHub-hosted runners. Stage workflows: [Intake](../.github/workflows/intake.yml), [Beta](../.github/workflows/beta.yml), [Production](../.github/workflows/production.yml). Required contexts are `intake-required-checks`, `feature-required-checks`, and `production-required-checks`.
 
-The local workflow now runs validation on topic PRs and pushes, with `required-checks` as the aggregate gate. Configure required review and this check in repository settings; the old `gate-branch` check was removed. Production jobs reference the `production` environment, which must have verified reviewers and main-only deployment rules.
+The stage workflows run progressively stronger validation and publish distinct aggregate results. Feature and main use strict, stage-specific required statuses so an earlier stage cannot satisfy a later branch. Production jobs reference the `production` environment, which must have verified reviewers and main-only deployment rules.
 
 The proposed ship-role trust expects `repo:Andylol111/client-affairs-tools:environment:production`. Verify and review the deployed IAM trust before shipping; do not assume the local CDK change has been applied. See [current implementation status](../docs/IMPLEMENTATION-STATUS.md) and [live cutover checks](../docs/LIVE-CUTOVER-CHECKS.md).
 

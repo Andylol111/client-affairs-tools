@@ -71,9 +71,7 @@ class WorkflowLoadingTests(unittest.TestCase):
         for workflow in (ROOT / '.github/workflows').glob('*.yml'):
             jobs = re.split(r'^  (?=[\w-]+:\s*$)', workflow.read_text(), flags=re.MULTILINE)
             promote = next(job for job in jobs if job.startswith('promote:'))
-            trusted_refs = ('ref: ${{ github.event.repository.default_branch }}',
-                            'ref: 83b14800c71d1242d17a5eca47ef39804d6e2ebd')
-            self.assertTrue(any(ref in promote for ref in trusted_refs))
+            self.assertIn('ref: ${{ github.event.repository.default_branch }}', promote)
             self.assertIn('persist-credentials: false', promote)
             self.assertIn('run: python3 scripts/promote.py', promote)
             self.assertIn('statuses: write', promote)
