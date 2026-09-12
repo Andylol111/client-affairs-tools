@@ -138,7 +138,7 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
 }
 
 export default function EmailStudio() {
-  const { user } = useOutletContext<{ user: { email: string; name?: string } }>();
+  const { user } = useOutletContext<{ user: { email: string; name?: string; role?: string } }>();
   const { modelId } = useAiModel();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
@@ -146,6 +146,7 @@ export default function EmailStudio() {
   const [signature, setSignature] = useState('');
   const [signatureImageUrl, setSignatureImageUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [generationError, setGenerationError] = useState('');
   const [testSending, setTestSending] = useState(false);
   const [tone, setTone] = useState('professional');
   const [length, setLength] = useState('short');
@@ -261,7 +262,7 @@ export default function EmailStudio() {
 
   const generateEmail = async () => {
     setLoading(true);
-    setEmail(null);
+    setGenerationError('');
     try {
       if (selected?.id) {
         const instructions = [
@@ -315,7 +316,7 @@ export default function EmailStudio() {
       }
     } catch (e) {
       console.error(e);
-      setEmail({ subject: 'Error', body: 'Failed to generate. Check Bedrock model access for the selected Claude model.' });
+      setGenerationError(e instanceof Error ? e.message : 'Draft generation is unavailable. Your current draft was not changed.');
     } finally {
       setLoading(false);
     }
@@ -636,7 +637,7 @@ export default function EmailStudio() {
   return (
     <div className={`email-studio app-workspace w-full max-w-[1920px] ${focusWriting ? 'studio-focus' : ''} ${previewOpen ? 'studio-preview-open' : ''}`}>
       <PageHeader
-        title="Email studio"
+        title="Drafts"
         subtitle="Write, review, and save your outreach. AI assistance is optional."
       />
       <div className="studio-workbench-bar">
@@ -646,7 +647,7 @@ export default function EmailStudio() {
           <button type="button" aria-pressed={previewOpen} onClick={() => { setPreviewOpen(value => !value); setMobileStep('edit'); }}>Preview email</button>
         </div>
       </div>
-      <nav className="studio-mobile-steps" aria-label="Studio workflow">
+      <nav className="studio-mobile-steps" aria-label="Draft workflow">
         {([
           ['contacts', '1. Contact'],
           ['generate', '2. AI assistance'],
@@ -683,7 +684,7 @@ export default function EmailStudio() {
                   ]}
                   active={activeTab}
                   onChange={(id) => setActiveTab(id as 'editor' | 'cache')}
-                  label="Studio contact sources"
+                  label="Draft contact sources"
                 />
                 <button
                   onClick={startNewEmail}
@@ -696,7 +697,7 @@ export default function EmailStudio() {
             {activeTab === 'editor' ? (
               <>
                 <div className="px-4 py-2 border-b border-slate-200 space-y-2">
-                  <select aria-label="Outreach week"
+                  <select aria-label="Target list"
                     value={releaseFilter}
                     onChange={(e) => setReleaseFilter(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-slate-200 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-slate-200"
@@ -897,31 +898,32 @@ export default function EmailStudio() {
             </div>
             <div className="email-studio-generator-body">
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              Optionally describe your goal and audience to generate a starting draft. You can also write directly in the editor.
+              Add the outcome and facts the draft may use. Claude will create a starting point; review every claim before saving or sending.
             </p>
+            {generationError && <p className="ui-notice ui-notice--danger" role="alert">{generationError}</p>}
             <div className="email-studio-field email-studio-field--grow">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Email goal</label>
                 <textarea
                   value={draftDescription}
                   onChange={(e) => setDraftDescription(e.target.value)}
-                  placeholder="e.g. Cold outreach for consulting services"
+                  placeholder="For example: ask for a 20-minute call about a spring market research project"
                   rows={3}
                   className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
             </div>
             <div className="email-studio-brief-grid">
             <div className="email-studio-field">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Target Audience</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Audience context</label>
                 <textarea
                   value={draftTargetAudience}
                   onChange={(e) => setDraftTargetAudience(e.target.value)}
-                  placeholder="e.g. CTOs at mid-size tech companies"
+                  placeholder="For example: strategy leaders at growing healthcare companies"
                   rows={2}
                   className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
             </div>
             <div className="email-studio-field">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Assign Company</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Company</label>
                 <input
                   type="text"
                   value={draftCompany}
@@ -931,21 +933,21 @@ export default function EmailStudio() {
                 />
             </div>
             <div className="email-studio-field">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Value Proposition</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Relevant YUCG capability or proof</label>
                 <textarea
                   value={valueProp}
                   onChange={(e) => setValueProp(e.target.value)}
-                  placeholder="e.g. our solution that helps companies like yours..."
+                  placeholder="Use only verified facts, such as a relevant service or approved case study"
                   rows={2}
                   className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
             </div>
             <div className="email-studio-field">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Custom Instructions</label>
+                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Facts and constraints</label>
                 <textarea
                   value={customInstructions}
                   onChange={(e) => setCustomInstructions(e.target.value)}
-                  placeholder="e.g. mention our Series B"
+                  placeholder="For example: refer to the supplied expansion announcement; avoid client names"
                   rows={2}
                   className="email-studio-grow-field w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200 placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
                 />
@@ -1329,7 +1331,7 @@ export default function EmailStudio() {
                     />
                     {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
                       <span className="absolute left-3 top-2 text-slate-600 dark:text-slate-300 pointer-events-none text-sm">
-                        Type your email here or click Generate Email for AI assistance.
+                        Write your email here or use AI assistance to create a starting draft.
                       </span>
                     )}
                   </div>
@@ -1372,9 +1374,8 @@ export default function EmailStudio() {
                       {selectedAttachmentIds.size > 0 && (
                         <p className="text-xs text-deep-navy/80 dark:text-slate-400 mt-2">{selectedAttachmentIds.size} file(s) will be attached</p>
                       )}
-                      <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
+                      {user.role === 'admin' && <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
                         <span className="text-xs text-deep-navy dark:text-slate-400">Cloud:</span>
-                        <button type="button" disabled className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy/70 dark:text-slate-400 cursor-not-allowed" title="Coming Soon">Insert From Google Drive</button>
                         <button
                           type="button"
                           disabled={!attachmentsEnabled || onedriveBusy}
@@ -1394,9 +1395,9 @@ export default function EmailStudio() {
                           }}
                           className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy dark:text-slate-200 disabled:opacity-50"
                         >
-                          Insert From OneDrive
+                          Import from club OneDrive
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   )}
                   <div className="studio-draft-actions flex gap-2 flex-wrap items-center">

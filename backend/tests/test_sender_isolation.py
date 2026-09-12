@@ -44,7 +44,8 @@ async def run():
         assert campaign['owner_user_id'] == campaign['sender_user_id'] == 1
         db = await get_db()
         try:
-            await db.execute("INSERT INTO campaign_contacts(campaign_id,contact_id,email_subject,email_body,status) VALUES (?,1,'Hi','Body','pending')", (cid,))
+            inserted = await db.execute("INSERT INTO campaign_contacts(campaign_id,contact_id,email_subject,email_body,status) VALUES (?,1,'Hi','Body','pending')", (cid,))
+            cc_id = int(inserted.lastrowid)
             await db.commit()
         finally:
             await db.close()
@@ -54,14 +55,18 @@ async def run():
         from app.auth_deps import get_current_user
         from app.jwt_utils import create_token
         from app.routers.campaigns import router
+        from app.routers.outreach import router as outreach_router
         app = FastAPI()
         app.include_router(router, prefix='/api/campaigns', dependencies=[Depends(get_current_user)])
+        app.include_router(outreach_router, prefix='/api/outreach', dependencies=[Depends(get_current_user)])
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
             assert (await client.post(f'/api/campaigns/{cid}/send')).status_code == 401
             token = create_token(2, 'b@yale.edu')
             for path in ['send', 'release', 'pause', 'retry-failed']:
                 response = await client.post(f'/api/campaigns/{cid}/{path}', headers={'Authorization': 'Bearer ' + token})
                 assert response.status_code == 403, response.text
+            response = await client.post(f'/api/outreach/campaign-contacts/{cc_id}/mark-replied', headers={'Authorization': 'Bearer ' + token})
+            assert response.status_code == 403, response.text
         # Unknown historical ownership is never claimed by the next viewer.
         db = await get_db()
         try:

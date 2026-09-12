@@ -1,6 +1,6 @@
 import type { Release, ReleasePerson, InboxItem } from '../api';
 /**
- * Outreach week: choose the shared company slate, then keep or drop people.
+ * Target lists: choose shared company candidates, then keep or drop people.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -299,17 +299,17 @@ function CoordinatorPanel() {
         ? [...selectedRows]
         : recommendations.map((r) => r.verifiability.row_index);
     if (indices.length === 0) {
-      setBoardError('Select rows on the board or run Recommend Targets first.');
+      setBoardError('Select companies or run a recommendation first.');
       return;
     }
     setExporting(true);
     setBoardError(null);
     try {
-      const name = `Week slate ${new Date().toISOString().slice(0, 10)}`;
+      const name = `Target list ${new Date().toISOString().slice(0, 10)}`;
       const res = await api.yucg.createRelease({ name, row_indexes: indices });
-      setRecommendInfo(`Created release #${res.id} with ${res.targets} companies (draft). Open Comb to keep or drop people.`);
+      setRecommendInfo(`Created target list #${res.id} with ${res.targets} companies. Open People to review suggested contacts.`);
     } catch (e) {
-      setBoardError(e instanceof Error ? e.message : 'Could not create week slate');
+      setBoardError(e instanceof Error ? e.message : 'Could not create target list');
     } finally {
       setExporting(false);
     }
@@ -321,7 +321,7 @@ function CoordinatorPanel() {
         ? [...selectedRows]
         : recommendations.map((r) => r.verifiability.row_index);
     if (indices.length === 0) {
-      setBoardError('Select rows on the board or run Recommend Targets first.');
+      setBoardError('Select companies or run a recommendation first.');
       return;
     }
     setExporting(true);
@@ -376,7 +376,7 @@ function CoordinatorPanel() {
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-deep-navy">Shared company slate</h2>
+            <h2 className="text-lg font-semibold text-deep-navy">Company candidates</h2>
             <p className="text-sm text-slate-600 mt-1 max-w-2xl">
               Filter the live {sourceMeta?.source_kind === 's3' ? 'catalog workbook' : 'workbook'} and choose companies for this week.
               {boardTotal != null && !loadingBoard && (
@@ -536,7 +536,7 @@ function CoordinatorPanel() {
       </div>
 
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
-        <h2 className="text-lg font-semibold text-deep-navy">Recommend Targets</h2>
+        <h2 className="text-lg font-semibold text-deep-navy">Recommend companies</h2>
         <div className="flex flex-wrap items-center gap-3">
           <div className="inline-flex rounded-lg border border-pale-sky overflow-hidden text-sm">
             <button
@@ -576,7 +576,7 @@ function CoordinatorPanel() {
             onClick={createWeekSlate}
             className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
           >
-            Create week slate
+            Create target list
           </button>
         </div>
         {recommendError && (
@@ -721,7 +721,7 @@ function CombPanel() {
       setMintName('');
       await loadRelease(Number(releaseId));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Mint failed');
+      setError(e instanceof Error ? e.message : 'Could not add the suggested contact');
     } finally {
       setBusy(false);
     }
@@ -731,12 +731,12 @@ function CombPanel() {
     <div className="space-y-6">
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
-          <select aria-label="Outreach week"
+          <select aria-label="Target list"
             value={releaseId}
             onChange={(e) => setReleaseId(e.target.value ? Number(e.target.value) : '')}
             className="px-3 py-2 rounded-lg border border-pale-sky text-sm bg-white"
           >
-            <option value="">Select a week slate</option>
+            <option value="">Select a target list</option>
             {releases.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name} (#{r.id})
@@ -749,7 +749,7 @@ function CombPanel() {
             onClick={() => releaseId && api.yucg.rebuildPack(Number(releaseId)).catch((e) => setError(e.message))}
             className="px-3 py-2 rounded-lg border border-pale-sky text-sm"
           >
-            Rebuild Think-Cell pack
+            Refresh outreach workbook
           </button>
         </div>
         <p className="text-xs text-slate-600">
@@ -760,7 +760,7 @@ function CombPanel() {
 
       {activeRelease && (
         <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-deep-navy">Mint a candidate</h2>
+          <h2 className="text-lg font-semibold text-deep-navy">Add a suggested contact</h2>
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-slate-600">
               Company
@@ -794,7 +794,7 @@ function CombPanel() {
               onClick={mint}
               className="px-3 py-2 rounded-lg bg-deep-navy text-white text-sm disabled:opacity-50"
             >
-              Mint inferred email
+              Add suggested contact
             </button>
           </div>
         </div>
@@ -879,19 +879,19 @@ export default function YucgOutreach() {
   return (
     <div className="app-workspace space-y-6 pb-12" data-section="yucgoutreach">
       <PageHeader
-        title="Outreach week"
-        subtitle="Choose this week’s companies, then keep the right people."
+        title="Target lists"
+        subtitle="Choose companies, review suggested addresses, and move relevant contacts into outreach."
         imageSrc="/yucg-bg/team-banner.jpg"
       />
 
       <AppTabMenu
         tabs={[
-          { id: 'slate', label: 'Slate' },
-          { id: 'comb', label: 'Comb' },
+          { id: 'slate', label: 'Companies' },
+          { id: 'comb', label: 'People' },
         ]}
         active={pageTab}
         onChange={(id) => setPageTab(id as PageTab)}
-        label="Outreach week views"
+        label="Target list views"
       />
 
       {pageTab === 'slate' ? <CoordinatorPanel /> : <CombPanel />}

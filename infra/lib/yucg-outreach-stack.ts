@@ -31,6 +31,14 @@ export class YucgOutreachStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: YucgOutreachStackProps) {
     super(scope, id, props);
     const { envName } = props;
+    const appEnv = envName === "beta"
+      ? "beta"
+      : envName === "dev" || envName === "prod"
+        ? "production"
+        : undefined;
+    if (!appEnv) {
+      throw new Error(`Unsupported environment ${envName}; expected beta, dev, or prod`);
+    }
 
     const catalog = new s3.Bucket(this, "Catalog", {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -156,6 +164,7 @@ export class YucgOutreachStack extends cdk.Stack {
       `export YUCG_REGION=${this.region}`,
       `export YUCG_PUBLIC_PARAM=${publicParamName}`,
       `export YUCG_LOG_GROUP=${logGroup.logGroupName}`,
+      `export YUCG_APP_ENV=${appEnv}`,
     );
     userData.addCommands(fs.readFileSync(path.join(__dirname, "user-data.sh"), "utf8"));
 

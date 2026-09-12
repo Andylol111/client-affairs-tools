@@ -47,7 +47,7 @@ export default function LoginPage() {
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
             {error === 'invalid_callback' &&
-              'Sign-in session expired or the server restarted during login. Try again. If this persists, ensure JWT_SECRET in backend/.env matches across restarts and GOOGLE_REDIRECT_URI matches Google Cloud Console.'}
+              'Your sign-in session expired. Start again; if the problem continues, contact a club administrator.'}
             {error === 'token_exchange_failed' && 'Authentication failed. Please try again.'}
             {error === 'no_access_token' && 'Could not get access. Please try again.'}
             {error === 'userinfo_failed' && 'Could not load your profile. Please try again.'}
@@ -55,18 +55,10 @@ export default function LoginPage() {
             {error === 'domain_not_allowed' && 'Only @yale.edu email addresses are allowed to sign in.'}
             {error === 'account_deactivated' && 'Your account has been deactivated. Contact an admin.'}
             {error === 'callback_failed' && (
-              <>Server error during sign-in. Check the backend logs. {searchParams.get('detail') && <span className="block mt-1 text-xs">({decodeURIComponent(searchParams.get('detail') || '')})</span>}</>
+              <>Sign-in could not be completed. Try again; if the problem continues, contact a club administrator.</>
             )}
             {error === 'oauth_not_configured' && (
-              <>
-                Google OAuth is not configured. Add to <code className="bg-slate-100 px-1 rounded">backend/.env</code>:
-                <pre className="mt-2 p-2 bg-slate-100 rounded text-xs overflow-x-auto">
-{`GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=xxx
-GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback`}
-                </pre>
-                Get credentials at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="underline">Google Cloud Console</a>.
-              </>
+              <>Club sign-in is temporarily unavailable. Contact a club administrator.</>
             )}
             {!['invalid_callback', 'token_exchange_failed', 'no_access_token', 'userinfo_failed', 'no_email', 'domain_not_allowed', 'oauth_not_configured', 'account_deactivated', 'callback_failed'].includes(error) && error}
           </div>

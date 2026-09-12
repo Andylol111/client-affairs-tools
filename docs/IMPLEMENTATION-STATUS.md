@@ -1,5 +1,15 @@
 # Implementation status
 
+## Product architecture and first design slice — 2026-09-12
+
+The current product behavior, ownership boundaries, integration status, target information architecture, language, visual tokens, components and staged experience gates are recorded in [the product system map](PRODUCT-SYSTEM-MAP.md) and [the product design system](PRODUCT-DESIGN-SYSTEM.md).
+
+The first implementation slice groups desktop navigation into Home, Projects, Contacts, Outreach and Admin; gives mobile members direct access to Home, Projects, Contacts and Drafts; replaces misleading target-list and address-verification language; removes member-facing operator diagnostics; and consolidates the canonical surface/ink/status/radius tokens. Studio now preserves the current draft when generation fails, asks for verified facts, and sends Claude a structured untrusted brief under a grounded YUCG system instruction.
+
+New security regressions prevent another member from manually marking a campaign recipient as replied, prevent an in-flight Gmail refresh from restoring a disconnected credential, and restrict the legacy global-token OneDrive importer to administrators and direct files returned from the configured club folder. Fresh CDK bootstrap now makes the retained data mount writable for container UID/GID `10001` and explicitly configures beta versus production delivery behavior.
+
+Verification for this slice: backend suite passes at **34%** overall branch coverage; the draft-generation module is **94%**; all existing critical coverage thresholds pass. Frontend lint/build and Playwright pass (**45 passed, one desktop-only assertion skipped on mobile**). Infrastructure/controller/workflow tests pass (**62**). No live provider, Gmail, AWS, Terraform apply, deployment or email operation was performed.
+
 ## Current repository reconciliation — 2026-09-11
 
 The three-workflow consolidation is committed on `develop` at `f380bc7`. The existing application work below is already in source; it is not a new implementation backlog. Eight composite actions provide scope/checks/shipping without appearing as extra workflows. Promotion invokes the trusted script directly from the default branch, without a GitHub App or new sync PRs.

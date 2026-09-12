@@ -1,6 +1,4 @@
-"""
-Database setup for ClientReach AI
-"""
+"""Database setup for YUCG Outreach."""
 import aiosqlite
 import os
 from pathlib import Path

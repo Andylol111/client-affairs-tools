@@ -555,7 +555,7 @@ export default function Scraper() {
   return (
     <div className="app-workspace pb-12">
       <PageHeader
-        title="Prospects"
+        title="Find contacts"
         subtitle="Discover prospective contacts, review their sources, and save relevant people for outreach."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />

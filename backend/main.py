@@ -91,8 +91,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     lifespan=lifespan,
-    title="ClientReach AI",
-    description="Intelligent Client Outreach, Automated from First Contact to Close",
+    title="YUCG Outreach",
+    description="Member-owned client outreach and project coordination for YUCG",
     version="1.0.0",
 )
 
@@ -138,7 +138,7 @@ app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "ClientReach AI"}
+    return {"status": "ok", "service": "YUCG Outreach"}
 
 
 @app.get("/api/ai/models")

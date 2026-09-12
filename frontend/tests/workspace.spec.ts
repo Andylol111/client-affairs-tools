@@ -94,7 +94,7 @@ test('workspace scroll keeps navigation stable without a fixed backdrop', async 
   await page.screenshot({ path: testInfo.outputPath('documents-scrolled.png'), fullPage: false });
 });
 
-for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Email studio'], ['/scraper', 'Prospects'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Outreach week'], ['/admin', 'Admin']]) {
+for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
   test(`accessible page: ${title}`, async ({ page }, testInfo) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -155,7 +155,7 @@ test('studio workbench fills the desktop viewport instead of leaving a short gen
   await expect(page.getByRole('heading', { name: 'AI assistance' })).toBeVisible();
   const generator = page.locator('#email-generator-section');
   const editor = page.locator('#email-editor-section');
-  const brief = page.getByPlaceholder('e.g. Cold outreach for consulting services');
+  const brief = page.getByPlaceholder('For example: ask for a 20-minute call about a spring market research project');
   const body = page.locator('.email-studio-body');
   const genBox = await generator.boundingBox();
   const editBox = await editor.boundingBox();

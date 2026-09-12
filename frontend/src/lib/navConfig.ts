@@ -26,11 +26,11 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', to: '/', label: 'Home', shortLabel: 'Home' },
   { id: 'projects', to: '/projects', label: 'Projects', shortLabel: 'Projects' },
   { id: 'documents', to: '/documents', label: 'Documents', shortLabel: 'Documents' },
-  { id: 'yucgoutreach', to: '/yucgoutreach', label: 'Week', shortLabel: 'Week' },
-  { id: 'studio', to: '/studio', label: 'Email studio', shortLabel: 'Studio' },
+  { id: 'yucgoutreach', to: '/yucgoutreach', label: 'Target lists', shortLabel: 'Targets' },
+  { id: 'studio', to: '/studio', label: 'Drafts', shortLabel: 'Drafts' },
   { id: 'campaigns', to: '/campaigns', label: 'Campaigns', shortLabel: 'Campaigns' },
   { id: 'outreach', to: '/outreach', label: 'Pipeline', shortLabel: 'Pipeline' },
-  { id: 'scraper', to: '/scraper', label: 'Prospects', shortLabel: 'Prospects' },
+  { id: 'scraper', to: '/scraper', label: 'Find contacts', shortLabel: 'Contacts' },
   { id: 'analytics', to: '/analytics', label: 'Results', shortLabel: 'Results' },
 ];
 

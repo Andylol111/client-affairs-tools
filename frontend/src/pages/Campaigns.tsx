@@ -117,7 +117,7 @@ export default function Campaigns() {
         <EmptyState
           title="No mail campaigns"
           body="Prepare a draft, select recipients, and create a campaign for review."
-          action={<Link className="ui-button ui-button--primary" to="/studio">Open Email studio</Link>}
+          action={<Link className="ui-button ui-button--primary" to="/studio">Open drafts</Link>}
         />
       ) : (
         <div className="space-y-3">
