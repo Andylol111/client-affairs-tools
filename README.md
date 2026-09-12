@@ -8,11 +8,13 @@ Live club website for Yale Undergraduate Consulting Group outreach. Members shar
 
 ## Members
 
-Use `AppUrl`: Home, Projects, Documents, and Outreach (Week, Email studio, Campaigns, Pipeline, Prospects, Results).
+Use `AppUrl`: Home, Projects, Contacts, and Outreach (Drafts, Campaigns, Pipeline, Results). Administration is shown only to administrators.
 
 - SQLite stores the shared application records and access permissions. Private documents remain private; project and club sharing are explicit. Browser `localStorage` is not shared.
-- Studio generate works against existing contacts (or a quick compose). You do not have to run Find first.
+- Draft assistance works with an existing contact or a quick compose. You do not have to use Find contacts first.
 - AI on the host is Bedrock (`LLM_PROVIDER=bedrock`). There is no Ollama on the box.
+
+See the [product system map](docs/PRODUCT-SYSTEM-MAP.md) for ownership and integration boundaries and the [product design system](docs/PRODUCT-DESIGN-SYSTEM.md) for navigation, language, components, and staged UX gates.
 
 ## Operators
 

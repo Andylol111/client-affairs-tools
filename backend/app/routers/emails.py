@@ -1,6 +1,4 @@
-"""
-Emails API - AI Email Generation Engine (Ollama)
-"""
+"""Member-owned email drafts and controlled test delivery."""
 from fastapi import APIRouter, HTTPException, Depends
 from starlette.concurrency import run_in_threadpool
 from app.services.generation_policy import reserve_generation
@@ -38,7 +36,7 @@ class DraftUpdateRequest(BaseModel):
 
 @router.post("/generate", response_model=EmailGenerateResponse)
 async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Depends(get_current_user)):
-    """Generate a unique, personalized email for a contact using Ollama."""
+    """Generate a grounded starting draft for a contact."""
     db = await get_db()
     try:
         cursor = await db.execute(

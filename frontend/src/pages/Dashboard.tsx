@@ -15,21 +15,21 @@ const DEFAULT_DATA = {
 const WEEK = [
   {
     n: '1',
-    door: 'Week',
+    door: 'Target lists',
     title: 'Choose companies',
-    body: 'Choose this week’s companies from the prospect list.',
+    body: 'Choose companies for a defined outreach effort.',
     to: '/yucgoutreach',
   },
   {
     n: '2',
-    door: 'Week',
+    door: 'Target lists',
     title: 'Review contacts',
     body: 'Review suggested addresses and keep relevant contacts. A working domain does not confirm a mailbox exists.',
     to: '/yucgoutreach?view=comb',
   },
   {
     n: '3',
-    door: 'Studio',
+    door: 'Drafts',
     title: 'Write',
     body: 'Select a contact, prepare an email, and save your draft.',
     to: '/studio',
@@ -83,7 +83,7 @@ export default function Dashboard() {
         title="Home"
         subtitle="Your club’s projects, contacts, and outreach activity in one place."
         imageSrc="/yucg-bg/hero-campus.jpg"
-        actions={<Link to="/yucgoutreach" className="ui-button ui-button--primary">Open this week</Link>}
+        actions={<Link to="/yucgoutreach" className="ui-button ui-button--primary">Open target lists</Link>}
       />
       {apiError && (
         <p className="ui-notice ui-notice--warning mb-4">
@@ -93,7 +93,7 @@ export default function Dashboard() {
 
       <section className="app-week-guide mb-8" aria-labelledby="week-guide-title">
         <h2 id="week-guide-title" className="app-week-guide__title">
-          How a week works
+          How outreach works
         </h2>
         <ol className="app-week-guide__list">
           {WEEK.map((step) => (
