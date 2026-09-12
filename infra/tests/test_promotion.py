@@ -123,7 +123,7 @@ class PromotionTests(unittest.TestCase):
                     if '/branches/' in path:
                         return {'commit': {'sha': 'verified'}}
                     if '/compare/' in path:
-                        return {'behind_by': 0, 'files': [{'filename': 'backend/main.py'}]}
+                        return {'behind_by': 0, 'ahead_by': 1, 'files': [{'filename': 'backend/main.py'}]}
                     if method == 'POST':
                         return {'number': 8}
                     return previous
@@ -141,7 +141,7 @@ class PromotionTests(unittest.TestCase):
             if '/branches/' in path:
                 return {'commit': {'sha': 'verified'}}
             if '/compare/' in path:
-                return {'behind_by': 0, 'files': [{'filename': 'backend/main.py'}]}
+                return {'behind_by': 0, 'ahead_by': 1, 'files': [{'filename': 'backend/main.py'}]}
             if method == 'POST':
                 return {}
             return previous
@@ -154,10 +154,31 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(dispatches[-1].args[0],
                          'repos/club/tools/actions/workflows/beta.yml/dispatches')
 
-    def test_history_only_push_does_not_promote_forever(self):
-        with patch.object(promotion, 'api', side_effect=[{'commit': {'sha': 'verified'}}, {'behind_by': 0, 'files': []}]) as api:
+    def test_equal_history_push_does_not_promote_forever(self):
+        with patch.object(promotion, 'api', side_effect=[{'commit': {'sha': 'verified'}},
+                                                        {'behind_by': 0, 'ahead_by': 0, 'files': []}]) as api:
             promotion.process(self.event('Intake', 'push', 'develop'), self.repo)
             self.assertEqual(api.call_count, 2)
+
+    def test_history_only_commits_are_promoted_for_strict_ancestry(self):
+        posts = []
+
+        def fake_api(path, method='GET', payload=None):
+            if '/branches/' in path:
+                return {'commit': {'sha': 'verified'}}
+            if '/compare/' in path:
+                return {'behind_by': 0, 'ahead_by': 2, 'files': []}
+            if method == 'POST':
+                posts.append((path, payload))
+                return {'number': 8}
+            if '/pulls?' in path:
+                return []
+            self.fail(f'Unexpected API request: {path}')
+
+        with patch.object(promotion, 'api', side_effect=fake_api):
+            promotion.process(self.event('Intake', 'push', 'develop'), self.repo)
+        self.assertEqual(posts[0][0], 'repos/club/tools/pulls')
+        self.assertEqual(posts[0][1]['base'], 'feature')
 
     def test_human_hold_and_draft_block(self):
         self.assertTrue(promotion.held({'labels': [{'name': 'release:hold'}]}))
@@ -202,7 +223,7 @@ class PromotionTests(unittest.TestCase):
             if path.endswith('/branches/develop'):
                 return {'commit': {'sha': 'verified'}}
             if '/compare/' in path:
-                return {'behind_by': 0, 'files': [{'filename': 'backend/main.py'}]}
+                return {'behind_by': 0, 'ahead_by': 1, 'files': [{'filename': 'backend/main.py'}]}
             if '/pulls?' in path:
                 return []
             self.fail(f'Unexpected API request: {path}')

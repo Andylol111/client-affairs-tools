@@ -249,11 +249,10 @@ jobs:
       actions: write
       statuses: write
     steps:
-      # Bootstrap the race-safe controller already verified by Intake on develop.
-      # Restore the default-branch ref after this revision reaches main.
+      # Load the controller from the protected default branch, never from candidate code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 83b14800c71d1242d17a5eca47ef39804d6e2ebd
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Advance the next club branch
         env:
