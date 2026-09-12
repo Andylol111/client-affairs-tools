@@ -180,6 +180,14 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(posts[0][0], 'repos/club/tools/pulls')
         self.assertEqual(posts[0][1]['base'], 'feature')
 
+    def test_history_only_feature_does_not_create_a_main_merge_loop(self):
+        with patch.object(promotion, 'api', side_effect=[
+                {'commit': {'sha': 'verified'}},
+                {'behind_by': 0, 'ahead_by': 2, 'files': []},
+        ]) as api:
+            promotion.process(self.event('Beta', 'push', 'feature'), self.repo)
+        self.assertEqual(api.call_count, 2)
+
     def test_human_hold_and_draft_block(self):
         self.assertTrue(promotion.held({'labels': [{'name': 'release:hold'}]}))
         self.assertTrue(promotion.held({'draft': True}))
