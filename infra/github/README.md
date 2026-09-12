@@ -27,7 +27,7 @@ Do not run these API updates on an unreviewed revision. Save the previous rulese
 
 When another maintainer is available, review `main-ruleset.future-reviewers.json` to require one fresh independent PR approval and last-push approval. Add the authorized deployment reviewer and enable prevention of self-review. Until then, this future policy must not block the current workflow. No collaborator invitation is requested or sent.
 
-Both promotion branches use the same aggregate gate: `feature-ruleset.proposed.json` targets ruleset 22605434 and `main-ruleset.proposed.json` targets 22605433. Both were activated after candidate d616543 passed all hosted checks. Branch progression remains develop → feature → main, with topic PRs also permitted.
+`feature-ruleset.proposed.json` targets ruleset 22605434 with `feature-required-checks`; `main-ruleset.proposed.json` targets 22605433 with `production-required-checks`. Both require the source to contain the current target branch. Branch progression remains develop → feature → main, with topic PRs also permitted.
 
 When feature is behind main, synchronize main into develop and promote that merge through a passing develop-to-feature PR. Direct protected-head updates are rejected by design; do not bypass the rule to synchronize branches.
 
