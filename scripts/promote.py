@@ -180,7 +180,7 @@ def process_branch(run, repo):
     if comparison['behind_by']:
         synchronize(repo, target)
         return
-    if not comparison['files']:
+    if comparison['ahead_by'] == 0:
         return
     existing = api(f'{prefix}/pulls?state=all&base={target}&head={repo.split("/")[0]}:{source}&per_page=100')
     open_candidates = [p for p in existing if p['state'] == 'open']
