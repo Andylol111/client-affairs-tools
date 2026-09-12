@@ -49,7 +49,7 @@ async def list_attachments(user: dict = Depends(get_current_user)):
 
 
 @router.get("/onedrive")
-async def list_onedrive(user: dict = Depends(get_current_user)):
+async def list_onedrive(admin: dict = Depends(get_current_admin)):
     from app.services.graph_onedrive import configured, list_folder
 
     if not configured():
@@ -65,13 +65,18 @@ class OneDriveAttach(BaseModel):
 
 
 @router.post("/onedrive/attach")
-async def attach_onedrive(body: OneDriveAttach, user: dict = Depends(get_current_user)):
+async def attach_onedrive(body: OneDriveAttach, admin: dict = Depends(get_current_admin)):
     if not await _attachments_enabled():
         raise HTTPException(400, "Attachments are disabled. Enable in Settings.")
-    from app.services.graph_onedrive import download_item
+    from app.services.graph_onedrive import download_item, list_folder
 
     try:
+        allowed_ids = {str(item.get("id")) for item in list_folder() if item.get("id") and not item.get("folder")}
+        if body.item_id not in allowed_ids:
+            raise HTTPException(403, "The selected file is outside the configured club folder")
         content, filename, mime_type = download_item(body.item_id)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, str(e)) from e
     ext = Path(filename).suffix.lower()
@@ -97,7 +102,7 @@ async def attach_onedrive(body: OneDriveAttach, user: dict = Depends(get_current
             (row_id,),
         )
         row = await cursor.fetchone()
-        await log_audit(user["id"], "attachment_onedrive", "attachment", str(row_id), filename)
+        await log_audit(admin["id"], "attachment_onedrive", "attachment", str(row_id), filename)
         return row_to_dict(row)
     except Exception:
         if storage_path.exists():

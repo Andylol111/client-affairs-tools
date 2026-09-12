@@ -149,7 +149,7 @@ export default function CompanyDiscovery() {
             <strong>Parallel sources</strong> — website, LinkedIn (Apify), Tavily search.
           </li>
           <li>
-            <strong>Merge + verify</strong> — MX inbox check and Ollama AI verdict.
+            <strong>Review addresses</strong> — checks format, the company’s mail domain, and available source evidence. A later reply or permanent bounce provides stronger evidence about that address.
           </li>
           <li>
             <strong>Export or import</strong> — Excel or main Contacts.

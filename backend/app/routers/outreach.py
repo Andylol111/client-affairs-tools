@@ -325,23 +325,29 @@ async def save_sentiment_analysis(payload: SentimentSaveRequest, user: dict = De
 async def mark_campaign_contact_replied(cc_id: int, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
-        cursor = await db.execute(
+        await db.execute('BEGIN IMMEDIATE')
+        row = await (await db.execute(
+            """SELECT cc.contact_id, c.owner_user_id
+               FROM campaign_contacts cc
+               JOIN campaigns c ON c.id = cc.campaign_id
+               WHERE cc.id = ?""",
+            (cc_id,),
+        )).fetchone()
+        if not row:
+            raise HTTPException(404, "Campaign contact not found")
+        if row["owner_user_id"] != user["id"]:
+            raise HTTPException(403, "Only the campaign owner can record a reply")
+        await db.execute(
             "UPDATE campaign_contacts SET replied_at = CURRENT_TIMESTAMP, status = 'replied' WHERE id = ?",
             (cc_id,),
         )
-        await db.commit()
-        if cursor.rowcount == 0:
-            raise HTTPException(404, "Campaign contact not found")
-        # Also update contact pipeline if we have contact_id
-        cursor = await db.execute("SELECT contact_id FROM campaign_contacts WHERE id = ?", (cc_id,))
-        row = await cursor.fetchone()
-        if row and row["contact_id"]:
+        if row["contact_id"]:
             await db.execute(
                 """UPDATE contacts SET pipeline_status = 'replied' WHERE id = ?
                    AND (pipeline_status IS NULL OR pipeline_status NOT IN ('meeting', 'closed'))""",
                 (row["contact_id"],),
             )
-            await db.commit()
+        await db.commit()
         return {"ok": True}
     finally:
         await db.close()

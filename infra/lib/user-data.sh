@@ -27,6 +27,24 @@ else
 fi
 
 mountpoint -q /data || { echo "Retained data mount failed"; exit 1; }
+# The application image runs as 10001:10001. A newly formatted EBS volume is
+# root-owned, so make the retained application directory writable before the
+# first container attempts to initialize SQLite.
+chown 10001:10001 /data
+chmod 0750 /data
+for retained_file in /data/clientreach.db /data/clientreach.db-wal /data/clientreach.db-shm; do
+  if [ -e "$retained_file" ] && ! setpriv --reuid 10001 --regid 10001 --clear-groups test -r "$retained_file" -a -w "$retained_file"; then
+    echo "Retained SQLite file is not accessible to application UID:GID 10001:10001: $retained_file"
+    echo "Stop the application, back up the volume, then migrate only clientreach.db, clientreach.db-wal, and clientreach.db-shm to owner 10001:10001 before retrying."
+    exit 1
+  fi
+done
+
+case "${YUCG_APP_ENV:-}" in
+  beta) EMAIL_DELIVERY_ENABLED=false ;;
+  production) EMAIL_DELIVERY_ENABLED=true ;;
+  *) echo "YUCG_APP_ENV must be beta or production"; exit 1 ;;
+esac
 
 export AWS_DEFAULT_REGION="$YUCG_REGION" AWS_ECR_DISABLE_CACHE=true
 export DOCKER_CONFIG
@@ -56,6 +74,8 @@ umask 077
 {
   echo "$SECRET_JSON" | jq -r 'to_entries[] | select(.value != null) | "\(.key)=\(.value)"'
   echo "DATABASE_URL=sqlite:////data/clientreach.db"
+  echo "APP_ENV=$YUCG_APP_ENV"
+  echo "EMAIL_DELIVERY_ENABLED=$EMAIL_DELIVERY_ENABLED"
   echo "LLM_PROVIDER=bedrock"
   echo "BEDROCK_RANK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0"
   echo "AI_REVIEW_WORKERS=2"

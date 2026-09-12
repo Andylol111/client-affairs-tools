@@ -1,6 +1,4 @@
-"""
-Pydantic models for ClientReach AI
-"""
+"""Pydantic models for YUCG Outreach."""
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime

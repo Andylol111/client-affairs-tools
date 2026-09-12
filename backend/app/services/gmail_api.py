@@ -39,8 +39,9 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
         from app.token_crypto import decrypt_token, encrypt_token
 
         email = row["email"]
+        stored_refresh_token = row["refresh_token"]
         access_token = decrypt_token(row["access_token"])
-        refresh_token = decrypt_token(row["refresh_token"])
+        refresh_token = decrypt_token(stored_refresh_token)
         expires_at = row["token_expires_at"]
 
         # If we have a valid access token (with 5 min buffer), use it
@@ -77,10 +78,16 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
 
         expires_at = now + new_expires
         await db.execute(
-            "UPDATE users SET access_token = ?, token_expires_at = ? WHERE id = ?",
-            (encrypt_token(new_access), expires_at, user_id),
+            """UPDATE users SET access_token = ?, token_expires_at = ?
+               WHERE id = ? AND is_active = 1 AND refresh_token = ?""",
+            (encrypt_token(new_access), expires_at, user_id, stored_refresh_token),
         )
+        changed = await (await db.execute("SELECT changes() AS n")).fetchone()
         await db.commit()
+        # A disconnect, deactivation, or newer authorization may have completed
+        # while Google was refreshing the old credential. Never resurrect it.
+        if not changed or int(changed["n"] or 0) != 1:
+            return None
         return new_access, email
     finally:
         await db.close()
