@@ -8,6 +8,16 @@
       "Resource": "arn:aws:cloudformation:us-east-1:442429446212:stack/YucgOutreach-dev/a33f6900-abdd-11f1-97bb-0affec64eb8b"
     },
     {
+      "Sid": "ReadDeploymentTargetSecurity",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVolumes"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "AuthenticateEcr",
       "Effect": "Allow",
       "Action": "ecr:GetAuthorizationToken",
