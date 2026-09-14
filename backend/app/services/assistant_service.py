@@ -1,4 +1,4 @@
-"""Low-cost, permission-filtered retrieval for the in-app Bedrock assistant."""
+"""In-app Bedrock harness: site tools first, optional document grounding."""
 from __future__ import annotations
 
 import asyncio
@@ -217,6 +217,48 @@ async def retrieve_context(user_id: int, question: str, project_id: int | None, 
     return '\n'.join(selected),citations
 
 
+def _named_company(question: str) -> str:
+    match = re.search(
+        r"\b(?:at|for)\s+([A-Z][A-Za-z0-9&.'-]{1,40}(?:\s+[A-Z][A-Za-z0-9&.'-]{1,40}){0,3})",
+        question or "",
+    )
+    name = (match.group(1) if match else "").strip()
+    if not name or name.lower() in {"yale", "yucg"}:
+        return ""
+    return name[:500]
+
+
+def _harness_fallback_payload(question: str) -> str:
+    """Keep Find people usable when Bedrock is down. Documents are not required."""
+    import json
+    company = _named_company(question)
+    if company:
+        payload = {
+            "answer": (
+                f"The language model is offline, but the site tools still work. I can start Find people for {company} after you confirm. "
+                "Which titles should we prioritize, and do you already have the company domain or LinkedIn company URL?"
+            ),
+            "reads": [{"tool": "search_contacts", "args": {"q": company}}],
+            "propose": [{
+                "tool": "start_find_people",
+                "args": {"company_name": company, "max_prospects": 250},
+                "summary": f"Find people at {company} (up to 250)",
+            }],
+            "open": [{"path": "/scraper", "label": "Find contacts"}],
+        }
+    else:
+        payload = {
+            "answer": (
+                "The language model is offline, but I can still run this app's tools. Which company should we search, "
+                "and what titles or people do you already know you want to reach?"
+            ),
+            "reads": [],
+            "propose": [],
+            "open": [{"path": "/scraper", "label": "Find contacts"}],
+        }
+    return json.dumps(payload)
+
+
 async def answer(
     user: dict,
     question: str,
@@ -228,15 +270,20 @@ async def answer(
     context,citations = await retrieve_context(user['id'],question,project_id,(document_ids or [])[:20])
     prior='\n'.join(f"{item['role'].upper()}: {item['content'][:1500]}" for item in (history or [])[-6:])[:6000]
     page = (page_path or '').strip()[:200] or '(unknown)'
-    sources_block = context or '(no indexed document matched; use site tools instead)'
+    sources_block = context or '(no indexed document matched; that is normal. operate the website tools.)'
     prompt=(
         f"CURRENT PAGE\n{page}\n\nSOURCE BLOCKS\n{sources_block}\n\n"
         f"RECENT CONVERSATION\n{prior or '(new conversation)'}\n\nMEMBER QUESTION\n{question}"
     )
-    response = await asyncio.to_thread(
-        complete_text,prompt,rank_model_id(),operator_system_prompt(),
-        user_id=user['id'],purpose='assistant',max_tokens=900,
-    )
+    try:
+        response = await asyncio.to_thread(
+            complete_text,prompt,rank_model_id(),operator_system_prompt(),
+            user_id=user['id'],purpose='assistant',max_tokens=900,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        response = _harness_fallback_payload(question)
     payload = parse_operator_payload(response)
     if payload:
         answer_text = str(payload.get('answer') or '').strip()
