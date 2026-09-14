@@ -437,18 +437,31 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     company = company_from_li or company
     kw1 = meta.get("keywords") or ""
     kw2 = meta.get("keywords_2") or ""
+    roster_contacts: list[dict] = []
+    try:
+        from app.services.roster_email import cached_roster_contacts, refresh_roster_on_demand
+
+        roster_contacts = await cached_roster_contacts(company, domain)
+        if not roster_contacts:
+            # Cold club memory for this company: SEC-refresh it now instead of waiting on the drain.
+            roster_contacts = await refresh_roster_on_demand(company, domain)
+    except Exception:
+        logger.exception("roster cache-first lookup failed")
+    if roster_contacts:
+        domain_contacts = domain_contacts + roster_contacts
 
     await _run_update(
         run_id,
         progress_pct=22.0,
         progress_message=(
-            f"Sources: website {len(domain_contacts)} · LinkedIn {len(linkedin_contacts)} · "
-            f"web {len(web_contacts)} — merging…"
+            f"Sources: website {len(domain_contacts) - len(roster_contacts)} · roster {len(roster_contacts)} · "
+            f"LinkedIn {len(linkedin_contacts)} · web {len(web_contacts)} — merging…"
         ),
         research_json=json.dumps(
             {
                 "title_hints": title_hints or None,
-                "domain_contacts": len(domain_contacts),
+                "domain_contacts": len(domain_contacts) - len(roster_contacts),
+                "roster_contacts": len(roster_contacts),
                 "linkedin_contacts": len(linkedin_contacts),
                 "web_contacts": len(web_contacts),
                 "linkedin_url": linkedin_url or None,

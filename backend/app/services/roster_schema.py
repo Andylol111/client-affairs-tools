@@ -17,6 +17,7 @@ async def init_roster_schema(db):
             last_error TEXT,
             people_count INTEGER NOT NULL DEFAULT 0,
             current_count INTEGER NOT NULL DEFAULT 0,
+            next_email_check_at TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -40,8 +41,26 @@ async def init_roster_schema(db):
             first_seen_at TEXT NOT NULL,
             last_seen_at TEXT NOT NULL,
             missed_checks INTEGER NOT NULL DEFAULT 0,
+            email_status TEXT,
+            email_checked_at TEXT,
             UNIQUE(roster_id, normalized_name)
         );
         CREATE INDEX IF NOT EXISTS idx_roster_people_employment
             ON company_roster_people(roster_id, employment);
+        CREATE INDEX IF NOT EXISTS idx_roster_people_email
+            ON company_roster_people(inferred_email);
     """)
+    people_columns = {
+        row["name"] for row in await (await db.execute("PRAGMA table_info(company_roster_people)")).fetchall()
+    }
+    if people_columns and "email_status" not in people_columns:
+        await db.execute("ALTER TABLE company_roster_people ADD COLUMN email_status TEXT")
+        await db.execute("ALTER TABLE company_roster_people ADD COLUMN email_checked_at TEXT")
+    roster_columns = {
+        row["name"] for row in await (await db.execute("PRAGMA table_info(company_rosters)")).fetchall()
+    }
+    if roster_columns and "next_email_check_at" not in roster_columns:
+        await db.execute("ALTER TABLE company_rosters ADD COLUMN next_email_check_at TEXT")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_company_rosters_email_due ON company_rosters(next_email_check_at)"
+    )
