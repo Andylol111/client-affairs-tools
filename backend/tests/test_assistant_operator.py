@@ -14,6 +14,19 @@ from fastapi import HTTPException
 from app.database import get_db, init_db
 from app.routers import assistant
 from app.services import assistant_operator, assistant_service
+from app.services.assistant_operator import (
+    _clean_write_args,
+    _default_summary,
+    _safe_path,
+    _trim,
+    execute_read,
+    execute_reads,
+    execute_write,
+    parse_operator_payload,
+    sanitize_open,
+    sanitize_propose,
+    sanitize_reads,
+)
 
 
 async def denied(coro, status):
@@ -24,13 +37,134 @@ async def denied(coro, status):
         assert exc.status_code == status, exc
 
 
+def expect_http(fn, status=422):
+    try:
+        fn()
+        raise AssertionError('Operation unexpectedly allowed')
+    except HTTPException as exc:
+        assert exc.status_code == status, exc
+
+
+def test_payload_and_sanitizers():
+    assert parse_operator_payload('') is None
+    assert parse_operator_payload('not json') is None
+    assert parse_operator_payload('{') is None
+    assert parse_operator_payload('{"answer":}') is None
+    assert parse_operator_payload('[]') is None
+    assert parse_operator_payload('{"answer": "  "}') is None
+    wrapped = 'Here you go\n{"answer": "Ready", "reads": []}\n'
+    assert parse_operator_payload(wrapped)['answer'] == 'Ready'
+    assert 'in-app operator' in assistant_operator.operator_system_prompt()
+
+    assert sanitize_reads(None) == []
+    assert sanitize_reads('search_contacts') == []
+    mixed_reads = [
+        'skip',
+        {'tool': 'search_contacts', 'args': 'Acme'},
+        {'tool': 'send_mail', 'args': {'to': 'x'}},
+        {'tool': 'list_companies', 'args': {'q': 'x'}},
+        {'tool': 'list_discovery_runs', 'args': {}},
+    ]
+    cleaned = sanitize_reads(mixed_reads)
+    assert [item['tool'] for item in cleaned] == ['search_contacts']
+    assert cleaned[0]['args'] == {}
+    later = sanitize_reads([
+        {'tool': 'not_a_tool'},
+        {'tool': 'list_companies', 'args': {'q': 'x'}},
+        {'tool': 'list_discovery_runs', 'args': {}},
+        {'tool': 'get_discovery_run', 'args': {'run_id': 1}},
+    ])
+    assert [item['tool'] for item in later] == ['list_companies', 'list_discovery_runs']
+
+    assert sanitize_propose(None) == []
+    assert sanitize_propose('start') == []
+    assert sanitize_propose([{'tool': 'send_mail', 'args': {}}]) == []
+    assert sanitize_propose(['skip', {'tool': 'unknown'}]) == []
+    proposed = sanitize_propose([
+        {'tool': 'start_find_people', 'args': {'company_name': 'Acme', 'max_prospects': 900, 'company_domain': 'acme.com'}},
+        {'tool': 'import_run_to_contacts', 'args': {'run_id': '12'}, 'summary': '  Bring them in  ' + 'x' * 200},
+    ])
+    assert proposed[0]['args']['max_prospects'] == 800
+    assert proposed[0]['args']['company_domain'] == 'acme.com'
+    assert proposed[0]['summary'].startswith('Find people at Acme')
+    assert proposed[1]['args'] == {'run_id': 12}
+    assert len(proposed[1]['summary']) <= 160
+
+    expect_http(lambda: sanitize_propose([{'tool': 'start_find_people', 'args': {}}]))
+    expect_http(lambda: _clean_write_args('start_find_people', {}))
+    expect_http(lambda: _clean_write_args('import_run_to_contacts', {}))
+    expect_http(lambda: _clean_write_args('import_run_to_contacts', {'run_id': 0}))
+    expect_http(lambda: _clean_write_args('explode', {}))
+    capped = _clean_write_args('start_find_people', {
+        'company_name': '  Acme  ',
+        'max_prospects': 'nope',
+        'linkedin_company_url': 'https://linkedin.com/company/acme',
+    })
+    assert capped['max_prospects'] == 250
+    assert capped['linkedin_company_url'].startswith('https://')
+    floor = _clean_write_args('start_find_people', {'company_name': 'Acme', 'max_prospects': 1})
+    assert floor['max_prospects'] == 25
+
+    assert _default_summary('start_find_people', {}) == 'Find people at this company (up to 250)'
+    assert _default_summary('import_run_to_contacts', {'run_id': 9}) == 'Import run #9 into Contacts'
+    assert _default_summary('other', {}) == 'other'
+
+    assert sanitize_open(None) == []
+    assert sanitize_open('/scraper') == []
+    assert sanitize_open(['skip', {'path': ''}]) == []
+    assert _safe_path('/scraper') == '/scraper'
+    assert _safe_path('/campaigns/1') == '/campaigns/1'
+    assert _safe_path('/scraper?run=12') == '/scraper?run=12'
+    assert _safe_path('/scraper?x=<script>') is None
+    assert _safe_path('https://example.com') is None
+    assert _safe_path('//evil.example') is None
+    assert _safe_path('/scraper\\x') is None
+    assert _safe_path('/admin') is None
+    assert _safe_path('scraper') is None
+    opened = sanitize_open([
+        {'path': 'https://evil.example', 'label': 'x'},
+        {'path': '/scraper'},
+        {'path': '/outreach?tab=pipeline', 'label': 'Pipeline'},
+        {'path': '/documents', 'label': 'Docs'},
+        {'path': '/studio', 'label': 'Drafts'},
+        {'path': '/admin', 'label': 'Admin'},
+    ])
+    assert opened[0] == {'path': '/scraper', 'label': 'Find contacts'}
+    assert opened[1]['path'].startswith('/outreach')
+    assert [item['path'] for item in opened] == ['/scraper', '/outreach?tab=pipeline', '/documents']
+    extra = sanitize_open([
+        {'path': '/studio', 'label': 'Drafts'},
+        {'path': '/analytics', 'label': 'Results'},
+        {'path': '/', 'label': 'Home'},
+        {'path': '/yucgoutreach', 'label': 'Targets'},
+        {'path': '/campaigns/1', 'label': 'Campaign'},
+    ])
+    assert len(extra) == 4
+
+    assert _trim({'ok': True}) == {'ok': True}
+    huge = _trim({'blob': 'n' * 3000}, limit=40)
+    assert huge['truncated'] is True
+    assert huge['preview'].startswith('{')
+
+
 async def run():
+    test_payload_and_sanitizers()
     with tempfile.TemporaryDirectory() as tmp:
         os.environ['DATABASE_URL'] = 'sqlite:///' + tmp + '/operator.db'
         await init_db()
         db = await get_db()
-        await db.execute("INSERT INTO users(id,email,role) VALUES(1,'one@yale.edu','standard'),(2,'two@yale.edu','standard')")
+        await db.execute("INSERT INTO users(id,email,role) VALUES(1,'one@yale.edu','standard'),(2,'two@yale.edu','standard'),(3,'admin@yale.edu','admin')")
         await db.execute("INSERT INTO contacts(id,name,email,title,company,owner_id) VALUES(1,'Ada Lovelace','ada@acme.com','Director','Acme',1)")
+        await db.execute("INSERT INTO contacts(id,name,email,title,company,owner_id) VALUES(2,'Hidden Other','other@beta.com','Lead','Beta',2)")
+        await db.execute("INSERT INTO contacts(id,name,email,title,company,owner_id) VALUES(3,'No Company','solo@yale.edu','Fellow','',1)")
+        await db.execute(
+            """INSERT INTO yucgoutreach_discovery_runs(id,user_id,company_name,company_domain,status,progress_pct,progress_message,prospects_count,max_prospects)
+               VALUES(7,1,'Acme','acme.com','completed',100,'Done',1,40)"""
+        )
+        await db.execute(
+            """INSERT INTO yucgoutreach_prospects(run_id,first_name,last_name,title,email,score)
+               VALUES(7,'Ada','Lovelace','Director','ada@acme.com',9.5)"""
+        )
         await db.commit()
         await db.close()
 
@@ -47,8 +181,8 @@ async def run():
         assert result['navigations'][0]['path'] == '/scraper'
         assert 'ada@acme.com' in json.dumps(result['lookups'])
 
-        runs_before = await assistant_operator.execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
-        assert runs_before[0]['data'] == []
+        runs_before = await execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
+        assert runs_before[0]['data'][0]['id'] == 7
 
         created = await assistant.act(assistant.ActRequest(tool='start_find_people', args={'company_name': 'Acme', 'max_prospects': 40}), {'id': 1, 'role': 'standard'})
         assert created['ok'] and created['result']['id']
@@ -56,11 +190,11 @@ async def run():
 
         await denied(assistant.act(assistant.ActRequest(tool='send_mail', args={'to': 'ada@acme.com'}), {'id': 1, 'role': 'standard'}), 422)
         await denied(assistant.act(assistant.ActRequest(tool='delete_contact', args={'id': 1}), {'id': 1, 'role': 'standard'}), 422)
-        await denied(assistant_operator.execute_write({'id': 1}, 'clear_contacts', {}), 422)
+        await denied(execute_write({'id': 1}, 'clear_contacts', {}), 422)
 
-        leaked = assistant_operator.sanitize_open([{'path': 'https://evil.example', 'label': 'x'}, {'path': '/scraper', 'label': 'Find contacts'}])
+        leaked = sanitize_open([{'path': 'https://evil.example', 'label': 'x'}, {'path': '/scraper', 'label': 'Find contacts'}])
         assert leaked == [{'path': '/scraper', 'label': 'Find contacts'}]
-        assert assistant_operator.sanitize_propose([{'tool': 'send_mail', 'args': {}}]) == []
+        assert sanitize_propose([{'tool': 'send_mail', 'args': {}}]) == []
 
         forbidden_plan = json.dumps({
             "answer": "I will not send mail.",
@@ -73,6 +207,59 @@ async def run():
         assert blocked['pending_actions'] == []
         assert blocked['lookups'] == []
         assert blocked['navigations'] == []
+
+        companies = await execute_read({'id': 1, 'role': 'standard'}, 'list_companies', {})
+        assert any(row['company'] == 'Acme' for row in companies)
+        assert all(row['company'] != 'Beta' for row in companies)
+        admin_companies = await execute_read({'id': 3, 'role': 'admin'}, 'list_companies', {})
+        assert {row['company'] for row in admin_companies} >= {'Acme', 'Beta'}
+
+        owned = await execute_read({'id': 1, 'role': 'standard'}, 'search_contacts', {'company': 'Ada'})
+        assert owned['count'] == 1
+        admin_all = await execute_read({'id': 3, 'role': 'admin'}, 'search_contacts', {})
+        assert admin_all['count'] >= 2
+
+        missing_run = await execute_read({'id': 1, 'role': 'standard'}, 'get_discovery_run', {})
+        assert missing_run == {'error': 'run_id required'}
+        absent = await execute_read({'id': 1, 'role': 'standard'}, 'get_discovery_run', {'run_id': 99})
+        assert absent == {'error': 'Run not found'}
+        present = await execute_read({'id': 1, 'role': 'standard'}, 'get_discovery_run', {'run_id': 7})
+        assert present['company_name'] == 'Acme'
+        assert present['sample'][0]['first_name'] == 'Ada'
+        other = await execute_read({'id': 2, 'role': 'standard'}, 'get_discovery_run', {'run_id': 7})
+        assert other == {'error': 'Run not found'}
+
+        with patch('app.services.prospect_coordinator.recommend_prospects', return_value=[
+            {'prospect': {'company': 'Acme', 'sector': 'Tech', 'recommended_message_angle': 'Alumni'}},
+        ]):
+            recs = await execute_read({'id': 1, 'role': 'standard'}, 'recommend_companies', {'n': 'bad'})
+        assert recs[0]['company'] == 'Acme'
+        with patch('app.services.prospect_coordinator.recommend_prospects', return_value=[]):
+            empty = await execute_read({'id': 1, 'role': 'standard'}, 'recommend_companies', {'n': 3})
+        assert empty == []
+
+        unnamed = await execute_read({'id': 1, 'role': 'standard'}, 'search_person', {})
+        assert unnamed == {'error': 'name required'}
+        with patch('app.routers.contacts.search_person', AsyncMock(return_value={'name': 'Ada', 'hits': 1})):
+            person = await execute_read({'id': 1, 'role': 'standard'}, 'search_person', {'name': 'Ada', 'company': 'Acme'})
+        assert person['name'] == 'Ada'
+        await denied(execute_read({'id': 1, 'role': 'standard'}, 'send_mail', {}), 422)
+
+        mixed = await execute_reads({'id': 1, 'role': 'standard'}, [
+            {'tool': 'send_mail', 'args': {}},
+            {'tool': 'list_companies', 'args': {}},
+        ])
+        assert mixed[0]['data']['error']
+        assert isinstance(mixed[1]['data'], list)
+        with patch.object(assistant_operator, 'execute_read', AsyncMock(side_effect=RuntimeError('boom'))):
+            crashed = await execute_reads({'id': 1}, [{'tool': 'list_companies', 'args': {}}])
+        assert 'boom' in crashed[0]['data']['error']
+
+        with patch('app.routers.yucgoutreach.import_run_to_contacts', AsyncMock(return_value={'created': 1, 'updated': 0, 'skipped': 2})):
+            imported = await execute_write({'id': 1, 'role': 'standard'}, 'import_run_to_contacts', {'run_id': 7})
+        assert imported['ok'] is True
+        assert 'Imported into Contacts: 1 new' in imported['answer']
+        assert imported['navigations'][0]['path'] == '/outreach'
 
 
 if __name__ == '__main__':

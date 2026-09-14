@@ -156,6 +156,95 @@ test('assistant can propose Find people and only runs it after confirm', async (
   await expect(page).toHaveURL(/\/scraper/);
 });
 
+test('assistant indexes an owned document from the bubble', async ({ page }) => {
+  let indexed = false;
+  await page.route('**/api/assistant/sources', route => route.fulfill({
+    json: [{
+      id: 1, title: 'Project report 1', owner_user_id: 1, project_id: 1, project_name: 'Consulting project',
+      visibility: 'project', current_version: 1, index_state: 'error', character_count: 0, last_error: 'retry',
+    }],
+  }));
+  await page.route('**/api/assistant/documents/1/index', async route => {
+    indexed = true;
+    return route.fulfill({ json: { state: 'ready', chunks: 2, characters: 100 } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByRole('button', { name: 'Index for assistant' }).click();
+  expect(indexed).toBe(true);
+});
+
+test('assistant restores a thread and starts a new chat', async ({ page }) => {
+  await page.route('**/api/assistant/threads', route => route.fulfill({
+    json: [{ id: 9, title: 'Find Acme', created_at: 1, updated_at: 2 }],
+  }));
+  await page.route('**/api/assistant/threads/9', route => route.fulfill({
+    json: [
+      { id: 1, role: 'user', content: 'Find people at Acme', created_at: 1, sources: [] },
+      { id: 2, role: 'assistant', content: 'Confirm to start the run.', created_at: 2, sources: [] },
+    ],
+  }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByRole('button', { name: 'Find Acme' }).click();
+  await expect(page.getByText('Confirm to start the run.')).toBeVisible();
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await expect(page.getByText('Writes wait for a confirm button.')).toBeVisible();
+});
+
+test('assistant import confirm opens Pipeline and never sends mail', async ({ page }) => {
+  const mutations: string[] = [];
+  await page.route('**/api/assistant/ask', async route => {
+    mutations.push(`ASK ${route.request().postDataJSON()?.tool || route.request().postDataJSON()?.question}`);
+    return route.fulfill({
+      json: {
+        answer: 'I can import run 7 after you confirm.',
+        thread_id: 9,
+        model: 'haiku',
+        grounded: false,
+        sources: [],
+        pending_actions: [{ tool: 'import_run_to_contacts', args: { run_id: 7 }, summary: 'Import run #7 into Contacts' }],
+        navigations: [{ path: '/outreach', label: 'Open Pipeline' }],
+        lookups: [],
+      },
+    });
+  });
+  await page.route('**/api/assistant/act', async route => {
+    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
+    return route.fulfill({ json: { ok: true, answer: 'Imported into Contacts: 1 new, 0 updated, 0 skipped.', navigations: [{ path: '/outreach', label: 'Open Pipeline' }] } });
+  });
+  await page.goto('/scraper');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('Import the last run');
+  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await expect(page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' })).toBeVisible();
+  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
+  await page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' }).click();
+  await expect(page.getByText('Imported into Contacts: 1 new')).toBeVisible();
+  expect(mutations).toContain('ACT import_run_to_contacts');
+  expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
+  await expect(page).toHaveURL(/\/outreach/);
+});
+
+test('assistant ask failures restore the question and never call act', async ({ page }) => {
+  const mutations: string[] = [];
+  await page.route('**/api/assistant/ask', async route => {
+    mutations.push('ASK');
+    return route.fulfill({ status: 429, json: { detail: 'Too many assistant requests this hour' } });
+  });
+  await page.route('**/api/assistant/act', async route => {
+    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('Find people at Acme');
+  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await expect(page.getByRole('alert')).toContainText('Too many assistant requests this hour');
+  await expect(page.getByLabel('Question or task')).toHaveValue('Find people at Acme');
+  expect(mutations).toEqual(['ASK']);
+});
+
 test('checking an uncertain dispatch never calls a send endpoint', async ({ page }) => {
   const mutations: string[] = [];
   page.on('request', request => { if (request.method() === 'POST' && !new URL(request.url()).pathname.startsWith('/api/telemetry/')) mutations.push(new URL(request.url()).pathname); });
