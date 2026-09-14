@@ -305,7 +305,7 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
                     <input type="checkbox" disabled={source.index_state !== 'ready'} checked={selected.includes(source.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} />
                     <span>{source.title}<small className="block text-slate-500">{source.index_state === 'ready' ? 'Indexed' : 'Not indexed'}</small></span>
                     {source.owner_user_id === user.id && source.current_version && source.index_state !== 'ready' && source.index_state !== 'pending' && source.index_state !== 'indexing' && (
-                      <button type="button" className="underline" disabled={busy} onClick={() => void index(source)}>Index</button>
+                      <button type="button" className="underline" disabled={busy} aria-label="Index for assistant" onClick={() => void index(source)}>Index</button>
                     )}
                   </label>
                 ))}
@@ -331,7 +331,7 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
                 onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask(); } }}
                 placeholder="Find people at Garmin…"
               />
-              <button type="submit" className="h-9 shrink-0 rounded-xl bg-deep-navy px-3 text-xs font-semibold text-white disabled:opacity-40" disabled={busy || !question.trim()}>Send</button>
+              <button type="submit" className="h-9 shrink-0 rounded-xl bg-deep-navy px-3 text-xs font-semibold text-white disabled:opacity-40" disabled={busy || !question.trim()} aria-label="Send">Send</button>
             </div>
             <p className="mt-2 text-[11px] text-slate-500">This hour: {usage.member_requests}/15 of your requests · {usage.club_requests}/120 club requests.</p>
           </form>
