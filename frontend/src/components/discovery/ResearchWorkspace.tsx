@@ -5,6 +5,10 @@ import RecommendationInbox from './RecommendationReview';
 
 type Brief = { id?: number; project_id?: number | null; name: string; spec: AudienceSpec };
 
+function pageItems<T>(page: { items?: T[] } | undefined | null): T[] {
+  return Array.isArray(page?.items) ? page.items : [];
+}
+
 function usePolling(load: () => Promise<void>, active: boolean, ms = 4000) {
   useEffect(() => {
     if (!active) return;
@@ -28,7 +32,7 @@ export default function ResearchWorkspace({ projects }: { projects: Project[] })
 
   const loadBriefs = useCallback(async () => {
     try {
-      const { items } = await api.research.briefs();
+      const items = pageItems(await api.research.briefs());
       setBriefs(items);
       setSelectedBrief((current) => {
         if (items.length && !current) return items[0];
@@ -45,16 +49,17 @@ export default function ResearchWorkspace({ projects }: { projects: Project[] })
         api.research.jobs(),
         api.research.recommendations(selectedBriefId),
       ]);
-      setCompanies(companyPage.items.filter((company) => company.brief_id === selectedBriefId));
-      setJobs(jobPage.items.filter((job) => job.brief_id === selectedBriefId));
-      setRecommendations(recommendationPage.items.filter((recommendation) => recommendation.brief_id === selectedBriefId));
+      setCompanies(pageItems(companyPage).filter((company) => company.brief_id === selectedBriefId));
+      setJobs(pageItems(jobPage).filter((job) => job.brief_id === selectedBriefId));
+      setRecommendations(pageItems(recommendationPage).filter((recommendation) => recommendation.brief_id === selectedBriefId));
     } catch (e) { setError(e instanceof Error ? e.message : 'Research results are unavailable right now.'); }
   }, [selectedBriefId]);
 
   useEffect(() => {
     let cancelled = false;
-    api.research.briefs().then(({ items }) => {
+    api.research.briefs().then((page) => {
       if (cancelled) return;
+      const items = pageItems(page);
       setBriefs(items);
       setSelectedBrief((current) => {
         if (items.length && !current) return items[0];
@@ -75,9 +80,9 @@ export default function ResearchWorkspace({ projects }: { projects: Project[] })
       api.research.recommendations(selectedBriefId),
     ]).then(([companyPage, jobPage, recommendationPage]) => {
       if (cancelled) return;
-      setCompanies(companyPage.items.filter((company) => company.brief_id === selectedBriefId));
-      setJobs(jobPage.items.filter((job) => job.brief_id === selectedBriefId));
-      setRecommendations(recommendationPage.items.filter((recommendation) => recommendation.brief_id === selectedBriefId));
+      setCompanies(pageItems(companyPage).filter((company) => company.brief_id === selectedBriefId));
+      setJobs(pageItems(jobPage).filter((job) => job.brief_id === selectedBriefId));
+      setRecommendations(pageItems(recommendationPage).filter((recommendation) => recommendation.brief_id === selectedBriefId));
     }).catch((e) => {
       if (!cancelled) setError(e instanceof Error ? e.message : 'Research results are unavailable right now.');
     });
@@ -98,7 +103,7 @@ export default function ResearchWorkspace({ projects }: { projects: Project[] })
     if (!selectedBrief) return;
     setResearching(true); setError(null); setInfo(null);
     try {
-      const { items } = await api.research.researchCompanies(selectedBrief.id);
+      const items = pageItems(await api.research.researchCompanies(selectedBrief.id));
       setCompanies(items); setInfo(`Company research finished with ${items.length} recommendation(s).`);
     } catch (e) { setError(e instanceof Error ? e.message : 'Company research is unavailable right now.'); } finally { setResearching(false); }
   };
@@ -174,8 +179,8 @@ function CompanyList({ companies, onReview }: { companies: ResearchCompany[]; on
     <h3>{company.name} <StatusBadge tone={company.match_state === 'strong_match' ? 'success' : company.match_state === 'needs_review' ? 'warning' : 'info'}>{company.match_state.replaceAll('_', ' ')}</StatusBadge>{company.disposition && <StatusBadge tone={company.disposition === 'accepted' ? 'success' : 'danger'}>{company.disposition}</StatusBadge>}</h3>
     <p>{company.domain}</p>
     <p>{company.reason}</p>
-    {company.warnings.length > 0 && <ul>{company.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
-    {company.sources.length > 0 && <ul>{company.sources.map((source, index) => <li key={index}><a href={source.url} target="_blank" rel="noopener noreferrer">{new URL(source.url).hostname}</a> · {source.excerpt || 'No excerpt'}</li>)}</ul>}
+    {(company.warnings || []).length > 0 && <ul>{(company.warnings || []).map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
+    {(company.sources || []).length > 0 && <ul>{(company.sources || []).map((source, index) => <li key={index}><a href={source.url} target="_blank" rel="noopener noreferrer">{new URL(source.url).hostname}</a> · {source.excerpt || 'No excerpt'}</li>)}</ul>}
     <label htmlFor={`company-review-${company.id}`}>Review reason</label>
     <textarea id={`company-review-${company.id}`} rows={2} value={reasons[company.id] || ''} onChange={(event) => setReasons((current) => ({ ...current, [company.id]: event.target.value }))} placeholder="For example: subsidiary of a company already covered" />
     <div className="research-actions">
