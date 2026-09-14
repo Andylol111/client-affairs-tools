@@ -149,6 +149,11 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
                    WHERE roster_id=? AND IFNULL(email_status,'') NOT IN ('bounced','invalid_domain','mx_valid','previously_delivered')""",
                 (_iso(), roster_id),
             )
+            # Domain dead today does not mean dead forever — but retry weekly, not per lease.
+            await db.execute(
+                "UPDATE company_rosters SET next_email_check_at=? WHERE id=?",
+                (_iso(_now() + timedelta(days=7)), roster_id),
+            )
             await db.commit()
             return cur.rowcount or 0
         finally:

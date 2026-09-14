@@ -30,6 +30,26 @@ LEGAL_DROP = frozenset(
         "group", "the", "of", "and",
     }
 )
+CH_BASE = "https://api.company-information.service.gov.uk"
+CH_PUBLIC_BASE = "https://find-and-update.company-information.service.gov.uk"
+CH_DIRECTOR_ROLES = {"director", "nilp-member", "llp-member", "member"}
+CH_EXTRA_DROP = {"bank", "holdings", "europe", "uk", "britain", "brands", "international", "americas"}
+CH_HONORIFIC = re.compile(r"\b(Mr|Mrs|Ms|Dr|Rev|Sir|Dame|Prof)\.?\b", re.I)
+PLATFORM_HOSTS = frozenset({
+    "linkedin.com", "facebook.com", "x.com", "twitter.com", "youtube.com", "instagram.com",
+    "wikipedia.org", "crunchbase.com", "bloomberg.com", "reuters.com", "glassdoor.com",
+    "indeed.com", "zoominfo.com", "apollo.io", "rocketreach.co", "opencorporates.com",
+    "blogspot.com", "wordpress.com", "wixsite.com", "weebly.com", "squarespace.com", "github.io",
+    "substack.com", "medium.com", "notion.site", "carrd.co", "cargo.site", "webflow.io",
+    
+    "companieshouse.gov.uk", "gov.uk", "sec.gov", "yelp.com", "mapquest.com", "yellowpages.com",
+})
+
+
+def ch_key() -> str:
+    return (os.getenv("COMPANIES_HOUSE_API_KEY") or "").strip()
+
+
 _TICKERS: dict[str, Any] | None = None
 _TICKERS_AT: datetime | None = None
 
@@ -201,13 +221,94 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
     return token_hit or prefix
 
 
-async def _http_get(url: str) -> bytes:
+def _ch_tokens(name: str) -> set[str]:
+    return {tok for tok in _company_tokens(name) if tok not in CH_EXTRA_DROP}
+
+
+def match_uk_company(query_name: str, items: list[dict]) -> str | None:
+    want = _ch_tokens(query_name)
+    if not want:
+        return None
+    best: str | None = None
+    for item in items or []:
+        if not isinstance(item, dict) or item.get("company_status") != "active":
+            continue
+        number = str(item.get("company_number") or "").strip()
+        if not number:
+            continue
+        if _ch_tokens(str(item.get("title") or "")) == want:
+            best = number
+            break
+    return best
+
+
+def map_ch_officers(items: list[dict], company_number: str, *, limit: int = 60) -> list[dict[str, Any]]:
+    """Natural-person officers; resigned_on is direct evidence of departure —
+    absence from this page never decays anyone."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    url = f"{CH_PUBLIC_BASE}/company/{company_number}/officers"
+    for officer in items or []:
+        if not isinstance(officer, dict):
+            continue
+        role = str(officer.get("officer_role") or "").lower()
+        if "corporate" in role or officer.get("identification"):
+            continue
+        raw = CH_HONORIFIC.sub(" ", str(officer.get("officer_name") or ""))
+        full = _form4_display_name(raw)
+        norm = person_name_key(full)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        occupation = re.sub(r"\s+", " ", str(officer.get("occupation") or ""))[:160]
+        out.append({
+            "full_name": full,
+            "normalized_name": norm,
+            "title": occupation,
+            "role_type": "director" if role in CH_DIRECTOR_ROLES else "officer",
+            "source": "companies_house",
+            "source_url": url,
+            "accession": company_number,
+            "employment": "left" if str(officer.get("resigned_on") or "").strip() else "current",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def fetch_companies_house_people(company_name: str) -> list[dict[str, Any]]:
+    """UK & Ireland register officers. Free key, basic auth. No key => disabled (no calls)."""
+    key = ch_key()
+    if not key:
+        return []
+    search = json.loads((await _http_get(
+        f"{CH_BASE}/search/companies?q={quote(company_name)}&items_per_page=10",
+        basic_auth=(key, ""),
+    )).decode("utf-8"))
+    number = match_uk_company(company_name, search.get("items") or [])
+    if not number:
+        return []
+    items: list[dict[str, Any]] = []
+    page = 1
+    while page <= 3:
+        chunk = json.loads((await _http_get(
+            f"{CH_BASE}/company/{number}/officers?items_per_page=100&page={page}",
+            basic_auth=(key, ""),
+        )).decode("utf-8"))
+        items.extend(chunk.get("items") or [])
+        if not (chunk.get("links") or {}).get("next"):
+            break
+        page += 1
+    return map_ch_officers(items, number)
+
+
+async def _http_get(url: str, *, basic_auth: tuple[str, str] | None = None) -> bytes:
     pause = float(os.getenv("ROSTER_SEC_PAUSE_SEC", "0.12") or 0)
     if pause > 0:
         await asyncio.sleep(pause)
     headers = {"User-Agent": sec_user_agent(), "Accept-Encoding": "gzip, deflate"}
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        response = await client.get(url, headers=headers)
+        response = await client.get(url, headers=headers, auth=basic_auth)
         response.raise_for_status()
         return response.content
 
@@ -312,10 +413,14 @@ async def enroll_prospect_companies() -> int:
     db = await get_db()
     added = 0
     try:
-        rows = await (await db.execute("SELECT company FROM yucg_prospect_targets ORDER BY id")).fetchall()
+        rows = await (
+            await db.execute("SELECT company, extra_json FROM yucg_prospect_targets ORDER BY id")
+        ).fetchall()
         now = iso()
         for row in rows:
-            name = (row["company"] if not isinstance(row, tuple) else row[0]) or ""
+            name = row["company"] if not isinstance(row, tuple) else row[0]
+            extra = row["extra_json"] if not isinstance(row, tuple) else row[1]
+            name = name or ""
             key = company_key(name)
             if not key:
                 continue
@@ -324,9 +429,9 @@ async def enroll_prospect_companies() -> int:
                 continue
             await db.execute(
                 """INSERT INTO company_rosters
-                   (company_key, company_name, next_verify_at, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (key, name.strip(), now, now, now),
+                   (company_key, company_name, company_domain, next_verify_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (key, name.strip(), _seed_domain(name, extra) or None, now, now, now),
             )
             added += 1
         await db.commit()
@@ -373,7 +478,7 @@ def _infer_email(name: str, domain: str | None) -> str | None:
 
 
 def _sticky_source(source: str) -> bool:
-    return source.startswith("discovery") or source in {"web_ir", "web_press"}
+    return source.startswith("discovery") or source in {"web_ir", "web_press", "companies_house"}
 
 
 async def _upsert_people(
@@ -406,7 +511,7 @@ async def _upsert_people(
                            source_url=COALESCE(?, source_url),
                            accession=COALESCE(?, accession),
                            inferred_email=COALESCE(?, inferred_email),
-                           employment='current', last_seen_at=?, missed_checks=0
+                           employment=?, last_seen_at=?, missed_checks=0
                        WHERE id=?""",
                     (
                         person["full_name"],
@@ -417,6 +522,7 @@ async def _upsert_people(
                         person.get("source_url"),
                         person.get("accession"),
                         email,
+                        person.get("employment") or "current",
                         now,
                         existing["id"],
                     ),
@@ -427,7 +533,7 @@ async def _upsert_people(
                            roster_id, normalized_name, full_name, title, role_type, source,
                            source_url, accession, inferred_email, employment,
                            first_seen_at, last_seen_at, missed_checks
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, 0)""",
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
                     (
                         roster_id,
                         person["normalized_name"],
@@ -438,6 +544,7 @@ async def _upsert_people(
                         person.get("source_url"),
                         person.get("accession"),
                         email,
+                        person.get("employment") or "current",
                         now,
                         now,
                     ),
@@ -535,6 +642,131 @@ async def _web_people(company: str, domain: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def _registrable_domain(url: str) -> str:
+    """Site domain from a URL, rejecting social/registry/hosting platforms
+    (including user subdomains like garmin-fans.blogspot.com)."""
+    dom = normalize_domain(url or "")
+    if not dom or "." not in dom:
+        return ""
+    labels = dom.split(".")
+    if len(labels) < 2 or labels[0] == "localhost":
+        return ""
+    root = ".".join(labels[-2:])
+    if root in PLATFORM_HOSTS:
+        return ""
+    return dom
+
+
+def _domain_matches_company(company_name: str, dom: str) -> bool:
+    tokens = _company_tokens(company_name)
+    if not tokens or not dom:
+        return False
+    label = re.sub(r"[^a-z0-9]", "", dom.split(".")[0].lower())
+    head = tokens[0]
+    if len(head) < 4:
+        # short names (ATR, DHL) only accept the exact registrable label
+        return label == "".join(tokens[:2]) and dom.split(".")[0].lower() == head
+    return label.startswith(head)
+
+
+def _seed_domain(company_name: str, extra_json: str | None) -> str:
+    """Free website from the curated seed sheet (verification_source_url etc)."""
+    try:
+        data = json.loads(extra_json or "{}")
+    except Exception:
+        return ""
+    for value in data.values():
+        if not isinstance(value, str) or "://" not in value:
+            continue
+        dom = _registrable_domain(value)
+        if dom and _domain_matches_company(company_name, dom):
+            return dom
+    return ""
+
+
+async def resolve_missing_domains(limit: int | None = None) -> int:
+    """Fill company_domain for rosters without one: seed URL first (free), then
+    one official-website Tavily query per company when allowed, MX-verified.
+    Resolved rosters are queued for email minting on the next roster-email pass."""
+    cap = limit if limit is not None else max(0, min(int(os.getenv("ROSTER_DOMAIN_LOOKUPS", "4") or 4), 25))
+    if cap <= 0:
+        return 0
+    web_ok = bool((os.getenv("TAVILY_API_KEY") or "").strip()) and (os.getenv("ROSTER_DOMAIN_WEB") or "1").strip().lower() in {"1", "true", "yes"}
+    stale = iso(utcnow() - timedelta(days=30))
+    db = await get_db()
+    try:
+        rows = await (
+            await db.execute(
+                """SELECT id, company_name FROM company_rosters
+                   WHERE IFNULL(company_domain,'') = ''
+                     AND IFNULL(domain_checked_at,'') <= ?
+                   ORDER BY (IFNULL(cik,'') != '') DESC, id
+                   LIMIT ?""",
+                (stale, cap),
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+    resolved = 0
+    from app.services.email_verifier import get_mx_cached
+
+    for row in rows:
+        record = dict(row)
+        roster_id = int(record["id"])
+        name = record["company_name"]
+        dom = ""
+        seed_db = await get_db()
+        try:
+            seed = await (
+                await seed_db.execute(
+                    "SELECT extra_json FROM yucg_prospect_targets WHERE lower(company) = lower(?) LIMIT 1",
+                    (name,),
+                )
+            ).fetchone()
+        finally:
+            await seed_db.close()
+        if seed:
+            dom = _seed_domain(name, seed["extra_json"] if not isinstance(seed, tuple) else seed[0])
+        if not dom and web_ok:
+            try:
+                from app.services.web_contact_discovery import _tavily_search
+
+                results = await _tavily_search(f"{name} official website", max_results=5)
+            except Exception:
+                results = []
+            for item in results:
+                cand = _registrable_domain(str((item or {}).get("url") or ""))
+                if cand and _domain_matches_company(name, cand):
+                    dom = cand
+                    break
+        mx_ok = False
+        if dom:
+            try:
+                mx_ok, _ = await get_mx_cached(dom, None)
+            except Exception:
+                mx_ok = False
+            if not mx_ok:
+                dom = ""
+        touch = await get_db()
+        try:
+            if dom:
+                await touch.execute(
+                    """UPDATE company_rosters SET company_domain=?, domain_checked_at=?, updated_at=?,
+                              next_email_check_at=''
+                       WHERE id=?""",
+                    (dom, iso(), iso(), roster_id),
+                )
+                resolved += 1
+            else:
+                await touch.execute(
+                    "UPDATE company_rosters SET domain_checked_at=? WHERE id=?", (iso(), roster_id)
+                )
+            await touch.commit()
+        finally:
+            await touch.close()
+    return resolved
+
+
 async def _claim_due(limit: int) -> list[dict[str, Any]]:
     now = utcnow()
     now_s = iso(now)
@@ -591,6 +823,16 @@ async def refresh_roster(roster: dict[str, Any], tickers: dict[str, Any]) -> dic
                     if row["normalized_name"] not in have:
                         people.append(row)
             mark_missing = bool(people)
+        elif ch_key():
+            ch_people = await fetch_companies_house_people(name)
+            if ch_people:
+                people = ch_people
+                status = "register"
+                # resigned_on is direct evidence; absence from the officers page
+                # must NOT decay anyone, so mark_missing stays False here.
+            else:
+                people = await _web_people(name, domain)
+                status = "web" if people else "unmatched"
         else:
             people = await _web_people(name, domain)
             status = "web" if people else "unmatched"
@@ -598,7 +840,7 @@ async def refresh_roster(roster: dict[str, Any], tickers: dict[str, Any]) -> dic
         error = str(exc)[:500]
         status = roster.get("source_status") or "pending"
 
-    nxt = utcnow() + timedelta(days=verify_days() if status == "public" else 30)
+    nxt = utcnow() + timedelta(days=verify_days() if status in ("public", "register") else 30)
     counts = await _upsert_people(roster_id, people, domain=domain, mark_missing=mark_missing)
     db = await get_db()
     try:
@@ -631,9 +873,10 @@ async def refresh_roster(roster: dict[str, Any], tickers: dict[str, Any]) -> dic
 async def drain_roster_queue() -> dict[str, Any]:
     """Enroll spreadsheet companies, then refresh a bounded due batch."""
     enrolled = await enroll_prospect_companies()
+    domains = await resolve_missing_domains()
     due = await _claim_due(drain_limit())
     if not due:
-        return {"ok": True, "enrolled": enrolled, "claimed": 0, "refreshed": []}
+        return {"ok": True, "enrolled": enrolled, "domains": domains, "claimed": 0, "refreshed": []}
     tickers: dict[str, Any] = _TICKERS or {}
     if any(not row.get("cik") for row in due):
         try:
@@ -641,7 +884,7 @@ async def drain_roster_queue() -> dict[str, Any]:
         except Exception:
             tickers = _TICKERS or {}
     refreshed = [await refresh_roster(row, tickers) for row in due]
-    return {"ok": True, "enrolled": enrolled, "claimed": len(due), "refreshed": refreshed}
+    return {"ok": True, "enrolled": enrolled, "domains": domains, "claimed": len(due), "refreshed": refreshed}
 
 
 async def list_rosters(q: str = "", limit: int = 50) -> list[dict[str, Any]]:

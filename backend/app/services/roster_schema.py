@@ -18,6 +18,7 @@ async def init_roster_schema(db):
             people_count INTEGER NOT NULL DEFAULT 0,
             current_count INTEGER NOT NULL DEFAULT 0,
             next_email_check_at TEXT,
+            domain_checked_at TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -61,6 +62,8 @@ async def init_roster_schema(db):
     }
     if roster_columns and "next_email_check_at" not in roster_columns:
         await db.execute("ALTER TABLE company_rosters ADD COLUMN next_email_check_at TEXT")
+    if roster_columns and "domain_checked_at" not in roster_columns:
+        await db.execute("ALTER TABLE company_rosters ADD COLUMN domain_checked_at TEXT")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_company_rosters_email_due ON company_rosters(next_email_check_at)"
     )
