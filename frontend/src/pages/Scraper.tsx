@@ -1,12 +1,14 @@
-import type { Contact } from '../api';
 import { useState, useRef, useEffect } from 'react';
-import { api, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
+import { api, type Contact, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import CompanyDiscovery from '../components/discovery/CompanyDiscovery';
+import { Notice } from '../components/ui/Primitives';
+import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
+import { useProjects } from '../lib/useProjects';
 import { useUrlTab } from '../lib/useUrlTab';
 
-type ScraperTab = 'company' | 'scrape' | 'find' | 'import';
+type ScraperTab = 'research' | 'company' | 'scrape' | 'find' | 'import';
 
 type ScrapeProgressState = {
   phase: string;
@@ -27,11 +29,11 @@ const PHASE_TYPICAL: Record<string, string> = {
 function aiVerdictLabel(v?: string | null): string {
   switch (v) {
     case 'real':
-      return 'Real name';
+      return 'Looks like a person';
     case 'suspicious':
-      return 'Suspicious';
+      return 'Needs review';
     case 'junk':
-      return 'Junk';
+      return 'Not a person';
     case 'unreviewed':
       return 'Unreviewed';
     default:
@@ -76,13 +78,17 @@ function formatScrapeSummary(res: {
 function inboxStatusLabel(status?: string | null): string {
   switch (status) {
     case 'valid':
-      return 'Verified inbox';
+      return 'Mail domain available';
     case 'likely_valid':
-      return 'Likely deliverable';
+      return 'Mail domain available';
     case 'invalid':
-      return 'Invalid';
+      return 'No mail domain route';
+    case 'mail_route_available':
+      return 'Mail domain available';
+    case 'inferred_from_published_pattern':
+      return 'Address inferred';
     default:
-      return 'Unknown';
+      return 'Mailbox not checked';
   }
 }
 
@@ -255,8 +261,14 @@ function ScrapeResultsSkeleton() {
   );
 }
 
+function ResearchTab() {
+  const { projects, error } = useProjects();
+  if (error) return <Notice tone="danger">{error}</Notice>;
+  return <ResearchWorkspace projects={projects} />;
+}
+
 export default function Scraper() {
-  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['company', 'scrape', 'find', 'import'], 'company');
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'scrape', 'find', 'import'], 'research');
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
   const [linkedinUrl, setLinkedinUrl] = useState('');
@@ -563,6 +575,7 @@ export default function Scraper() {
       <AppSubnav
         className="mb-8"
         items={[
+          { id: 'research', label: 'Research' },
           { id: 'company', label: 'Company discovery' },
           { id: 'scrape', label: 'Quick scrape' },
           { id: 'find', label: 'Person lookup' },
@@ -577,6 +590,7 @@ export default function Scraper() {
         label="Find methods"
       />
 
+      {activeTab === 'research' && <ResearchTab />}
       {activeTab === 'company' && <CompanyDiscovery />}
 
       {activeTab === 'scrape' && (

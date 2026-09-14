@@ -43,6 +43,7 @@ async function mockWorkspace(page: Page) {
     else if (path === '/api/analytics/insights') body = { insights: [] };
     else if (path === '/api/activity/outreach') body = { days: 30, items: [], by_sender: [] };
     else if (path.endsWith('/notification-preferences')) body = { admin_digest: true, campaign_summary: false };
+    else if (path.startsWith('/api/research/')) body = { items: [] };
     else if (/\/releases$|\/templates$|\/sequences$|\/generated$|\/my-projects$|\/attachments$|\/companies\/summary$/.test(path)) body = [];
     await route.fulfill({ json: body });
   });

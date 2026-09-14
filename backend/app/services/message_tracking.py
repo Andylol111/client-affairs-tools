@@ -95,10 +95,30 @@ async def record_event(db, outgoing: dict, kind: str, source: str, occurred: str
         await db.execute("""UPDATE contacts SET pipeline_status = 'replied' WHERE id =
             (SELECT contact_id FROM campaign_contacts WHERE id = ?) AND
             (pipeline_status IS NULL OR pipeline_status NOT IN ('meeting', 'closed'))""", (cc_id,))
+        await _record_mailbox(db, outgoing, 'human_reply_observed', detail or 'Human reply observed')
+    elif kind == 'auto_reply':
+        # Automatic replies are not mailbox proof and do not change identity.
+        pass
     elif kind == 'bounced':
         await db.execute("UPDATE campaign_contacts SET status = 'bounced' WHERE id = ? AND replied_at IS NULL", (cc_id,))
-    # A failure is not automatically proof of a nonexistent mailbox.
+        status = (detail or '')[:80]
+        if status.startswith('5.'):
+            await _record_mailbox(db, outgoing, 'permanent_failure_observed', detail or 'Permanent delivery failure')
+    elif kind == 'delayed':
+        pass
     return True
+
+
+async def _record_mailbox(db, outgoing: dict, state: str, reason: str) -> None:
+    from app.services.contact_intelligence import record_mailbox_event
+    row = await (await db.execute(
+        """SELECT e.candidate_id, c.owner_id FROM catalog_evidence e
+           JOIN campaign_contacts cc ON cc.contact_id=e.contact_id
+           JOIN contacts c ON c.id=e.contact_id
+           WHERE cc.id=?""", (outgoing['campaign_contact_id'],))).fetchone()
+    if not row:
+        return
+    await record_mailbox_event(db, row['candidate_id'], outgoing['sender_id'], state, reason, outgoing['id'])
 
 
 async def sync_sender(user_id: int, *, auto_sort_contacted: bool = True) -> dict:
