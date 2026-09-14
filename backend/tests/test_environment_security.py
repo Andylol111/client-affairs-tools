@@ -158,8 +158,8 @@ async def tests():
     await reset_paid()
     with patch.dict(os.environ,{'BEDROCK_CALLS_PER_CLUB_PER_HOUR':'1'}):
         attempts=await asyncio.gather(*(asyncio.to_thread(reserve_bedrock_invocation,llm.rank_model_id()) for _ in range(8)),return_exceptions=True)
-        assert sum(item is None for item in attempts)==1
-        assert all(item is None or isinstance(item,HTTPException) and item.status_code==429 for item in attempts)
+        assert sum(isinstance(item,int) for item in attempts)==1
+        assert all(isinstance(item,int) or isinstance(item,HTTPException) and item.status_code==429 for item in attempts)
     # Independent interpreters contend against the same durable SQLite record.
     await reset_paid()
     worker="""

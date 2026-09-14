@@ -749,9 +749,13 @@ async def companies_summary(user: dict | None = Depends(get_current_user_optiona
     db = await get_db()
     try:
         conditions, params = [], []
+        campaign_join = ""
+        join_params: list[object] = []
         if user and user.get("role") != "admin":
             conditions.append("(c.owner_id = ? OR c.owner_id IS NULL)")
             params.append(user["id"])
+            campaign_join = "AND cc.sent_by_user_id = ?"
+            join_params.append(user["id"])
         vis = (" AND ".join(conditions)) if conditions else "1=1"
         cursor = await db.execute(
             f"""SELECT TRIM(c.company) AS company, c.company_domain,
@@ -759,12 +763,12 @@ async def companies_summary(user: dict | None = Depends(get_current_user_optiona
                        MAX(cc.sent_at) AS last_sent_at,
                        COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN cc.campaign_id END) AS campaign_count
                 FROM contacts c
-                LEFT JOIN campaign_contacts cc ON cc.contact_id = c.id
+                LEFT JOIN campaign_contacts cc ON cc.contact_id = c.id {campaign_join}
                 WHERE ({vis})
                   AND c.company IS NOT NULL AND TRIM(c.company) != ''
                 GROUP BY LOWER(TRIM(c.company)), IFNULL(c.company_domain, '')
                 ORDER BY company ASC""",
-            params,
+            [*join_params, *params],
         )
         rows = await cursor.fetchall()
         return [
@@ -966,6 +970,9 @@ async def list_contacts(
         count_cursor = await db.execute(f"SELECT COUNT(*) AS n FROM contacts c {where}", params)
         total = int((await count_cursor.fetchone())["n"] or 0)
         query_params = [*params, limit, offset]
+        last_send_scope = "" if user and user.get("role") == "admin" else "AND sent_by_user_id = ?"
+        if last_send_scope:
+            query_params = [user["id"] if user else -1, *params, limit, offset]
         cursor = await db.execute(
             f"""SELECT c.*,
                        ls.sent_at AS last_sent_at,
@@ -979,7 +986,7 @@ async def list_contacts(
                     FROM campaign_contacts cc
                     WHERE cc.id IN (
                         SELECT MAX(id) FROM campaign_contacts
-                        WHERE sent_at IS NOT NULL
+                        WHERE sent_at IS NOT NULL {last_send_scope}
                         GROUP BY contact_id
                     )
                 ) ls ON ls.contact_id = c.id
@@ -1039,14 +1046,12 @@ async def create_contact(contact: ContactCreate, user: dict | None = Depends(get
 
 
 @router.get("/{contact_id}")
-async def get_contact(contact_id: int):
+async def get_contact(contact_id: int, user: dict = Depends(get_current_user)):
     """Get a single contact."""
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(404, "Contact not found")
+        from app.services.contact_access import require_contact_access
+        row = await require_contact_access(db, contact_id, user)
         d = dict(row)
         if d.get("email"):
             d["email"] = sanitize_email(d["email"])

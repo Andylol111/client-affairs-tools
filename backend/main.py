@@ -32,6 +32,11 @@ from app.routers.campaigns import drain_releasing_campaigns
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
 from app.services.gmail_reply_sync import sync_replies_all_senders
+from app.services.yucgoutreach_discovery import (
+    drain_queued_yucgoutreach_runs,
+    recover_interrupted_yucgoutreach_runs,
+)
+from app.services.assistant_service import drain_document_index_queue,recover_document_indexes
 
 # CORS: use CORS_ORIGINS env (comma-separated) when going public; default localhost for dev
 _default_origins = [
@@ -45,11 +50,31 @@ CORS_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _co
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await recover_interrupted_yucgoutreach_runs()
+    await recover_document_indexes()
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        drain_queued_yucgoutreach_runs,
+        "interval",
+        seconds=10,
+        id="company_discovery_queue",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        drain_document_index_queue,
+        "interval",
+        seconds=15,
+        id="assistant_document_index",
+        max_instances=1,
+        coalesce=True,
+    )
     if os.getenv('APP_ENV', 'production').lower() == 'beta':
         # Beta neither sends mail nor synchronizes real Gmail accounts in background jobs.
+        scheduler.start()
         yield
+        scheduler.shutdown(wait=False)
         return
-    scheduler = AsyncIOScheduler()
     scheduler.add_job(
         run_follow_up_sequences,
         "cron",
@@ -119,9 +144,10 @@ app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"], d
 app.include_router(emails.router, prefix="/api/emails", tags=["emails"], dependencies=_require_user)
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"], dependencies=_require_user)
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"], dependencies=_require_user)
-from app.routers import invitations, workspace, activity
+from app.routers import invitations, workspace, activity, assistant
 app.include_router(activity.router, prefix="/api/activity", tags=["activity"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
+app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(invitations.router, prefix="/api/admin/invitations", tags=["invitations"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

@@ -1,7 +1,7 @@
 import PageHeader from '../components/PageHeader';
 import Invitations from '../components/Invitations';
 import { useEffect, useState, Fragment } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { Link, useOutletContext } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { api } from '../api';
 import { useToast } from '../contexts/useToast';
@@ -44,12 +44,6 @@ export default function Admin() {
     matrix_2d?: { row_labels: string[]; col_labels: string[]; values: number[][] };
   } | null>(null);
   const [opsEvents, setOpsEvents] = useState<Awaited<ReturnType<typeof api.admin.operations.events>>>([]);
-  const [opsResources, setOpsResources] = useState<Awaited<ReturnType<typeof api.admin.operations.resources.list>>>([]);
-  const [opsResourceName, setOpsResourceName] = useState('');
-  const [opsResourceText, setOpsResourceText] = useState('');
-  const [opsOllamaQuery, setOpsOllamaQuery] = useState('');
-  const [opsOllamaAnswer, setOpsOllamaAnswer] = useState<string | null>(null);
-  const [opsOllamaLoading, setOpsOllamaLoading] = useState(false);
 
   const opsMatrix2d = opsHeatmap?.matrix_2d;
 
@@ -65,7 +59,6 @@ export default function Admin() {
       api.admin.operations.aggregates(opsDays).then(setOpsAggregates).catch(() => setOpsAggregates({ by_event_type: [], by_resource_type: [], days: 30 }));
       api.admin.operations.heatmap({ days: opsDays, group_by: opsGroupBy }).then(setOpsHeatmap).catch(() => setOpsHeatmap(null));
       api.admin.operations.events({ limit: 200, days: opsDays }).then(setOpsEvents).catch(() => setOpsEvents([]));
-      api.admin.operations.resources.list().then(setOpsResources).catch(() => setOpsResources([]));
     }
   }, [user?.role, activeTab, opsDays, opsGroupBy]);
 
@@ -781,82 +774,9 @@ export default function Admin() {
           </div>
 
           <div className="surface-card rounded-xl p-6">
-            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Reference material</h2>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Upload or paste internal docs so the AI can learn from past workstreams and how the club operates.</p>
-            <div className="flex flex-wrap gap-2 mb-4 items-center">
-              <input type="text" value={opsResourceName} onChange={(e) => setOpsResourceName(e.target.value)} placeholder="Resource name" className="px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700" />
-              <input
-                id="ops-resource-file"
-                type="file"
-                accept=".txt,.md,.pdf"
-                className="hidden"
-                onChange={async (e) => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  try {
-                    await api.admin.operations.resources.upload(f);
-                    toast.addToast('Uploaded.', 'success');
-                    api.admin.operations.resources.list().then(setOpsResources).catch(() => {});
-                  } catch (err) { toast.addToast((err as Error).message, 'error'); }
-                  e.target.value = '';
-                }}
-              />
-              <label
-                htmlFor="ops-resource-file"
-                className="inline-flex items-center px-4 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium cursor-pointer hover:bg-pale-sky/30 dark:hover:bg-slate-600 transition-colors"
-              >
-                Browse / Upload File
-              </label>
-            </div>
-            <textarea value={opsResourceText} onChange={(e) => setOpsResourceText(e.target.value)} placeholder="Paste text content (e.g. past workstream, playbook)..." rows={4} className="w-full px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700 mb-2" />
-            <button
-              onClick={async () => {
-                if (!opsResourceName.trim() || !opsResourceText.trim()) return;
-                try {
-                  await api.admin.operations.resources.create({ name: opsResourceName.trim(), content_text: opsResourceText.trim() });
-                  setOpsResourceName(''); setOpsResourceText('');
-                  toast.addToast('Resource added.', 'success');
-                  api.admin.operations.resources.list().then(setOpsResources).catch(() => {});
-                } catch (err) { toast.addToast((err as Error).message, 'error'); }
-              }}
-              disabled={!opsResourceName.trim() || !opsResourceText.trim()}
-              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-            >
-              Add Resource
-            </button>
-            <ul className="mt-4 space-y-2 max-h-40 overflow-y-auto">
-              {opsResources.map((r) => (
-                <li key={r.id} className="text-sm flex justify-between items-center py-1 border-b border-pale-sky/50">
-                  <span>{r.name}</span>
-                  <span className="text-slate-500">{r.content_length != null ? `${(r.content_length / 1024).toFixed(1)} KB` : ''}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="surface-card rounded-xl p-6">
-            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Operations assistant</h2>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">Uses ingested YUCG resources and usage events. Runs locally; no data leaves your environment.</p>
-            <textarea value={opsOllamaQuery} onChange={(e) => setOpsOllamaQuery(e.target.value)} placeholder="e.g. What types of campaigns do we run most? What email tones are popular?" rows={3} className="w-full px-3 py-2 rounded-lg border border-pale-sky bg-white dark:bg-slate-700 mb-2" />
-            <button
-              onClick={async () => {
-                if (!opsOllamaQuery.trim()) return;
-                setOpsOllamaLoading(true);
-                setOpsOllamaAnswer(null);
-                try {
-                  const res = await api.admin.operations.ollamaQuery(opsOllamaQuery.trim());
-                  setOpsOllamaAnswer(res.answer || res.error || 'No response.');
-                } catch (e) { setOpsOllamaAnswer((e as Error).message); }
-                setOpsOllamaLoading(false);
-              }}
-              disabled={opsOllamaLoading || !opsOllamaQuery.trim()}
-              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-            >
-              {opsOllamaLoading ? 'Asking...' : 'Ask'}
-            </button>
-            {opsOllamaAnswer && (
-              <div className="mt-4 p-4 rounded-lg bg-pale-sky/20 border border-pale-sky whitespace-pre-wrap text-sm">{opsOllamaAnswer}</div>
-            )}
+            <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-2">Assistant knowledge</h2>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">The shared Assistant uses the same private document register as Projects. Access is checked for every retrieval, and Amazon Bedrock receives only the short source excerpts needed for an answer.</p>
+            <div className="flex flex-wrap gap-2"><Link to="/documents" className="ui-button ui-button--secondary">Manage documents</Link><Link to="/assistant" className="ui-button ui-button--primary">Open assistant</Link></div>
           </div>
         </div>
       )}

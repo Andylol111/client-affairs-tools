@@ -3,7 +3,7 @@ YUCGoutreach company discovery: SQL-backed runs, parallel enrichment, Excel expo
 """
 from __future__ import annotations
 
-import asyncio
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -14,7 +14,6 @@ from app.database import get_db, row_to_dict
 from app.services.contact_scraper import sanitize_email, normalize_domain, is_valid_person_contact
 from app.services.yucgoutreach_discovery import (
     YUCG_MAX_PROSPECTS,
-    _yucgoutreach_run_guard,
     build_yucgoutreach_excel_bytes,
 )
 
@@ -67,6 +66,20 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
     cap = min(body.max_prospects, YUCG_MAX_PROSPECTS)
     db = await get_db()
     try:
+        from app.services.dispatch_service import begin_write
+        await begin_write(db)
+        active = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM yucgoutreach_discovery_runs WHERE user_id = ? AND status IN ('queued','running')",
+            (user["id"],),
+        )).fetchone()
+        if int(active["n"] or 0):
+            raise HTTPException(409, "You already have a company search queued or running")
+        club_limit = max(1, int(os.getenv("DISCOVERY_QUEUE_LIMIT", "20") or 20))
+        club = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM yucgoutreach_discovery_runs WHERE status IN ('queued','running')"
+        )).fetchone()
+        if int(club["n"] or 0) >= club_limit:
+            raise HTTPException(429, "The club search queue is full; try again after a current search finishes")
         cur = await db.execute(
             """INSERT INTO yucgoutreach_discovery_runs (
                 user_id, company_name, company_domain, linkedin_company_url,
@@ -85,8 +98,6 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
         run_id = cur.lastrowid
     finally:
         await db.close()
-
-    asyncio.create_task(_yucgoutreach_run_guard(run_id))
     return {"id": run_id, "status": "queued", "max_prospects": cap}
 
 
@@ -169,14 +180,21 @@ async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_u
             ex = await existing.fetchone()
             if ex:
                 await db.execute(
-                    """UPDATE contacts SET name = COALESCE(?, name), title = COALESCE(?, title),
-                       linkedin_url = COALESCE(?, linkedin_url), contact_source = COALESCE(?, contact_source),
-                       email_verification_status = COALESCE(?, email_verification_status),
-                       ai_verdict = COALESCE(?, ai_verdict), ai_reason = COALESCE(?, ai_reason)
+                    """UPDATE contacts SET name = COALESCE(NULLIF(name, ''), ?),
+                       title = COALESCE(NULLIF(title, ''), ?),
+                       company = COALESCE(NULLIF(company, ''), ?),
+                       company_domain = COALESCE(NULLIF(company_domain, ''), ?),
+                       linkedin_url = COALESCE(NULLIF(linkedin_url, ''), ?),
+                       contact_source = COALESCE(NULLIF(contact_source, ''), ?),
+                       email_verification_status = COALESCE(NULLIF(email_verification_status, ''), ?),
+                       ai_verdict = COALESCE(NULLIF(ai_verdict, ''), ?),
+                       ai_reason = COALESCE(NULLIF(ai_reason, ''), ?)
                        WHERE id = ?""",
                     (
                         name or None,
                         pr.get("title"),
+                        pr.get("company") or company or None,
+                        domain or None,
                         pr.get("linkedin_url"),
                         pr.get("contact_source") or "yucgoutreach",
                         pr.get("email_verification_status"),

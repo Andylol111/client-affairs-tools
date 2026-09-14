@@ -28,6 +28,7 @@ async def _seed() -> None:
     db = await get_db()
     try:
         await db.execute("INSERT INTO users (id, email) VALUES (1, 'a@yale.edu')")
+        await db.execute("INSERT INTO users (id, email) VALUES (2, 'b@yale.edu')")
         await db.execute(
             "INSERT INTO contacts (id, name, email, company, company_domain) VALUES (1, 'Ada', 'ada@acme.com', 'Acme', 'acme.com')"
         )
@@ -44,6 +45,12 @@ async def _seed() -> None:
             """INSERT INTO generated_emails (user_id, contact_id, subject, body, campaign_id)
                VALUES (1, 2, 'Draft subj', 'Draft body', NULL)"""
         )
+        await db.execute("INSERT INTO campaigns (id, name, status, owner_user_id, sender_user_id) VALUES (2, 'Other sender', 'sent', 2, 2)")
+        await db.execute(
+            """INSERT INTO campaign_contacts
+               (campaign_id, contact_id, email_subject, email_body, status, sent_at, sent_by_user_id)
+               VALUES (2, 1, 'Other', 'Body', 'sent', '2026-09-02 12:00:00', 2)"""
+        )
         await db.commit()
     finally:
         await db.close()
@@ -51,14 +58,14 @@ async def _seed() -> None:
 
 async def _run() -> None:
     await _seed()
-    page = await list_contacts(user=None)
+    page = await list_contacts(user={"id": 1, "role": "standard"})
     by_email = {row["email"]: row for row in page["items"]}
     assert by_email["ada@acme.com"]["last_campaign_name"] == "Week 1"
     assert by_email["ada@acme.com"]["last_send_status"] == "sent"
     assert by_email["ada@acme.com"]["last_sent_at"]
     assert by_email["ben@acme.com"]["last_campaign_name"] is None
 
-    companies = await companies_summary(user=None)
+    companies = await companies_summary(user={"id": 1, "role": "standard"})
     acme = next(c for c in companies if (c["company"] or "").lower() == "acme")
     assert acme["contact_count"] == 2
     assert acme["campaign_count"] == 1

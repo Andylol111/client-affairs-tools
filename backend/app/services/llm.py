@@ -8,25 +8,14 @@ import threading
 from typing import Any
 
 # US geo profiles. Converse will not take a bare anthropic.* foundation id.
-# IDs from Bedrock model cards (Opus 5 / Sonnet 5 / Haiku 4.5).
+# Keep the default catalog deliberately small. Administrators can add a reviewed
+# model ID through BEDROCK_ALLOWED_MODEL_IDS without exposing costly models by default.
 BEDROCK_ANTHROPIC: list[dict[str, str]] = [
-    {
-        "id": "us.anthropic.claude-opus-5",
-        "label": "Claude Opus 5",
-        "tier": "opus",
-        "blurb": "Hardest reasoning",
-    },
-    {
-        "id": "us.anthropic.claude-sonnet-5",
-        "label": "Claude Sonnet 5",
-        "tier": "sonnet",
-        "blurb": "Default for club week",
-    },
     {
         "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "label": "Claude Haiku 4.5",
         "tier": "haiku",
-        "blurb": "Fast drafts",
+        "blurb": "Fast, grounded club work",
     },
 ]
 
@@ -57,7 +46,7 @@ def default_model_id() -> str:
     explicit = (os.getenv("BEDROCK_MODEL_ID") or os.getenv("LLM_MODEL") or "").strip()
     if explicit:
         return explicit
-    return "us.anthropic.claude-sonnet-5"
+    return "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 def rank_model_id() -> str:
@@ -83,10 +72,18 @@ def list_models() -> dict[str, Any]:
     }
 
 
-def complete_text(prompt: str, model_id: str | None = None, system: str | None = None) -> str:
+def complete_text(
+    prompt: str,
+    model_id: str | None = None,
+    system: str | None = None,
+    *,
+    user_id: int | None = None,
+    purpose: str = 'inference',
+    max_tokens: int = 2048,
+) -> str:
     mid = validate_model(model_id)
     if is_bedrock_model(mid):
-        return _bedrock_text(prompt, mid, system)
+        return _bedrock_text(prompt, mid, system, user_id=user_id, purpose=purpose, max_tokens=max_tokens)
     ollama_name = mid.split(":", 1)[1] if mid.startswith("ollama:") else mid
     from ollama import chat
 
@@ -110,7 +107,15 @@ def complete_json(prompt: str, model_id: str | None = None, system: str | None =
     return data if isinstance(data, dict) else None
 
 
-def _bedrock_text(prompt: str, model_id: str, system: str | None) -> str:
+def _bedrock_text(
+    prompt: str,
+    model_id: str,
+    system: str | None,
+    *,
+    user_id: int | None = None,
+    purpose: str = 'inference',
+    max_tokens: int = 2048,
+) -> str:
     import boto3
 
     from fastapi import HTTPException
@@ -119,21 +124,31 @@ def _bedrock_text(prompt: str, model_id: str, system: str | None) -> str:
     if len(prompt) + len(system or '') > 24000:
         raise HTTPException(413, 'Draft input exceeds the 24,000 character limit')
     region = (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1").strip()
+    if not 1 <= max_tokens <= 4096:
+        raise HTTPException(503, 'Model output limit is invalid')
     kwargs: dict[str, Any] = {
         "modelId": mid,
         "messages": [{"role": "user", "content": [{"text": prompt}]}],
-        "inferenceConfig": {"maxTokens": 2048},
+        "inferenceConfig": {"maxTokens": max_tokens},
     }
     if system:
         kwargs["system"] = [{"text": system}]
     if not _inference_slots.acquire(blocking=False):
         raise HTTPException(429, 'Draft generation is busy; please retry shortly')
     try:
-        from app.services.generation_policy import reserve_bedrock_invocation
-        reserve_bedrock_invocation(mid)
+        from app.services.generation_policy import reserve_bedrock_invocation, complete_bedrock_invocation
+        reservation_id = reserve_bedrock_invocation(
+            mid,
+            user_id=user_id,
+            purpose=purpose,
+            estimated_input_tokens=max(1,(len(prompt)+len(system or ''))//4),
+            max_output_tokens=max_tokens,
+        )
         client = boto3.client("bedrock-runtime", region_name=region,
                              config=Config(connect_timeout=5, read_timeout=60, retries={'total_max_attempts': 1}))
         resp = client.converse(**kwargs)
+        usage = resp.get('usage') or {}
+        complete_bedrock_invocation(reservation_id,usage.get('inputTokens'),usage.get('outputTokens'))
     finally:
         _inference_slots.release()
     parts = ((resp.get("output") or {}).get("message") or {}).get("content") or []
