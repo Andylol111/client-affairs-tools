@@ -23,6 +23,7 @@ from app.services.assistant_operator import (
     execute_reads,
     execute_write,
     parse_operator_payload,
+    sanitize_ask,
     sanitize_open,
     sanitize_propose,
     sanitize_reads,
@@ -57,7 +58,9 @@ def test_payload_and_sanitizers():
     prompt = assistant_operator.operator_system_prompt()
     assert 'in-app operator' in prompt
     assert 'website harness' in prompt
-    assert 'optional' in prompt.lower()
+    assert 'optional' in prompt.lower() or 'fill Find people' in prompt.lower() or 'ask fields' in prompt.lower()
+    assert sanitize_ask([{'id': 'titles', 'value': 'VPs'}])[0]['value'] == 'VPs'
+    assert sanitize_ask([{'id': 'explode'}]) == []
 
     assert sanitize_reads(None) == []
     assert sanitize_reads('search_contacts') == []
@@ -171,26 +174,31 @@ async def run():
         await db.commit()
         await db.close()
 
-        plan = json.dumps({
-            "answer": "I can start a Find people run for Acme after you confirm.",
-            "reads": [{"tool": "search_contacts", "args": {"q": "Acme"}}],
-            "propose": [{"tool": "start_find_people", "args": {"company_name": "Acme", "max_prospects": 250}, "summary": "Find people at Acme (up to 250)"}],
-            "open": [{"path": "/scraper", "label": "Find contacts"}],
-        })
-        with patch.object(assistant_service, 'complete_text', MagicMock(return_value=plan)):
+        with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=AssertionError('Find people must not call Bedrock'))):
             result = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Find people at Acme', page_path='/scraper')
         assert result['pending_actions'][0]['tool'] == 'start_find_people'
         assert result['lookups'][0]['data']['count'] == 1
-        assert result['navigations'][0]['path'] == '/scraper'
+        assert result['navigations'][0]['path'].startswith('/scraper?')
+        assert 'company=Acme' in result['navigations'][0]['path']
+        assert result['asks'][0]['id'] == 'titles'
+        assert result['asks'][0]['required'] is True
         assert 'ada@acme.com' in json.dumps(result['lookups'])
+        assert result['model'] == 'site-tools'
+
+        garmin = await assistant_service.answer(
+            {'id': 1, 'role': 'standard'},
+            'help me find people at Garmin to reach out to, VPs, execs in project management',
+        )
+        assert garmin['pending_actions'][0]['args']['company_name'] == 'Garmin'
+        titles = next(item['value'] for item in garmin['asks'] if item['id'] == 'titles')
+        assert 'VP' in titles and 'exec' in titles.lower()
+        assert 'titles=' in garmin['navigations'][0]['path']
+        assert garmin['asks'][0]['required'] is True
 
         from fastapi import HTTPException as FastAPIHTTPException
         with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):
-            offline = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'help me find people at Garmin to reach out to')
-        assert offline['pending_actions'][0]['tool'] == 'start_find_people'
-        assert offline['pending_actions'][0]['args']['company_name'] == 'Garmin'
-        assert offline['navigations'][0]['path'] == '/scraper'
-        assert 'offline' in offline['answer'].lower() or 'confirm' in offline['answer'].lower()
+            offline = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'What should I do on Pipeline?')
+        assert 'offline' in offline['answer'].lower() or 'forms' in offline['answer'].lower()
 
         runs_before = await execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
         assert runs_before[0]['data'][0]['id'] == 7

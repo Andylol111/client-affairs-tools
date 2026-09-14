@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 
@@ -7,6 +7,7 @@ type Citation = { id: string; document_id: number; title: string; project_name?:
 type PendingAction = { tool: string; args: Record<string, unknown>; summary: string };
 type Navigation = { path: string; label: string };
 type Lookup = { tool: string; data: unknown };
+type AskField = { id: string; label: string; value: string; required: boolean; placeholder?: string };
 type Message = {
   id?: number;
   role: 'user' | 'assistant';
@@ -15,8 +16,17 @@ type Message = {
   pending_actions?: PendingAction[];
   navigations?: Navigation[];
   lookups?: Lookup[];
+  asks?: AskField[];
 };
 type Thread = { id: number; title: string; updated_at: number };
+
+function findPeoplePath(company: string, answers: Record<string, string>) {
+  const params = new URLSearchParams({ view: 'company', company });
+  if (answers.titles?.trim()) params.set('titles', answers.titles.trim());
+  if (answers.company_domain?.trim()) params.set('domain', answers.company_domain.trim());
+  if (answers.linkedin_company_url?.trim()) params.set('linkedin', answers.linkedin_company_url.trim());
+  return `/scraper?${params.toString()}`;
+}
 
 export default function AssistantBubble({ user }: { user: { id?: number } }) {
   const [params, setParams] = useSearchParams();
@@ -35,6 +45,9 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
   const [usage, setUsage] = useState({ member_requests: 0, club_requests: 0, member_estimated_usd: 0, club_estimated_usd: 0 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [answersByMessage, setAnswersByMessage] = useState<Record<number, Record<string, string>>>({});
+  const [askError, setAskError] = useState<Record<number, string>>({});
+  const composer = useRef<HTMLTextAreaElement>(null);
 
   async function refresh() {
     const [nextSources, nextThreads, nextUsage] = await Promise.all([
@@ -79,10 +92,39 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
     finally { setBusy(false); }
   }
 
+  function answersFor(index: number, message: Message) {
+    const seed: Record<string, string> = {};
+    for (const field of message.asks || []) seed[field.id] = field.value || '';
+    return { ...seed, ...(answersByMessage[index] || {}) };
+  }
+
+  function missingRequired(index: number, message: Message) {
+    const answers = answersFor(index, message);
+    return (message.asks || []).filter((field) => field.required && !answers[field.id]?.trim());
+  }
+
+  function fillFindPeople(index: number, message: Message) {
+    const action = message.pending_actions?.find((item) => item.tool === 'start_find_people');
+    const company = String(action?.args.company_name || '').trim();
+    if (!company) {
+      const dest = message.navigations?.[0]?.path || '/scraper?view=company';
+      navigate(dest);
+      return;
+    }
+    const missing = missingRequired(index, message);
+    if (missing.length) {
+      setAskError((current) => ({ ...current, [index]: `Answer ${missing.map((field) => field.label.toLowerCase()).join(', ')} before filling Find people.` }));
+      return;
+    }
+    setAskError((current) => ({ ...current, [index]: '' }));
+    navigate(findPeoplePath(company, answersFor(index, message)));
+  }
+
   async function ask() {
     const clean = question.trim();
     if (!clean || busy) return;
     setBusy(true); setError(''); setQuestion('');
+    if (composer.current) composer.current.style.height = 'auto';
     setMessages((current) => [...current, { role: 'user', content: clean }]);
     try {
       const result = await api.assistant.ask({
@@ -100,6 +142,7 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
         pending_actions: result.pending_actions,
         navigations: result.navigations,
         lookups: result.lookups,
+        asks: result.asks,
       }]);
       await refresh();
     } catch (err) {
@@ -109,19 +152,30 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
     } finally { setBusy(false); }
   }
 
-  async function confirmAction(action: PendingAction, index: number) {
+  async function confirmAction(action: PendingAction, index: number, message: Message) {
     if (busy) return;
-    setBusy(true); setError('');
+    if (action.tool === 'start_find_people') {
+      const missing = missingRequired(index, message);
+      if (missing.length) {
+        setAskError((current) => ({ ...current, [index]: `Answer ${missing.map((field) => field.label.toLowerCase()).join(', ')} before starting a search.` }));
+        return;
+      }
+    }
+    setBusy(true); setError(''); setAskError((current) => ({ ...current, [index]: '' }));
+    const answers = answersFor(index, message);
+    const args = { ...action.args };
+    if (answers.company_domain?.trim()) args.company_domain = answers.company_domain.trim();
+    if (answers.linkedin_company_url?.trim()) args.linkedin_company_url = answers.linkedin_company_url.trim();
     try {
-      const result = await api.assistant.act({ tool: action.tool, args: action.args, thread_id: threadId });
+      const result = await api.assistant.act({ tool: action.tool, args, thread_id: threadId });
       setMessages((current) => {
-        const next = current.map((message, messageIndex) => {
-          if (messageIndex !== index) return message;
-          return { ...message, pending_actions: (message.pending_actions || []).filter((item) => item !== action) };
+        const next = current.map((item, messageIndex) => {
+          if (messageIndex !== index) return item;
+          return { ...item, pending_actions: (item.pending_actions || []).filter((entry) => entry !== action) };
         });
         return [...next, { role: 'assistant', content: result.answer, navigations: result.navigations }];
       });
-      const dest = result.navigations?.[0]?.path;
+      const dest = result.navigations?.[0]?.path || (action.tool === 'start_find_people' ? '/scraper?view=company' : undefined);
       if (dest) navigate(dest);
       await refresh();
     } catch (err) {
@@ -143,28 +197,65 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
           role="dialog"
           aria-modal="true"
           aria-labelledby="assistant-bubble-title"
-          className="pointer-events-auto mb-3 w-[min(100vw-2rem,26rem)] h-[min(70vh,36rem)] bg-white border border-pale-sky rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          className="pointer-events-auto mb-3 flex h-[min(78vh,42rem)] w-[min(100vw-1.5rem,24rem)] flex-col overflow-hidden rounded-2xl border border-pale-sky bg-white shadow-2xl"
         >
-          <header className="px-4 py-3 border-b border-pale-sky flex items-start justify-between gap-3">
+          <header className="flex items-start justify-between gap-3 border-b border-pale-sky px-4 py-3">
             <div>
-              <h2 id="assistant-bubble-title" className="text-sm font-semibold text-deep-navy">Assistant</h2>
-              <p className="text-xs text-slate-600">Looks up contacts and can start Find people after you confirm. It cannot send mail or delete records.</p>
+              <h2 id="assistant-bubble-title" className="text-sm font-semibold text-deep-navy">Site assistant</h2>
+              <p className="mt-0.5 text-xs leading-5 text-slate-600">Fills Find people and looks up contacts. Confirm starts a search. It cannot send mail.</p>
             </div>
-            <button type="button" className="text-sm text-slate-600 hover:text-deep-navy" onClick={close} aria-label="Close assistant">Close</button>
+            <button type="button" className="text-xs font-medium text-slate-600 hover:text-deep-navy" onClick={close} aria-label="Close assistant">Close</button>
           </header>
-          <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3" aria-live="polite">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3" aria-live="polite">
             <div className="flex gap-2 overflow-x-auto pb-1">
-              <button type="button" className="shrink-0 text-xs rounded-full border border-pale-sky px-2 py-1" onClick={() => { setThreadId(undefined); setMessages([]); setError(''); }}>New chat</button>
+              <button type="button" className="shrink-0 rounded-full border border-pale-sky px-2.5 py-1 text-xs" onClick={() => { setThreadId(undefined); setMessages([]); setError(''); setAnswersByMessage({}); }}>New chat</button>
               {threads.slice(0, 6).map((thread) => (
-                <button key={thread.id} type="button" className={`shrink-0 text-xs rounded-full border px-2 py-1 ${thread.id === threadId ? 'border-deep-navy bg-pale-sky/40' : 'border-pale-sky'}`} onClick={() => void openThread(thread.id)}>{thread.title}</button>
+                <button key={thread.id} type="button" className={`shrink-0 rounded-full border px-2.5 py-1 text-xs ${thread.id === threadId ? 'border-deep-navy bg-pale-sky/40' : 'border-pale-sky'}`} onClick={() => void openThread(thread.id)}>{thread.title}</button>
               ))}
             </div>
-            {!messages.length && <p className="text-sm text-slate-600">Ask it to find people at a company, check saved contacts, or open Pipeline. Writes wait for a confirm button.</p>}
+            {!messages.length && (
+              <p className="rounded-xl bg-[#f5f7fa] px-3 py-2.5 text-sm leading-6 text-slate-600">
+                Ask it to find people at a company. It fills the Find people boxes. Reaching more real people comes from that form, not extra model calls.
+              </p>
+            )}
             {messages.map((message, index) => (
-              <article key={message.id ?? index} className={message.role === 'user' ? 'ml-6 rounded-xl bg-deep-navy text-white p-3 text-sm whitespace-pre-wrap' : 'mr-2 rounded-xl bg-pale-sky/20 border border-pale-sky p-3 text-sm whitespace-pre-wrap'}>
-                {message.content}
-                {!!message.lookups?.length && (
-                  <p className="mt-2 text-xs text-slate-600">Looked up {message.lookups.map((item) => item.tool.replaceAll('_', ' ')).join(', ')}.</p>
+              <article key={message.id ?? index} className={message.role === 'user' ? 'ml-8 rounded-2xl bg-deep-navy px-3 py-2.5 text-sm leading-6 text-white' : 'mr-2 rounded-2xl border border-pale-sky bg-white px-3 py-2.5 text-sm leading-6 text-deep-navy'}>
+                <p className="whitespace-pre-wrap">{message.content}</p>
+                {!!message.asks?.length && message.role === 'assistant' && (
+                  <div className="mt-3 space-y-2 rounded-xl border border-pale-sky bg-[#f5f7fa] p-3">
+                    {message.asks.map((field) => (
+                      <label key={field.id} className="block text-xs font-medium text-slate-600">
+                        {field.label}{field.required ? ' *' : ''}
+                        <input
+                          className="mt-1 block w-full rounded-lg border border-pale-sky bg-white px-3 py-2 text-sm text-deep-navy"
+                          value={answersFor(index, message)[field.id] || ''}
+                          placeholder={field.placeholder}
+                          aria-required={field.required}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setAnswersByMessage((current) => ({ ...current, [index]: { ...answersFor(index, message), [field.id]: value } }));
+                            setAskError((current) => ({ ...current, [index]: '' }));
+                          }}
+                        />
+                      </label>
+                    ))}
+                    {!!askError[index] && <p role="alert" className="text-xs text-red-700">{askError[index]}</p>}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button type="button" className="rounded-lg bg-deep-navy px-3 py-2 text-xs font-semibold text-white" onClick={() => fillFindPeople(index, message)}>
+                        Fill Find people
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-pale-sky bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                        onClick={() => {
+                          setAnswersByMessage((current) => ({ ...current, [index]: { ...answersFor(index, message), titles: answersFor(index, message).titles || 'any relevant' } }));
+                          setAskError((current) => ({ ...current, [index]: '' }));
+                        }}
+                      >
+                        Skip titles
+                      </button>
+                    </div>
+                  </div>
                 )}
                 {!!message.pending_actions?.length && (
                   <div className="mt-2 space-y-2">
@@ -172,59 +263,77 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
                       <button
                         key={`${action.tool}-${action.summary}`}
                         type="button"
-                        className="block w-full text-left rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900"
+                        className="block w-full rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-left text-xs font-semibold text-emerald-900 disabled:opacity-50"
                         disabled={busy}
-                        onClick={() => void confirmAction(action, index)}
+                        onClick={() => void confirmAction(action, index, message)}
                       >
-                        Confirm: {action.summary}
+                        {action.tool === 'start_find_people' ? `Start search: ${action.summary}` : `Confirm: ${action.summary}`}
                       </button>
                     ))}
                   </div>
                 )}
-                {!!message.navigations?.length && (
+                {!!message.navigations?.length && !message.asks?.length && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {message.navigations.map((item) => (
-                      <button key={item.path} type="button" className="text-xs underline" onClick={() => navigate(item.path)}>{item.label}</button>
+                      <button key={item.path} type="button" className="text-xs font-medium text-steel-blue underline" onClick={() => navigate(item.path)}>{item.label}</button>
                     ))}
                   </div>
                 )}
                 {!!message.sources?.length && (
-                  <div className="mt-2 pt-2 border-t border-white/20">
+                  <div className="mt-2 border-t border-pale-sky pt-2">
                     {message.sources.map((source) => (
-                      <Link key={source.id} className="underline mr-2" to={`/documents?q=${encodeURIComponent(source.title)}`}>[{source.id}] {source.title}</Link>
+                      <Link key={source.id} className="mr-2 text-xs underline" to={`/documents?q=${encodeURIComponent(source.title)}`}>[{source.id}] {source.title}</Link>
                     ))}
                   </div>
                 )}
               </article>
             ))}
             {busy && <p role="status" className="text-xs text-slate-500">Working…</p>}
-            <label className="block text-xs text-slate-600">Project
-              <select className="mt-1 block w-full border border-pale-sky rounded-lg p-2 bg-white" value={projectId} onChange={(event) => { setProjectId(event.target.value); setSelected([]); }}>
-                <option value="">All accessible documents</option>
-                {projects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-              </select>
-            </label>
-            <div className="max-h-28 overflow-auto space-y-2">
-              {sources.filter((source) => !projectId || String(source.project_id) === projectId).map((source) => (
-                <label key={source.id} className="flex gap-2 text-xs">
-                  <input type="checkbox" disabled={source.index_state !== 'ready'} checked={selected.includes(source.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} />
-                  <span>{source.title}<small className="block text-slate-500">{source.index_state === 'ready' ? 'Indexed' : 'Not indexed'}</small></span>
-                  {source.owner_user_id === user.id && source.current_version && source.index_state !== 'ready' && source.index_state !== 'pending' && source.index_state !== 'indexing' && (
-                    <button type="button" className="underline" disabled={busy} onClick={() => void index(source)}>Index for assistant</button>
-                  )}
-                </label>
-              ))}
-            </div>
-            <p className="text-xs text-slate-500">This hour: {usage.member_requests}/15 of your requests · {usage.club_requests}/120 club requests.</p>
+          </div>
+          <div className="border-t border-pale-sky bg-[#f5f7fa] px-3 py-2">
+            <details className="text-xs text-slate-600">
+              <summary className="cursor-pointer font-medium text-slate-700">Optional documents</summary>
+              <label className="mt-2 block">Project
+                <select className="mt-1 block w-full rounded-lg border border-pale-sky bg-white p-2" value={projectId} onChange={(event) => { setProjectId(event.target.value); setSelected([]); }}>
+                  <option value="">All accessible documents</option>
+                  {projects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+              </label>
+              <div className="mt-2 max-h-24 space-y-2 overflow-auto">
+                {sources.filter((source) => !projectId || String(source.project_id) === projectId).map((source) => (
+                  <label key={source.id} className="flex gap-2">
+                    <input type="checkbox" disabled={source.index_state !== 'ready'} checked={selected.includes(source.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} />
+                    <span>{source.title}<small className="block text-slate-500">{source.index_state === 'ready' ? 'Indexed' : 'Not indexed'}</small></span>
+                    {source.owner_user_id === user.id && source.current_version && source.index_state !== 'ready' && source.index_state !== 'pending' && source.index_state !== 'indexing' && (
+                      <button type="button" className="underline" disabled={busy} onClick={() => void index(source)}>Index</button>
+                    )}
+                  </label>
+                ))}
+              </div>
+              <Link to="/documents" className="mt-2 inline-block underline">Manage documents</Link>
+            </details>
           </div>
           <form className="border-t border-pale-sky p-3" onSubmit={(event) => { event.preventDefault(); void ask(); }}>
-            {error && <p role="alert" className="text-xs text-red-700 mb-2">{error}</p>}
+            {error && <p role="alert" className="mb-2 text-xs text-red-700">{error}</p>}
             <label className="sr-only" htmlFor="assistant-question">Question or task</label>
-            <textarea id="assistant-question" rows={2} className="w-full border border-pale-sky rounded-lg p-2 text-sm" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask(); } }} placeholder="Find people at a company, check contacts, or ask about a document…" />
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <Link to="/documents" className="text-xs underline text-slate-600">Manage documents</Link>
-              <button type="submit" className="ui-button ui-button--primary" disabled={busy || !question.trim()}>Ask assistant</button>
+            <div className="flex items-end gap-2 rounded-2xl border border-pale-sky bg-white px-3 py-2 focus-within:border-steel-blue">
+              <textarea
+                id="assistant-question"
+                ref={composer}
+                rows={1}
+                className="max-h-24 min-h-[2.25rem] flex-1 resize-none border-0 bg-transparent py-1.5 text-sm leading-5 text-deep-navy outline-none"
+                value={question}
+                onChange={(event) => {
+                  setQuestion(event.target.value);
+                  event.target.style.height = 'auto';
+                  event.target.style.height = `${Math.min(event.target.scrollHeight, 96)}px`;
+                }}
+                onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask(); } }}
+                placeholder="Find people at Garmin…"
+              />
+              <button type="submit" className="h-9 shrink-0 rounded-xl bg-deep-navy px-3 text-xs font-semibold text-white disabled:opacity-40" disabled={busy || !question.trim()}>Send</button>
             </div>
+            <p className="mt-2 text-[11px] text-slate-500">This hour: {usage.member_requests}/15 of your requests · {usage.club_requests}/120 club requests.</p>
           </form>
         </section>
       )}
