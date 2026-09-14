@@ -81,7 +81,20 @@ async def _review_batch(batch: list[dict], company_name: str | None) -> dict[str
 
     prompt = _build_review_prompt(batch, company_name)
     if llm_provider() == "bedrock":
-        data = await asyncio.to_thread(complete_json, prompt, rank_model_id())
+        # Bedrock process inference slots are fewer than the review agents; back
+        # off and retry rather than failing the whole discovery run. Exhausted
+        # retries degrade to "unreviewed", never a lost contact.
+        data: dict[str, Any] | None = None
+        delay = 0.5
+        for attempt in range(4):
+            try:
+                data = await asyncio.to_thread(complete_json, prompt, rank_model_id())
+                break
+            except Exception:
+                data = None
+                if attempt < 3:
+                    await asyncio.sleep(delay)
+                    delay *= 2
     else:
         data = await ollama_json_async(prompt)
     result = _normalize_reviews(data)
