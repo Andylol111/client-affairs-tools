@@ -101,11 +101,12 @@ async def tests():
     for raw, expected in [('prefix {"ok":true} suffix', {'ok': True}), ('invalid', None), ('{bad}', None)]:
         with patch.object(llm, 'complete_text', return_value=raw):
             assert llm.complete_json('test') == expected
-    with patch.dict(os.environ, {'BEDROCK_ALLOWED_MODEL_IDS': llm.rank_model_id()}):
-        assert all(m['id'] == llm.rank_model_id() for m in llm.list_models()['groups'][0]['models'])
+    with patch.dict(os.environ, {'LLM_PROVIDER': 'bedrock'}):
+        with patch.dict(os.environ, {'BEDROCK_ALLOWED_MODEL_IDS': llm.rank_model_id()}):
+            assert all(m['id'] == llm.rank_model_id() for m in llm.list_models()['groups'][0]['models'])
     with patch.dict(os.environ, {'LLM_PROVIDER': 'ollama'}), patch('ollama.chat', return_value=SimpleNamespace(message=SimpleNamespace(content='local draft'))):
         assert llm.complete_text('brief', 'ollama:local', system='system') == 'local draft'
-    with patch('boto3.client') as factory:
+    with patch.dict(os.environ, {'LLM_PROVIDER': 'bedrock'}), patch('boto3.client') as factory:
         factory.return_value.converse.return_value = {'output': {'message': {'content': [{'text': 'draft'}]}}}
         assert llm._bedrock_text('brief', llm.default_model_id(), 'system') == 'draft'
         try:
@@ -144,7 +145,7 @@ async def tests():
         await db.commit()
         await db.close()
     await reset_paid()
-    with patch.dict(os.environ,{'BEDROCK_CALLS_PER_CLUB_PER_HOUR':'1'}),patch('boto3.client') as factory:
+    with patch.dict(os.environ,{'LLM_PROVIDER':'bedrock','BEDROCK_CALLS_PER_CLUB_PER_HOUR':'1'}),patch('boto3.client') as factory:
         factory.return_value.converse.return_value={'output':{'message':{'content':[{'text':'{"rank":1}'}]}}}
         assert llm.complete_json('private ranking prompt',llm.rank_model_id())=={'rank':1}
         assert factory.call_args.kwargs['config'].retries['total_max_attempts']==1
@@ -182,13 +183,13 @@ except HTTPException as exc:
         outcomes=await asyncio.gather(*(contender() for _ in range(4)))
         assert outcomes.count('reserved')==1 and outcomes.count('blocked')==3
     await reset_paid()
-    with patch.dict(os.environ,{'BEDROCK_CALLS_PER_CLUB_PER_HOUR':'2'}),patch('boto3.client') as factory:
+    with patch.dict(os.environ,{'LLM_PROVIDER':'bedrock','BEDROCK_CALLS_PER_CLUB_PER_HOUR':'2'}),patch('boto3.client') as factory:
         factory.return_value.converse.side_effect=TimeoutError('Acceptance unknown')
         try:
             llm.complete_text('private prompt',llm.rank_model_id())
             raise AssertionError('Expected provider error')
-        except TimeoutError:
-            pass
+        except HTTPException as exc:
+            assert exc.status_code==503
         factory.return_value.converse.side_effect=None
         factory.return_value.converse.return_value={'output':{'message':{'content':[{'text':'second'}]}}}
         assert llm.complete_text('private prompt',llm.rank_model_id())=='second','Exception leaked semaphore slot'
@@ -217,7 +218,7 @@ except HTTPException as exc:
         except HTTPException as exc:
             assert exc.status_code==503
     import sqlite3
-    with patch('app.services.generation_policy.sqlite3.connect',side_effect=sqlite3.OperationalError('unavailable')),patch('boto3.client') as factory:
+    with patch.dict(os.environ,{'LLM_PROVIDER':'bedrock'}), patch('app.services.generation_policy.sqlite3.connect',side_effect=sqlite3.OperationalError('unavailable')),patch('boto3.client') as factory:
         try:
             llm.complete_text('private prompt',llm.rank_model_id())
             raise AssertionError('Provider called without durable quota')
