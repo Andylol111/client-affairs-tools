@@ -56,13 +56,16 @@ export default function CompanyDiscovery() {
   };
   const [submitting, setSubmitting] = useState(false);
   const [runs, setRuns] = useState<RunRow[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [prospects, setProspects] = useState<DiscoveryProspectRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importedCompany, setImportedCompany] = useState<string | null>(null);
+  const requestedRun = Number(params.get('run') || '');
+  const [selectedId, setSelectedId] = useState<number | null>(
+    Number.isFinite(requestedRun) && requestedRun > 0 ? requestedRun : null,
+  );
 
   const loadRuns = useCallback(async () => {
     try {
@@ -127,17 +130,22 @@ export default function CompanyDiscovery() {
       setError('Company name is required.');
       return;
     }
+    if (!titleHints.trim()) {
+      setError('Add titles to prioritize (or type “any relevant”) so the live search knows who to collect.');
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await api.yucgoutreach.createRun({
         company_name: companyName.trim(),
         company_domain: domain.trim() || undefined,
         linkedin_company_url: linkedinUrl.trim() || undefined,
+        title_hints: titleHints.trim(),
         max_prospects: maxProspects,
       });
       setSelectedId(res.id);
       await loadRuns();
-      setInfo(`Run #${res.id} started — fetching sources in parallel.`);
+      setInfo(`Run #${res.id} started — website, web search, LinkedIn, then inbox checks.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Start failed');
     } finally {
@@ -151,9 +159,9 @@ export default function CompanyDiscovery() {
     <div className="space-y-8" data-section="yucgoutreach-discovery">
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
         <div>
-          <h2 className="text-lg font-semibold text-deep-navy mb-1">Look up a company</h2>
+          <h2 className="text-lg font-semibold text-deep-navy mb-1">Find people at a company</h2>
           <p className="text-sm text-slate-600">
-            Search the outreach company list and target spreadsheet, then run a high-volume people search. People appear here as each source is checked.
+            Company-wide live search: website crawl, web search, LinkedIn, then inbox checks. Person lookup (the next tab) is only for one named person. Research is audience briefs, not this search.
           </p>
         </div>
         <CompanySuggestions onPick={applyCompany} />
@@ -164,7 +172,8 @@ export default function CompanyDiscovery() {
           onSubmit={onSubmit}
           className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4"
         >
-          <h2 className="text-lg font-semibold text-deep-navy">Find people</h2>
+          <h2 className="text-lg font-semibold text-deep-navy">Start a company search</h2>
+          <p className="text-sm text-slate-600">Company, titles, and a domain or LinkedIn URL produce the best results. Empty domain is looked up from the company name.</p>
           {error && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
           )}
@@ -192,10 +201,11 @@ export default function CompanyDiscovery() {
               value={titleHints}
               onChange={(e) => setTitleHints(e.target.value)}
               placeholder="VPs, project managers"
+              required
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Domain (recommended)</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Company domain</label>
             <input
               className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
               aria-label="Company domain" value={domain}
@@ -204,7 +214,7 @@ export default function CompanyDiscovery() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">LinkedIn company URL (optional)</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">LinkedIn company URL</label>
             <input
               className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
               aria-label="LinkedIn company URL" value={linkedinUrl}

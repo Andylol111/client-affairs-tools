@@ -190,8 +190,11 @@ async def run():
             'help me find people at Garmin to reach out to, VPs, execs in project management',
         )
         assert garmin['pending_actions'][0]['args']['company_name'] == 'Garmin'
+        assert garmin['pending_actions'][0]['args'].get('title_hints')
         titles = next(item['value'] for item in garmin['asks'] if item['id'] == 'titles')
         assert 'VP' in titles and 'exec' in titles.lower()
+        assert 'Looked up: search_contacts' not in garmin['answer']
+        assert 'not the live search' in garmin['answer']
         assert 'titles=' in garmin['navigations'][0]['path']
         assert garmin['asks'][0]['required'] is True
 
@@ -203,9 +206,12 @@ async def run():
         runs_before = await execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
         assert runs_before[0]['data'][0]['id'] == 7
 
-        created = await assistant.act(assistant.ActRequest(tool='start_find_people', args={'company_name': 'Acme', 'max_prospects': 40}), {'id': 1, 'role': 'standard'})
+        created = await assistant.act(assistant.ActRequest(tool='start_find_people', args={'company_name': 'Acme', 'max_prospects': 40, 'title_hints': 'VPs'}), {'id': 1, 'role': 'standard'})
         assert created['ok'] and created['result']['id']
         assert 'Started Find people' in created['answer']
+        assert 'view=company' in created['navigations'][0]['path']
+        assert 'company=Acme' in created['navigations'][0]['path']
+        assert f"run={created['result']['id']}" in created['navigations'][0]['path']
 
         await denied(assistant.act(assistant.ActRequest(tool='send_mail', args={'to': 'ada@acme.com'}), {'id': 1, 'role': 'standard'}), 422)
         await denied(assistant.act(assistant.ActRequest(tool='delete_contact', args={'id': 1}), {'id': 1, 'role': 'standard'}), 422)

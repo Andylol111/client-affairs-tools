@@ -144,7 +144,7 @@ test('assistant can propose Find people and only runs it after confirm', async (
   });
   await page.route('**/api/assistant/act', async route => {
     mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
-    return route.fulfill({ json: { ok: true, answer: 'Started Find people run #12 for Acme.', navigations: [{ path: '/scraper', label: 'Open Find contacts' }] } });
+    return route.fulfill({ json: { ok: true, answer: 'Started Find people run #12 for Acme.', result: { id: 12 }, navigations: [{ path: '/scraper?view=company&company=Acme&run=12', label: 'Open Find people' }] } });
   });
   await page.goto('/outreach');
   await page.getByRole('button', { name: 'Open assistant' }).click();
@@ -161,7 +161,7 @@ test('assistant can propose Find people and only runs it after confirm', async (
   await expect(page.getByText('Started Find people run #12 for Acme.')).toBeVisible();
   expect(mutations).toContain('ACT start_find_people');
   expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
-  await expect(page).toHaveURL(/\/scraper/);
+  await expect(page).toHaveURL(/\/scraper\?view=company/);
 });
 
 test('assistant indexes an owned document from the bubble', async ({ page }) => {

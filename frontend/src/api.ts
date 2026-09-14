@@ -371,6 +371,7 @@ export const api = {
     act: (data: { tool: string; args: Record<string, unknown>; thread_id?: number }) =>
       fetchApi<{
         ok: boolean; answer: string; thread_id?: number | null;
+        result?: { id?: number };
         navigations?: Array<{ path: string; label: string }>;
       }>('/api/assistant/act', {
         method: 'POST', body: JSON.stringify(data),
@@ -1121,6 +1122,7 @@ export const api = {
       company_name: string;
       company_domain?: string;
       linkedin_company_url?: string;
+      title_hints?: string;
       max_prospects?: number;
       worker_concurrency?: number;
     }) =>

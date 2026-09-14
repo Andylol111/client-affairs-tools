@@ -298,12 +298,13 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
     if offline:
         answer = (
             f"Find people is ready for {company} without the language model. "
-            "Confirm titles, domain, and LinkedIn in the boxes, then fill the form or start the search."
+            "Fill titles, domain, and LinkedIn, then Start search. That runs the live company search "
+            "(web + LinkedIn + inbox checks). Person lookup is only for one named person."
         )
     else:
         answer = (
-            f"I filled Find people for {company}. Confirm titles, domain, and LinkedIn in the boxes — "
-            "that is the cheap path to more real contacts, with no extra model call."
+            f"I filled Find people for {company}. Confirm the boxes, then Start search. "
+            "That is the live company search (web + LinkedIn + inbox checks), not a warehouse lookup."
         )
     asks = []
     for field_id, spec in ASK_FIELDS.items():
@@ -325,6 +326,7 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
                 "company_name": company,
                 "company_domain": domain or None,
                 "linkedin_company_url": linkedin or None,
+                "title_hints": titles or None,
                 "max_prospects": 250,
             },
             "summary": f"Find people at {company} (up to 250)",
@@ -391,8 +393,11 @@ async def answer(
         asks = sanitize_ask(payload.get('ask'))
         if lookups:
             bits = []
+            pending_find = any(item.get('tool') == 'start_find_people' for item in pending)
             for item in lookups:
                 data = item.get('data')
+                if pending_find and item.get('tool') == 'search_contacts':
+                    continue
                 if isinstance(data, dict) and data.get('error'):
                     bits.append(f"{item['tool']}: {data['error']}")
                 elif isinstance(data, dict) and 'count' in data:
@@ -419,15 +424,11 @@ async def answer(
             saved = 0
     if pending and any(item['tool'] == 'start_find_people' for item in pending):
         company = str(pending[0]['args'].get('company_name') or 'this company')
-        if saved:
-            answer_text = (
-                f"{answer_text}\n\nYou already have {saved} saved contact(s) at {company}. "
-                "Fill Find people to add more real people, or open Pipeline to reach the ones you have — extra model calls are not required."
-            )
-        else:
-            answer_text = (
-                f"{answer_text}\n\nNo saved contacts at {company} yet. Filling Find people is how members reach more real people without extra model spend."
-            )
+        warehouse = f"{saved} already saved in the warehouse" if saved else "none already saved in the warehouse"
+        answer_text = (
+            f"{answer_text}\n\n{warehouse} at {company}. That is not the live search. "
+            "Start search collects new people from the company website, web search, LinkedIn, then checks inboxes."
+        )
     return {
         'answer': answer_text,
         'sources': [source for source in citations if source['id'] in cited],
