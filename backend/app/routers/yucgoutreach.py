@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.auth_deps import get_current_user
 from app.database import get_db, row_to_dict
 from app.services.contact_scraper import sanitize_email, normalize_domain, is_valid_person_contact
+from app.services.contact_intelligence import ingest_contact, assess_address
 from app.services.yucgoutreach_discovery import (
     YUCG_MAX_PROSPECTS,
     build_yucgoutreach_excel_bytes,
@@ -159,11 +160,23 @@ async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_u
         )
         rows = [row_to_dict(r) for r in await cur.fetchall()]
         created = updated = skipped = 0
+        for pr in rows:
+            pr["mailbox_assessment"] = await assess_address(pr.get("email") or "", actor_id=user["id"])
         company = run.get("company_name") or ""
         domain = normalize_domain(run.get("company_domain") or "")
         for pr in rows:
             email = sanitize_email(pr.get("email") or "")
             name = " ".join(p for p in [pr.get("first_name"), pr.get("last_name")] if p).strip()
+            sources = []
+            source_url = (pr.get("contact_profile_url") or pr.get("contact_url") or "").strip()
+            if source_url:
+                sources.append({
+                    "url": source_url,
+                    "excerpt": (pr.get("qualification_notes") or "")[:500] or None,
+                    "observed_at": None,
+                })
+            if pr.get("linkedin_url"):
+                sources.append({"url": pr["linkedin_url"], "excerpt": None, "observed_at": None})
             row = {
                 "name": name,
                 "email": email,
@@ -172,13 +185,17 @@ async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_u
                 "company_domain": domain,
                 "linkedin_url": pr.get("linkedin_url"),
                 "contact_source": pr.get("contact_source") or "yucgoutreach",
+                "mailbox_assessment": pr.get("mailbox_assessment"),
             }
             if not email or not is_valid_person_contact(row, company_name=company, domain=domain):
                 skipped += 1
                 continue
-            existing = await db.execute("SELECT id FROM contacts WHERE email = ?", (email,))
+            existing = await db.execute("SELECT id, owner_id FROM contacts WHERE email = ?", (email,))
             ex = await existing.fetchone()
             if ex:
+                if ex["owner_id"] is not None and int(ex["owner_id"]) != user["id"]:
+                    skipped += 1
+                    continue
                 await db.execute(
                     """UPDATE contacts SET name = COALESCE(NULLIF(name, ''), ?),
                        title = COALESCE(NULLIF(title, ''), ?),
@@ -205,10 +222,10 @@ async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_u
                 )
                 updated += 1
             else:
-                await db.execute(
+                cursor = await db.execute(
                     """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url,
-                       contact_source, email_verification_status, ai_verdict, ai_reason, confidence)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       contact_source, email_verification_status, ai_verdict, ai_reason, confidence, owner_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         name,
                         email,
@@ -221,11 +238,45 @@ async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_u
                         pr.get("ai_verdict"),
                         pr.get("ai_reason"),
                         "medium",
+                        user["id"],
                     ),
                 )
                 created += 1
+                row_id = cursor.lastrowid
+        evidence_rows = []
+        for pr in rows:
+            email = sanitize_email(pr.get("email") or "")
+            if not email:
+                continue
+            row = {
+                "name": " ".join(p for p in [pr.get("first_name"), pr.get("last_name")] if p).strip(),
+                "email": email,
+                "title": pr.get("title"),
+                "company": pr.get("company") or company,
+                "company_domain": domain,
+                "linkedin_url": pr.get("linkedin_url"),
+                "contact_source": pr.get("contact_source") or "yucgoutreach",
+                "mailbox_assessment": pr.get("mailbox_assessment"),
+            }
+            sources = []
+            source_url = (pr.get("contact_profile_url") or pr.get("contact_url") or "").strip()
+            if source_url:
+                sources.append({
+                    "url": source_url,
+                    "excerpt": (pr.get("qualification_notes") or "")[:500] or None,
+                    "observed_at": None,
+                })
+            if pr.get("linkedin_url"):
+                sources.append({"url": pr["linkedin_url"], "excerpt": None, "observed_at": None})
+            existing = await (await db.execute("SELECT id, owner_id FROM contacts WHERE email = ?", (email,))).fetchone()
+            if existing and (existing["owner_id"] is None or int(existing["owner_id"]) == user["id"]):
+                evidence_rows.append(await ingest_contact(
+                    db, contact={**row, "id": existing["id"]}, actor_id=user["id"],
+                    origin="published_by_independent_source" if source_url else None,
+                    sources=sources,
+                ))
         await db.commit()
-        return {"created": created, "updated": updated, "skipped": skipped}
+        return {"created": created, "updated": updated, "skipped": skipped, "evidence": evidence_rows}
     finally:
         await db.close()
 

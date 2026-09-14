@@ -31,7 +31,7 @@ async def list_releases(user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
         cur = await db.execute(
-            "SELECT * FROM outreach_releases ORDER BY id DESC LIMIT 50"
+            "SELECT id, name, status, created_by, created_at, updated_at FROM outreach_releases ORDER BY id DESC LIMIT 50",
         )
         return [row_to_dict(r) for r in await cur.fetchall()]
     finally:
@@ -42,6 +42,7 @@ async def list_releases(user: dict = Depends(get_current_user)):
 async def get_release(release_id: int, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        await require_release_owner(db, release_id, user["id"])
         cur = await db.execute("SELECT * FROM outreach_releases WHERE id = ?", (release_id,))
         rel = row_to_dict(await cur.fetchone())
         if not rel:
@@ -193,11 +194,35 @@ async def keep_or_drop_person(
         person = row_to_dict(await cur.fetchone())
         if not person:
             raise HTTPException(404, "Person not found")
+        from app.services.contact_intelligence import assess_address, ingest_contact
         vendor_check = person.get("vendor_check")
         vendor = person.get("vendor")
+        evidence = None
         if body.keep and person.get("email"):
-            vendor_check, vendor = await _verifalia_if_configured(person["email"])
+            # No writer transaction may surround verifier reservations or network I/O.
+            assessment = await assess_address(person["email"], actor_id=user["id"])
+            vendor_check, vendor = assessment["mailbox"], assessment["method"]
+            await db.execute("BEGIN IMMEDIATE")
+            await require_release_owner(db, release_id, user["id"])
+            current = await (await db.execute(
+                "SELECT * FROM outreach_release_people WHERE id=? AND release_id=?",
+                (person_id, release_id),
+            )).fetchone()
+            if not current or dict(current) != person:
+                raise HTTPException(409, "Person changed during review. Reload before keeping.")
             contact_id = await _upsert_kept_contact(db, person)
+            target = await (await db.execute(
+                "SELECT company FROM outreach_release_targets WHERE id=?", (person["target_id"],),
+            )).fetchone()
+            evidence = await ingest_contact(
+                db, actor_id=user["id"], origin="imported_without_evidence",
+                contact={"id": contact_id, "name": person.get("full_name"),
+                         "email": person["email"], "title": person.get("title"),
+                         "company": target["company"] if target else None,
+                         "domain": person.get("company_domain"), **assessment},
+                sources=[{"url": person["source_url"], "excerpt": person["blurb"]}]
+                if person.get("source_url") and person.get("blurb") else [],
+            )
             await db.execute(
                 "UPDATE outreach_release_people SET contact_id = ? WHERE id = ?",
                 (contact_id, person_id),
@@ -220,6 +245,8 @@ async def keep_or_drop_person(
             "kept": body.keep,
             "vendor": vendor,
             "vendor_check": vendor_check,
+            "contact_id": contact_id if body.keep and person.get("email") else None,
+            "evidence": evidence,
         }
     finally:
         await db.close()
@@ -248,40 +275,6 @@ async def _upsert_kept_contact(db, person: dict) -> int | None:
     return cur.lastrowid
 
 
-async def _verifalia_if_configured(email: str) -> tuple[str | None, str | None]:
-    """Free-tier only. Skip on missing key or HTTP 402. Never purchase credits."""
-    import os
-
-    key = (os.getenv("VERIFALIA_API_KEY") or "").strip()
-    if not key or os.getenv('EXTERNAL_EMAIL_VERIFICATION_ENABLED', 'false').lower() != 'true':
-        return None, None
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                "https://api.verifalia.com/v2.6/email-validations",
-                auth=(key, ""),
-                json={"entries": [{"inputData": email}]},
-            )
-        if r.status_code == 402:
-            return "skipped", "verifalia"
-        if r.status_code >= 400:
-            return None, None
-        data = r.json()
-        entries = data.get("entries") or []
-        status = None
-        if entries:
-            status = (entries[0].get("classification") or entries[0].get("status") or "").lower()
-        mapping = {
-            "deliverable": "valid",
-            "undeliverable": "invalid",
-            "risky": "catchall",
-            "unknown": "unknown",
-        }
-        return mapping.get(status, status or "unknown"), "verifalia"
-    except Exception:
-        return None, None
 
 
 @router.post("/{release_id}/pack")
@@ -303,17 +296,19 @@ async def rebuild_pack(release_id: int, user: dict = Depends(get_current_user)):
 async def release_inbox(release_id: int, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        await require_release_owner(db, release_id, user["id"])
         cur = await db.execute(
             """SELECT cc.id, cc.contact_id, cc.status, cc.sent_at, cc.replied_at, cc.opened_at,
                       c.email, c.name, c.company, c.email_verification_status
                FROM campaign_contacts cc
                JOIN contacts c ON c.id = cc.contact_id
+               JOIN campaigns camp ON camp.id = cc.campaign_id
                WHERE c.id IN (
                  SELECT contact_id FROM outreach_release_people
                  WHERE release_id = ? AND kept = 1 AND contact_id IS NOT NULL
-               )
+               ) AND camp.owner_user_id = ?
                ORDER BY cc.id DESC""",
-            (release_id,),
+            (release_id, user["id"]),
         )
         return [row_to_dict(r) for r in await cur.fetchall()]
     finally:
