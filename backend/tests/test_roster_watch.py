@@ -22,6 +22,8 @@ os.environ["ROSTER_VERIFY_DAYS"] = "7"
 os.environ["ROSTER_LEFT_AFTER_MISSES"] = "2"
 os.environ["ROSTER_DRAIN_LIMIT"] = "8"
 os.environ["ROSTER_WEB_ON_ENROLL"] = "0"
+os.environ["ROSTER_DOMAIN_WEB"] = "0"
+os.environ.pop("COMPANIES_HOUSE_API_KEY", None)
 os.environ.pop("TAVILY_API_KEY", None)
 
 from app.database import get_db, init_db  # noqa: E402
