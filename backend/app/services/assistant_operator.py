@@ -75,7 +75,7 @@ Reply with a single JSON object:
   "open": [{"path": "/scraper?view=company&company=Name|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/analytics|/", "label": "button label"}]
 }
 Rules:
-- Use at most three reads. search_contacts args: q or company. get_discovery_run args: run_id. search_person args: name, optional company. start_find_people args: company_name, optional company_domain, linkedin_company_url, max_prospects (default 250, max 800).
+- Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, linkedin_company_url, title_hints, max_prospects (default 250, max 800).
 - For Find people: always emit ask fields for titles (required), company_domain, and linkedin_company_url. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain/linkedin when known).
 - Propose start_find_people for a named company. Do not run it yourself.
 - Never emit send, delete, scrape-stream, or admin tools.
@@ -219,10 +219,12 @@ def _clean_write_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             cap = int(args.get("max_prospects") or 250)
         except (TypeError, ValueError):
             cap = 250
+        titles = str(args.get("title_hints") or args.get("titles") or "").strip()[:500] or None
         return {
             "company_name": name,
             "company_domain": domain,
             "linkedin_company_url": linkedin,
+            "title_hints": titles,
             "max_prospects": max(25, min(cap, 800)),
         }
     if tool == "import_run_to_contacts":
@@ -301,12 +303,25 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
     if tool == "start_find_people":
         from app.routers.yucgoutreach import YucgOutreachRunCreate, create_run
         created = await create_run(YucgOutreachRunCreate(**cleaned), user)
+        from urllib.parse import urlencode
+        params = {"view": "company", "company": cleaned["company_name"], "run": str(created["id"])}
+        if cleaned.get("company_domain"):
+            params["domain"] = cleaned["company_domain"]
+        if cleaned.get("linkedin_company_url"):
+            params["linkedin"] = cleaned["linkedin_company_url"]
+        if cleaned.get("title_hints"):
+            params["titles"] = cleaned["title_hints"]
+        dest = "/scraper?" + urlencode(params)
         return {
             "ok": True,
             "tool": tool,
             "result": created,
-            "answer": f"Started Find people run #{created['id']} for {cleaned['company_name']} (up to {created['max_prospects']} people). Watch progress on Find contacts.",
-            "navigations": [{"path": "/scraper", "label": "Open Find contacts"}],
+            "answer": (
+                f"Started Find people run #{created['id']} for {cleaned['company_name']} "
+                f"(up to {created['max_prospects']} people). This is the live company search — "
+                "website crawl, web search, LinkedIn, then inbox checks — not Person lookup."
+            ),
+            "navigations": [{"path": dest, "label": "Open Find people"}],
         }
     if tool == "import_run_to_contacts":
         from app.routers.yucgoutreach import import_run_to_contacts

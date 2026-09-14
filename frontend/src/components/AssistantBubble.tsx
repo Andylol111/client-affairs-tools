@@ -20,11 +20,12 @@ type Message = {
 };
 type Thread = { id: number; title: string; updated_at: number };
 
-function findPeoplePath(company: string, answers: Record<string, string>) {
+function findPeoplePath(company: string, answers: Record<string, string>, runId?: number) {
   const params = new URLSearchParams({ view: 'company', company });
   if (answers.titles?.trim()) params.set('titles', answers.titles.trim());
   if (answers.company_domain?.trim()) params.set('domain', answers.company_domain.trim());
   if (answers.linkedin_company_url?.trim()) params.set('linkedin', answers.linkedin_company_url.trim());
+  if (runId) params.set('run', String(runId));
   return `/scraper?${params.toString()}`;
 }
 
@@ -166,6 +167,7 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
     const args = { ...action.args };
     if (answers.company_domain?.trim()) args.company_domain = answers.company_domain.trim();
     if (answers.linkedin_company_url?.trim()) args.linkedin_company_url = answers.linkedin_company_url.trim();
+    if (answers.titles?.trim()) args.title_hints = answers.titles.trim();
     try {
       const result = await api.assistant.act({ tool: action.tool, args, thread_id: threadId });
       setMessages((current) => {
@@ -175,8 +177,14 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
         });
         return [...next, { role: 'assistant', content: result.answer, navigations: result.navigations }];
       });
-      const dest = result.navigations?.[0]?.path || (action.tool === 'start_find_people' ? '/scraper?view=company' : undefined);
-      if (dest) navigate(dest);
+      if (action.tool === 'start_find_people') {
+        const company = String(args.company_name || action.args.company_name || '').trim();
+        const runId = Number((result as { result?: { id?: number } }).result?.id);
+        navigate(findPeoplePath(company, answers, Number.isFinite(runId) && runId > 0 ? runId : undefined));
+      } else {
+        const dest = result.navigations?.[0]?.path;
+        if (dest) navigate(dest);
+      }
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -202,7 +210,7 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
           <header className="flex items-start justify-between gap-3 border-b border-pale-sky px-4 py-3">
             <div>
               <h2 id="assistant-bubble-title" className="text-sm font-semibold text-deep-navy">Site assistant</h2>
-              <p className="mt-0.5 text-xs leading-5 text-slate-600">Fills Find people and looks up contacts. Confirm starts a search. It cannot send mail.</p>
+              <p className="mt-0.5 text-xs leading-5 text-slate-600">Fills Find people (company-wide search). Person lookup is a different tab for one named person. It cannot send mail.</p>
             </div>
             <button type="button" className="text-xs font-medium text-slate-600 hover:text-deep-navy" onClick={close} aria-label="Close assistant">Close</button>
           </header>
