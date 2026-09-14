@@ -3,8 +3,8 @@ Follow-up sequence job: send due follow-up emails for campaigns that have a sequ
 Run daily. Uses the explicitly bound original sender and durable step claims.
 
 Skips contacts who have already replied (replied_at set or status = 'replied'), so follow-ups
-only go to recipients who have not responded. Replies can be recorded via the mark-replied API
-(Campaign detail / outreach); automatic Gmail thread detection is not implemented yet.
+only go to recipients who have not responded. Replies are recorded by sender-scoped Gmail sync
+or by the campaign owner's manual mark.
 """
 from datetime import datetime, timezone
 from app.database import get_db
@@ -156,7 +156,14 @@ async def run_follow_up_sequences() -> dict:
                     await db.commit()
                     sent += 1
                 except Exception as e:
-                    await finish(db, key, error=e)
+                    from app.services.gmail_api import DeliveryNotAttemptedError
+                    safe_to_retry = isinstance(e, DeliveryNotAttemptedError)
+                    if safe_to_retry:
+                        await db.execute(
+                            "DELETE FROM outreach_messages WHERE dispatch_key=? AND sent_at IS NULL",
+                            (key,),
+                        )
+                    await finish(db, key, error=e, safe_to_retry=safe_to_retry)
                     await db.commit()
                     errors.append({"campaign_contact_id": cc["id"], "error": str(e)})
 

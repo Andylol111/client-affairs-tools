@@ -40,7 +40,7 @@ flowchart LR
 
 ## Important current distinctions
 
-- A **contact** is shared club data. A **draft**, **campaign sender**, Gmail credential, and private file are member-bound.
+- An unassigned **contact** is shared club data; an assigned contact is limited to that member and administrators. A **draft**, **campaign sender**, Gmail credential, and private file are member-bound.
 - An **open** means the tracking image was requested. It does not prove that the recipient personally read the message.
 - A domain with a valid mail route means the domain can receive mail. It does not prove that the individual mailbox exists.
 - A **document record** is authorized metadata plus an immutable S3 version. The legacy attachment library and generated-object catalog are separate stores and do not inherit document permissions.

@@ -1,6 +1,6 @@
 import OutreachLedger from '../components/OutreachLedger';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useOutletContext } from 'react-router-dom';
 import { api, type Campaign } from '../api';
 import PageHeader from '../components/PageHeader';
 import { Button, EmptyState, Notice, StatusBadge } from '../components/ui/Primitives';
@@ -16,6 +16,7 @@ type PipelineMetric = { pipeline_status: string; count: number };
 type TimeSeries = { labels: string[]; sent: number[]; opened: number[]; replied: number[] };
 
 export default function Analytics() {
+  const { user } = useOutletContext<{ user: { id: number } }>();
   const [dashboard, setDashboard] = useState<DashboardMetrics>({});
   const [insights, setInsights] = useState<string[]>([]);
   const [pipelineMetrics, setPipelineMetrics] = useState<PipelineMetric[]>([]);
@@ -120,9 +121,8 @@ export default function Analytics() {
           <p className="py-8 text-center text-sm text-slate-500">No campaigns to compare.</p>
         ) : (
           <ul className="divide-y divide-[var(--border)]">
-            {campaigns.map((campaign) => (
-              <li key={campaign.id}>
-                <Link to={`/campaigns/${campaign.id}`} className="flex min-h-14 items-center justify-between gap-4 py-3 hover:text-[var(--accent)]">
+            {campaigns.map((campaign) => {
+              const content = <>
                   <span className="min-w-0">
                     <span className="block truncate font-semibold">{campaign.name}</span>
                     <span className="block text-xs text-slate-500">{campaign.sent_count ?? 0} sent · {campaign.pending_count ?? 0} queued · {campaign.failed_count ?? 0} failed</span>
@@ -130,9 +130,13 @@ export default function Analytics() {
                   <StatusBadge tone={campaign.status === 'sent' ? 'success' : campaign.status === 'needs_attention' ? 'danger' : 'neutral'}>
                     {campaign.status.replace('_', ' ')}
                   </StatusBadge>
-                </Link>
-              </li>
-            ))}
+                </>;
+              return <li key={campaign.id}>
+                {campaign.owner_user_id === user.id
+                  ? <Link to={`/campaigns/${campaign.id}`} className="flex min-h-14 items-center justify-between gap-4 py-3 hover:text-[var(--accent)]">{content}</Link>
+                  : <div className="flex min-h-14 items-center justify-between gap-4 py-3">{content}</div>}
+              </li>;
+            })}
           </ul>
         )}
       </section>

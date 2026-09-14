@@ -3,6 +3,7 @@ import type { Release, ReleasePerson, InboxItem } from '../api';
  * Target lists: choose shared company candidates, then keep or drop people.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   api,
   type YucgProspectRow,
@@ -184,6 +185,7 @@ function CoordinatorPanel() {
   const [recommendBusy, setRecommendBusy] = useState(false);
   const [recommendError, setRecommendError] = useState<string | null>(null);
   const [recommendInfo, setRecommendInfo] = useState<string | null>(null);
+  const [createdReleaseId, setCreatedReleaseId] = useState<number | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [drawerItem, setDrawerItem] = useState<YucgRecommendation | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -307,7 +309,8 @@ function CoordinatorPanel() {
     try {
       const name = `Target list ${new Date().toISOString().slice(0, 10)}`;
       const res = await api.yucg.createRelease({ name, row_indexes: indices });
-      setRecommendInfo(`Created target list #${res.id} with ${res.targets} companies. Open People to review suggested contacts.`);
+      setCreatedReleaseId(res.id);
+      setRecommendInfo(`Created target list #${res.id} with ${res.targets} companies.`);
     } catch (e) {
       setBoardError(e instanceof Error ? e.message : 'Could not create target list');
     } finally {
@@ -585,6 +588,7 @@ function CoordinatorPanel() {
         {recommendInfo && (
           <div className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
             {recommendInfo}
+            {createdReleaseId && <Link className="ml-2 font-semibold underline" to={`/yucgoutreach?tab=comb&release_id=${createdReleaseId}`}>Review people</Link>}
           </div>
         )}
         {recommendations.length > 0 && (
@@ -644,7 +648,10 @@ function keptLabel(kept: number) {
 
 function CombPanel() {
   const [releases, setReleases] = useState<Release[]>([]);
-  const [releaseId, setReleaseId] = useState<number | ''>('');
+  const [releaseId, setReleaseId] = useState<number | ''>(() => {
+    const value = Number(new URLSearchParams(window.location.search).get('release_id'));
+    return Number.isInteger(value) && value > 0 ? value : '';
+  });
   const [release, setRelease] = useState<Release | null>(null);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -760,6 +767,10 @@ function CombPanel() {
 
       {activeRelease && (
         <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-slate-600">Kept contacts are available to the drafting workspace.</p>
+            <Link to={`/studio?release_id=${activeRelease.id}`} className="font-semibold text-steel-blue underline">Draft kept contacts</Link>
+          </div>
           <h2 className="text-lg font-semibold text-deep-navy">Add a suggested contact</h2>
           <div className="flex flex-wrap gap-2 items-end">
             <label className="text-xs text-slate-600">

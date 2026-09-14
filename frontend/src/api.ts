@@ -555,6 +555,8 @@ export const api = {
       fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
         method: 'PATCH',
       }),
+    removeContact: (campaignId: number, ccId: number) =>
+      fetchApi<{ ok: boolean }>(`/api/campaigns/${campaignId}/contact/${ccId}`, { method: 'DELETE' }),
     update: (id: number, data: { sequence_id?: number | null }) =>
       fetchApi<unknown>(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },

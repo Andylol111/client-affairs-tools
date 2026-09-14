@@ -116,6 +116,34 @@ test('checking an uncertain dispatch never calls a send endpoint', async ({ page
   expect(mutations).toEqual(['/api/campaigns/1/dispatches/reconcile']);
 });
 
+test('campaign review exposes the exact recipient message for repair before release', async ({ page }) => {
+  let updateBody = '';
+  await page.route('**/api/campaigns/1/dispatches', route => route.fulfill({ json: [] }));
+  await page.route('**/api/campaigns/1/contact/11?*', route => {
+    updateBody = new URL(route.request().url()).searchParams.get('body') || '';
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route('**/api/campaigns/1', async route => {
+    return route.fulfill({ json: {
+      ...campaigns[0],
+      counts: { pending: 1 },
+      readiness: { ready: true, issues: [] },
+      contacts: [{
+        id: 11, contact_id: 7, name: 'Client Person', email: 'client@example.org',
+        company: 'Example', status: 'pending', email_subject: 'Original subject',
+        email_body: '<p>Original <a href="https://files.example.org/proposal">proposal</a></p>', messages: [],
+      }],
+    } });
+  });
+  await page.goto('/campaigns/1');
+  const recipient = page.getByRole('listitem').filter({ hasText: 'Client Person' });
+  await recipient.getByRole('button', { name: 'Edit message' }).click();
+  await expect(recipient.locator('textarea')).toHaveValue('Original proposal (https://files.example.org/proposal)');
+  await recipient.locator('textarea').fill('Recipient-specific revision');
+  await recipient.getByRole('button', { name: 'Save message' }).click();
+  await expect.poll(() => updateBody).toBe('Recipient-specific revision');
+});
+
 test('pending file reservations expose recovery only to the owner', async ({ page }) => {
   await page.route('**/api/workspace/documents/1/versions', route => route.fulfill({ json: [{ id: 7, state: 'pending', filename: 'unfinished.pdf', byte_size: 1500, created_at: 1788960000 }] }));
   await page.route('**/api/workspace/documents/1/uploads/7/abandon', route => route.fulfill({ status: 409, json: { detail: 'Upload link has not expired.' } }));

@@ -9,6 +9,8 @@ import asyncio
 import json
 import os
 import re
+import uuid
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -30,6 +32,13 @@ from app.services.contact_scraper import (
 )
 from app.services.contact_verify_pipeline import run_contact_verify_pipeline
 from app.services.web_contact_discovery import discover_contacts_from_web
+
+
+_active_lease: ContextVar[str | None] = ContextVar("yucgoutreach_lease", default=None)
+
+
+class DiscoveryLeaseLost(RuntimeError):
+    """This worker no longer owns the durable discovery run."""
 from app.services.linkedin_scraper import scrape_linkedin_company
 from app.services.discovery_policy import should_run_linkedin
 
@@ -290,12 +299,23 @@ async def _run_update(
             sets.append("error_message = ?")
             args.append(error_message[:2000])
         if completed:
-            sets.append("completed_at = CURRENT_TIMESTAMP")
+            sets.extend(["completed_at = CURRENT_TIMESTAMP", "lease_token = NULL", "lease_expires_at = NULL"])
+        elif status == "running" or progress_pct is not None:
+            lease_minutes = max(5, min(int(os.getenv("DISCOVERY_LEASE_MINUTES", "30") or 30), 180))
+            sets.append("lease_expires_at = datetime('now', ?)")
+            args.append(f"+{lease_minutes} minutes")
+        lease_token = _active_lease.get()
         args.append(run_id)
-        await db.execute(
-            f"UPDATE yucgoutreach_discovery_runs SET {', '.join(sets)} WHERE id = ?",
+        where = "id = ?" if lease_token is None else "id = ? AND lease_token = ? AND status = 'running'"
+        if lease_token is not None:
+            args.append(lease_token)
+        cursor = await db.execute(
+            f"UPDATE yucgoutreach_discovery_runs SET {', '.join(sets)} WHERE {where}",
             tuple(args),
         )
+        if lease_token is not None and cursor.rowcount != 1:
+            await db.rollback()
+            raise DiscoveryLeaseLost("Discovery lease was replaced")
         await db.commit()
     finally:
         await db.close()
@@ -304,11 +324,28 @@ async def _run_update(
 async def execute_yucgoutreach_run(run_id: int) -> None:
     db = await get_db()
     try:
-        cur = await db.execute("SELECT * FROM yucgoutreach_discovery_runs WHERE id = ?", (run_id,))
+        cur = await db.execute(
+            """SELECT r.*, u.is_active AS member_is_active
+               FROM yucgoutreach_discovery_runs r
+               JOIN users u ON u.id=r.user_id
+               WHERE r.id=? AND r.lease_token=? AND r.status='running'""",
+            (run_id, _active_lease.get()),
+        )
         row = await cur.fetchone()
         if not row:
             return
         spec = row_to_dict(row)
+        if spec.get("status") != "running":
+            return
+        if not spec.get("member_is_active"):
+            await _run_update(
+                run_id,
+                status="failed",
+                progress_pct=100.0,
+                error_message="Member account is inactive; create a new search after reactivation",
+                completed=True,
+            )
+            return
     finally:
         await db.close()
 
@@ -478,6 +515,15 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     inserted = 0
     db = await get_db()
     try:
+        await db.execute("BEGIN IMMEDIATE")
+        owns_run = await (await db.execute(
+            """SELECT 1 FROM yucgoutreach_discovery_runs
+               WHERE id=? AND lease_token=? AND status='running'""",
+            (run_id, _active_lease.get()),
+        )).fetchone()
+        if not owns_run:
+            await db.rollback()
+            raise DiscoveryLeaseLost("Discovery lease was replaced before results were saved")
         for idx, c in enumerate(candidates):
             name = (c.get("name") or "").strip()
             first, last = _split_first_last(name)
@@ -538,12 +584,25 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             )
             inserted += 1
             if idx % 10 == 0:
-                await _run_update(
-                    run_id,
-                    progress_pct=90.0 + (idx / max(len(candidates), 1)) * 8.0,
-                    progress_message=f"Saving prospects {idx + 1}/{len(candidates)}…",
-                    prospects_count=inserted,
+                lease_minutes = max(5, min(int(os.getenv("DISCOVERY_LEASE_MINUTES", "30") or 30), 180))
+                progress = 90.0 + (idx / max(len(candidates), 1)) * 8.0
+                updated = await db.execute(
+                    """UPDATE yucgoutreach_discovery_runs
+                       SET progress_pct=?, progress_message=?, prospects_count=?,
+                           updated_at=CURRENT_TIMESTAMP, lease_expires_at=datetime('now', ?)
+                       WHERE id=? AND lease_token=? AND status='running'""",
+                    (
+                        progress,
+                        f"Saving prospects {idx + 1}/{len(candidates)}…",
+                        inserted,
+                        f"+{lease_minutes} minutes",
+                        run_id,
+                        _active_lease.get(),
+                    ),
                 )
+                if updated.rowcount != 1:
+                    await db.rollback()
+                    raise DiscoveryLeaseLost("Discovery lease was replaced while results were saved")
         await db.commit()
     finally:
         await db.close()
@@ -571,9 +630,12 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     )
 
 
-async def _yucgoutreach_run_guard(run_id: int) -> None:
+async def _yucgoutreach_run_guard(run_id: int, lease_token: str) -> None:
+    context = _active_lease.set(lease_token)
     try:
         await execute_yucgoutreach_run(run_id)
+    except DiscoveryLeaseLost:
+        return
     except Exception as e:
         await _run_update(
             run_id,
@@ -582,6 +644,86 @@ async def _yucgoutreach_run_guard(run_id: int) -> None:
             error_message=str(e),
             completed=True,
         )
+    finally:
+        _active_lease.reset(context)
+
+
+async def recover_interrupted_yucgoutreach_runs() -> int:
+    """Requeue expired leases once; active workers keep their jobs."""
+    db = await get_db()
+    try:
+        max_attempts = max(1, min(int(os.getenv("DISCOVERY_MAX_ATTEMPTS", "2") or 2), 5))
+        await db.execute(
+            """UPDATE yucgoutreach_discovery_runs
+               SET status='failed', progress_pct=100,
+                   progress_message='Search stopped after repeated worker interruption',
+                   error_message='Automatic retry limit reached; create a new search to retry',
+                   completed_at=CURRENT_TIMESTAMP, lease_token=NULL, lease_expires_at=NULL,
+                   updated_at=CURRENT_TIMESTAMP
+               WHERE status='running' AND (lease_expires_at IS NULL OR datetime(lease_expires_at)<=datetime('now'))
+                 AND attempt_count>=?""",
+            (max_attempts,),
+        )
+        cursor = await db.execute(
+            """UPDATE yucgoutreach_discovery_runs
+               SET status='queued', progress_message='Recovered after application restart',
+                   updated_at=CURRENT_TIMESTAMP, error_message=NULL, lease_token=NULL, lease_expires_at=NULL
+               WHERE status='running' AND (lease_expires_at IS NULL OR datetime(lease_expires_at)<=datetime('now'))
+                 AND attempt_count<? RETURNING id""",
+            (max_attempts,),
+        )
+        recovered = await cursor.fetchall()
+        await db.commit()
+        return len(recovered)
+    finally:
+        await db.close()
+
+
+async def drain_queued_yucgoutreach_runs() -> dict:
+    """Claim one durable search. Conditional update prevents two schedulers taking it."""
+    db = await get_db()
+    run_id = None
+    try:
+        await recover_interrupted_yucgoutreach_runs()
+        await db.execute(
+            """UPDATE yucgoutreach_discovery_runs
+               SET status='failed', progress_pct=100, completed_at=CURRENT_TIMESTAMP,
+                   progress_message='Search cancelled because the member account is inactive',
+                   error_message='Member account is inactive', updated_at=CURRENT_TIMESTAMP
+               WHERE status='queued' AND NOT EXISTS (
+                   SELECT 1 FROM users u WHERE u.id=yucgoutreach_discovery_runs.user_id AND u.is_active=1
+               )"""
+        )
+        await db.commit()
+        row = await (await db.execute(
+            """SELECT r.id FROM yucgoutreach_discovery_runs r
+               JOIN users u ON u.id=r.user_id AND u.is_active=1
+               WHERE r.status='queued' ORDER BY r.id LIMIT 1"""
+        )).fetchone()
+        if not row:
+            return {"ok": True, "claimed": 0}
+        run_id = int(row["id"])
+        lease_minutes = max(5, min(int(os.getenv("DISCOVERY_LEASE_MINUTES", "30") or 30), 180))
+        lease_token = uuid.uuid4().hex
+        claimed = await (await db.execute(
+            """UPDATE yucgoutreach_discovery_runs
+               SET status='running', progress_message='Starting', updated_at=CURRENT_TIMESTAMP,
+                   attempt_count=attempt_count+1, lease_token=?, lease_expires_at=datetime('now', ?)
+               WHERE id=? AND status='queued' AND EXISTS (
+                   SELECT 1 FROM users u WHERE u.id=yucgoutreach_discovery_runs.user_id AND u.is_active=1
+               ) RETURNING id""",
+            (lease_token, f"+{lease_minutes} minutes", run_id),
+        )).fetchone()
+        if not claimed:
+            await db.rollback()
+            return {"ok": True, "claimed": 0}
+        # A recovered job may have committed partial output before the process died.
+        await db.execute("DELETE FROM yucgoutreach_prospects WHERE run_id=?", (run_id,))
+        await db.commit()
+    finally:
+        await db.close()
+    await _yucgoutreach_run_guard(run_id, lease_token)
+    return {"ok": True, "claimed": 1, "run_id": run_id}
 
 
 async def build_yucgoutreach_excel_bytes(run_id: int) -> bytes:

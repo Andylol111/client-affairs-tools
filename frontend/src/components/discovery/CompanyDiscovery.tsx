@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
+import { Link } from 'react-router-dom';
 
 type RunRow = {
   id: number;
@@ -56,6 +57,7 @@ export default function CompanyDiscovery() {
   const [info, setInfo] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importedCompany, setImportedCompany] = useState<string | null>(null);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -287,6 +289,7 @@ export default function CompanyDiscovery() {
                   try {
                     const res = await api.yucgoutreach.importContacts(selected.id);
                     setInfo(`Imported: ${res.created} new, ${res.updated} updated, ${res.skipped} skipped.`);
+                    setImportedCompany(selected.company_name);
                   } catch (e) {
                     setError(e instanceof Error ? e.message : 'Import failed');
                   } finally {
@@ -296,6 +299,14 @@ export default function CompanyDiscovery() {
               >
                 {importing ? 'Importing…' : 'Import to Contacts'}
               </button>
+              {importedCompany === selected.company_name && (
+                <Link
+                  to={`/studio?q=${encodeURIComponent(selected.company_name)}`}
+                  className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50"
+                >
+                  Draft outreach
+                </Link>
+              )}
               <button
                 type="button"
                 className="px-3 py-2 rounded-lg border border-red-200 text-sm font-medium text-red-800 bg-white hover:bg-red-50"

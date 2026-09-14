@@ -31,6 +31,7 @@ runs:
           test_environment_security.py \
           test_sender_isolation.py \
           test_dispatch_safety.py \
+          test_outreach_pipeline.py \
           test_workspace_boundaries.py \
           test_membership_admission.py \
           test_telemetry_security.py \

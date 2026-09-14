@@ -32,6 +32,10 @@ from app.routers.campaigns import drain_releasing_campaigns
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
 from app.services.gmail_reply_sync import sync_replies_all_senders
+from app.services.yucgoutreach_discovery import (
+    drain_queued_yucgoutreach_runs,
+    recover_interrupted_yucgoutreach_runs,
+)
 
 # CORS: use CORS_ORIGINS env (comma-separated) when going public; default localhost for dev
 _default_origins = [
@@ -45,11 +49,22 @@ CORS_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _co
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await recover_interrupted_yucgoutreach_runs()
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        drain_queued_yucgoutreach_runs,
+        "interval",
+        seconds=10,
+        id="company_discovery_queue",
+        max_instances=1,
+        coalesce=True,
+    )
     if os.getenv('APP_ENV', 'production').lower() == 'beta':
         # Beta neither sends mail nor synchronizes real Gmail accounts in background jobs.
+        scheduler.start()
         yield
+        scheduler.shutdown(wait=False)
         return
-    scheduler = AsyncIOScheduler()
     scheduler.add_job(
         run_follow_up_sequences,
         "cron",
