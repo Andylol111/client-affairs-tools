@@ -25,7 +25,7 @@ class YucgOutreachRunCreate(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=500)
     company_domain: str | None = Field(None, max_length=255)
     linkedin_company_url: str | None = Field(None, max_length=2048)
-    max_prospects: int = Field(100, ge=1, le=500)
+    max_prospects: int = Field(250, ge=1, le=800)
     worker_concurrency: int = Field(4, ge=1, le=16)
 
 

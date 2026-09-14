@@ -120,7 +120,7 @@ export default function Outreach() {
   const [inboxSyncBanner, setInboxSyncBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const refreshContactsAndMetrics = async () => {
-    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 200 };
+    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 1000 };
     if (contactSearch.trim()) params.q = contactSearch.trim();
     if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
     try {
@@ -137,7 +137,7 @@ export default function Outreach() {
   };
 
   useEffect(() => {
-    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 200 };
+    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 1000 };
     if (contactSearch.trim()) params.q = contactSearch.trim();
     if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
     const controller = new AbortController();
@@ -286,7 +286,7 @@ export default function Outreach() {
       const res = await api.contacts.bulkDelete(ids);
       setSelectedContactIds(new Set());
       if (selectedContact?.id && ids.includes(selectedContact.id)) setSelectedContact(null);
-      const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 200 };
+      const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 1000 };
       if (contactSearch.trim()) params.q = contactSearch.trim();
       if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
       api.contacts.list(params).then((page) => setContacts(page.items)).catch(() => setContacts([]));

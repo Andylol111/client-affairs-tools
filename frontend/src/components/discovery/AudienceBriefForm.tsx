@@ -12,7 +12,7 @@ const specFields: Array<{ key: keyof Pick<AudienceSpec, 'industries' | 'companie
   { key: 'exclusions', label: 'Exclusions', hint: 'For example: support desks, recruiters, agencies' },
 ];
 
-const emptySpec: AudienceSpec = { industries: [], companies: [], geography: [], size: [], roles: [], seniority: [], people_per_company: 1, exclusions: [], reason: '' };
+const emptySpec: AudienceSpec = { industries: [], companies: [], geography: [], size: [], roles: [], seniority: [], people_per_company: 25, exclusions: [], reason: '' };
 
 export default function AudienceBriefForm({
   projects, brief, busy, onSave,
@@ -48,8 +48,8 @@ export default function AudienceBriefForm({
     </div>)}
     <div className="research-brief-field">
       <label htmlFor="spec-people">People per company</label>
-      <input id="spec-people" type="number" min={1} max={10} value={spec.people_per_company} onChange={(event) => setSpec((current) => ({ ...current, people_per_company: Math.min(10, Math.max(1, Number(event.target.value) || 1)) }))} />
-      <p>The research run stops after this many useful people per company.</p>
+      <input id="spec-people" type="number" min={1} max={100} value={spec.people_per_company} onChange={(event) => setSpec((current) => ({ ...current, people_per_company: Math.min(100, Math.max(1, Number(event.target.value) || 25)) }))} />
+      <p>How many people to collect per company. Use 25–50 for a working list, up to 100 when you need volume.</p>
     </div>
     <div className="research-brief-field">
       <label htmlFor="spec-reason">Reason the club can contact this audience</label>

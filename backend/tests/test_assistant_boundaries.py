@@ -96,7 +96,11 @@ async def run():
         assert 'Project Acme' in prompt and 'Confidential pricing' not in prompt
         assert result['sources']==[{'id':'D2-C1','document_id':2,'title':'Project brief','project_name':'Shared project'}]
         assert completion.call_args.kwargs=={'user_id':2,'purpose':'assistant','max_tokens':900}
-        await denied(assistant_service.answer({'id':2},'Private pricing',document_ids=[1]),422)
+        private=MagicMock(return_value='I cannot see a matching document.')
+        with patch.object(assistant_service,'complete_text',private):
+            blocked=await assistant_service.answer({'id':2},'Private pricing',document_ids=[1])
+        assert 'Confidential pricing' not in private.call_args.args[0]
+        assert blocked['pending_actions']==[]
 
         generated={'answer':'Grounded [D2-C1]','sources':result['sources'],'model':'haiku','grounded':True}
         with patch.object(assistant,'answer',AsyncMock(return_value=generated)):

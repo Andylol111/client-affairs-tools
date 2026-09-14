@@ -28,7 +28,7 @@ class AiRecommendRequest(BaseModel):
     sector: str | None = None
     contact_type: str | None = None
     min_incentive_score: float | None = Field(None, ge=0, le=100)
-    n: int = Field(5, ge=1, le=10)
+    n: int = Field(8, ge=1, le=25)
     model: str | None = None
 
 

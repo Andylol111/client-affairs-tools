@@ -15,14 +15,14 @@ router = APIRouter()
 
 
 class ResearchSpec(BaseModel):
-    industries: list[str] = Field(default_factory=list, max_length=12)
-    companies: list[str] = Field(default_factory=list, max_length=12)
-    geography: list[str] = Field(default_factory=list, max_length=8)
-    size: list[str] = Field(default_factory=list, max_length=4)
-    roles: list[str] = Field(default_factory=list, max_length=12)
-    seniority: list[str] = Field(default_factory=list, max_length=6)
-    people_per_company: int = Field(default=2, ge=1, le=10)
-    exclusions: list[str] = Field(default_factory=list, max_length=12)
+    industries: list[str] = Field(default_factory=list, max_length=24)
+    companies: list[str] = Field(default_factory=list, max_length=80)
+    geography: list[str] = Field(default_factory=list, max_length=16)
+    size: list[str] = Field(default_factory=list, max_length=8)
+    roles: list[str] = Field(default_factory=list, max_length=24)
+    seniority: list[str] = Field(default_factory=list, max_length=12)
+    people_per_company: int = Field(default=25, ge=1, le=100)
+    exclusions: list[str] = Field(default_factory=list, max_length=24)
     reason: str = Field(min_length=1, max_length=2000)
 
 

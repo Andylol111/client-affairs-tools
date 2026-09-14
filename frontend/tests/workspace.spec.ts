@@ -31,7 +31,8 @@ async function mockWorkspace(page: Page) {
     else if (path === '/api/assistant/sources') body = [{ id: 1, title: 'Project report 1', owner_user_id: 1, project_id: 1, project_name: 'Consulting project', visibility: 'project', current_version: 1, index_state: 'ready', character_count: 4200 }];
     else if (path === '/api/assistant/threads') body = [];
     else if (path === '/api/assistant/usage') body = { member_requests: 0, club_requests: 0, member_input_tokens: 0, member_output_tokens: 0, club_input_tokens: 0, club_output_tokens: 0, member_estimated_usd: 0, club_estimated_usd: 0, pricing_note: 'Estimate' };
-    else if (path === '/api/assistant/ask') body = { answer: 'Use the approved project evidence [D1-C1].', thread_id: 9, model: 'haiku', grounded: true, sources: [{ id: 'D1-C1', document_id: 1, title: 'Project report 1', project_name: 'Consulting project' }] };
+    else if (path === '/api/assistant/ask') body = { answer: 'Use the approved project evidence [D1-C1].', thread_id: 9, model: 'haiku', grounded: true, sources: [{ id: 'D1-C1', document_id: 1, title: 'Project report 1', project_name: 'Consulting project' }], pending_actions: [], navigations: [], lookups: [] };
+    else if (path === '/api/assistant/act') body = { ok: true, answer: 'Started Find people run #12 for Acme.', navigations: [{ path: '/scraper', label: 'Open Find contacts' }] };
     else if (/\/documents\/\d+\/versions$/.test(path)) body = [{ id: 1, state: 'ready', filename: 'report.pdf', byte_size: 1000, created_at: 1788960000 }];
     else if (/\/documents\/\d+\/shares$/.test(path)) body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
@@ -99,7 +100,7 @@ test('workspace scroll keeps navigation stable without a fixed backdrop', async 
   await page.screenshot({ path: testInfo.outputPath('documents-scrolled.png'), fullPage: false });
 });
 
-for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/assistant', 'Assistant'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
+for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
   test(`accessible page: ${title}`, async ({ page }, testInfo) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -110,13 +111,138 @@ for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/docu
 }
 
 test('assistant keeps source scope visible and returns document citations', async ({ page }) => {
-  await page.goto('/assistant');
-  await expect(page.getByText('Claude Haiku 4.5 on Amazon Bedrock')).toBeVisible();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await expect(page.getByRole('dialog', { name: 'Assistant' })).toBeVisible();
+  await expect(page.getByText('It cannot send mail or delete records.')).toBeVisible();
   await page.getByLabel('Question or task').fill('Build an evidence-based plan');
   await page.getByRole('button', { name: 'Ask assistant' }).click();
   await expect(page.getByText('Use the approved project evidence')).toBeVisible();
   await expect(page.getByRole('link', { name: '[D1-C1] Project report 1' })).toHaveAttribute('href', '/documents?q=Project%20report%201');
   await expect(page.getByText('This hour: 0/15')).toBeVisible();
+});
+
+test('assistant can propose Find people and only runs it after confirm', async ({ page }) => {
+  const mutations: string[] = [];
+  await page.route('**/api/assistant/ask', async route => {
+    mutations.push(`ASK ${route.request().postDataJSON()?.question}`);
+    return route.fulfill({
+      json: {
+        answer: 'I can start a Find people run for Acme after you confirm.',
+        thread_id: 9,
+        model: 'haiku',
+        grounded: false,
+        sources: [],
+        pending_actions: [{ tool: 'start_find_people', args: { company_name: 'Acme', max_prospects: 250 }, summary: 'Find people at Acme (up to 250)' }],
+        navigations: [{ path: '/scraper', label: 'Find contacts' }],
+        lookups: [{ tool: 'search_contacts', data: { count: 0, contacts: [] } }],
+      },
+    });
+  });
+  await page.route('**/api/assistant/act', async route => {
+    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
+    return route.fulfill({ json: { ok: true, answer: 'Started Find people run #12 for Acme.', navigations: [{ path: '/scraper', label: 'Open Find contacts' }] } });
+  });
+  await page.goto('/outreach');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('Find people at Acme');
+  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await expect(page.getByRole('button', { name: 'Confirm: Find people at Acme (up to 250)' })).toBeVisible();
+  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
+  await page.getByRole('button', { name: 'Confirm: Find people at Acme (up to 250)' }).click();
+  await expect(page.getByText('Started Find people run #12 for Acme.')).toBeVisible();
+  expect(mutations).toContain('ACT start_find_people');
+  expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
+  await expect(page).toHaveURL(/\/scraper/);
+});
+
+test('assistant indexes an owned document from the bubble', async ({ page }) => {
+  let indexed = false;
+  await page.route('**/api/assistant/sources', route => route.fulfill({
+    json: [{
+      id: 1, title: 'Project report 1', owner_user_id: 1, project_id: 1, project_name: 'Consulting project',
+      visibility: 'project', current_version: 1, index_state: 'error', character_count: 0, last_error: 'retry',
+    }],
+  }));
+  await page.route('**/api/assistant/documents/1/index', async route => {
+    indexed = true;
+    return route.fulfill({ json: { state: 'ready', chunks: 2, characters: 100 } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByRole('button', { name: 'Index for assistant' }).click();
+  expect(indexed).toBe(true);
+});
+
+test('assistant restores a thread and starts a new chat', async ({ page }) => {
+  await page.route('**/api/assistant/threads', route => route.fulfill({
+    json: [{ id: 9, title: 'Find Acme', created_at: 1, updated_at: 2 }],
+  }));
+  await page.route('**/api/assistant/threads/9', route => route.fulfill({
+    json: [
+      { id: 1, role: 'user', content: 'Find people at Acme', created_at: 1, sources: [] },
+      { id: 2, role: 'assistant', content: 'Confirm to start the run.', created_at: 2, sources: [] },
+    ],
+  }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByRole('button', { name: 'Find Acme' }).click();
+  await expect(page.getByText('Confirm to start the run.')).toBeVisible();
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await expect(page.getByText('Writes wait for a confirm button.')).toBeVisible();
+});
+
+test('assistant import confirm opens Pipeline and never sends mail', async ({ page }) => {
+  const mutations: string[] = [];
+  await page.route('**/api/assistant/ask', async route => {
+    mutations.push(`ASK ${route.request().postDataJSON()?.tool || route.request().postDataJSON()?.question}`);
+    return route.fulfill({
+      json: {
+        answer: 'I can import run 7 after you confirm.',
+        thread_id: 9,
+        model: 'haiku',
+        grounded: false,
+        sources: [],
+        pending_actions: [{ tool: 'import_run_to_contacts', args: { run_id: 7 }, summary: 'Import run #7 into Contacts' }],
+        navigations: [{ path: '/outreach', label: 'Open Pipeline' }],
+        lookups: [],
+      },
+    });
+  });
+  await page.route('**/api/assistant/act', async route => {
+    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
+    return route.fulfill({ json: { ok: true, answer: 'Imported into Contacts: 1 new, 0 updated, 0 skipped.', navigations: [{ path: '/outreach', label: 'Open Pipeline' }] } });
+  });
+  await page.goto('/scraper');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('Import the last run');
+  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await expect(page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' })).toBeVisible();
+  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
+  await page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' }).click();
+  await expect(page.getByText('Imported into Contacts: 1 new')).toBeVisible();
+  expect(mutations).toContain('ACT import_run_to_contacts');
+  expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
+  await expect(page).toHaveURL(/\/outreach/);
+});
+
+test('assistant ask failures restore the question and never call act', async ({ page }) => {
+  const mutations: string[] = [];
+  await page.route('**/api/assistant/ask', async route => {
+    mutations.push('ASK');
+    return route.fulfill({ status: 429, json: { detail: 'Too many assistant requests this hour' } });
+  });
+  await page.route('**/api/assistant/act', async route => {
+    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('Find people at Acme');
+  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await expect(page.getByRole('alert')).toContainText('Too many assistant requests this hour');
+  await expect(page.getByLabel('Question or task')).toHaveValue('Find people at Acme');
+  expect(mutations).toEqual(['ASK']);
 });
 
 test('checking an uncertain dispatch never calls a send endpoint', async ({ page }) => {

@@ -47,8 +47,8 @@ def public_url(value: str) -> bool:
 
 async def reserve_request(actor_id: int, provider: str, key: str) -> tuple[int, object | None]:
     """Reserve before I/O; a crash consumes capacity rather than risking paid overflow."""
-    club_cap = max(0, min(1000, int(os.getenv(f'RESEARCH_{provider.upper()}_DAILY_LIMIT', '60'))))
-    member_cap = max(0, min(club_cap, int(os.getenv('RESEARCH_MEMBER_DAILY_LIMIT', '20'))))
+    club_cap = max(0, min(1000, int(os.getenv(f'RESEARCH_{provider.upper()}_DAILY_LIMIT', '200'))))
+    member_cap = max(0, min(club_cap, int(os.getenv('RESEARCH_MEMBER_DAILY_LIMIT', '80'))))
     db = await get_db()
     try:
         await db.execute('BEGIN IMMEDIATE')

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../../api';
-import { legacyMailboxLabel } from '../../lib/contactEvidence';
 import { Link } from 'react-router-dom';
+import { api } from '../../api';
+import CompanyAutocomplete, { CompanySuggestions, type CompanyOption } from '../CompanyAutocomplete';
+import { legacyMailboxLabel } from '../../lib/contactEvidence';
 
 type RunRow = {
   id: number;
@@ -42,7 +43,12 @@ export default function CompanyDiscovery() {
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
   const [linkedinUrl, setLinkedinUrl] = useState('');
-  const [maxProspects, setMaxProspects] = useState(100);
+  const [maxProspects, setMaxProspects] = useState(250);
+
+  const applyCompany = (option: CompanyOption) => {
+    setCompanyName(option.name);
+    if (option.domain) setDomain(option.domain);
+  };
   const [submitting, setSubmitting] = useState(false);
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -73,7 +79,7 @@ export default function CompanyDiscovery() {
     try {
       const [run, pros] = await Promise.all([
         api.yucgoutreach.getRun(selectedId),
-        api.yucgoutreach.listProspects(selectedId, 500),
+        api.yucgoutreach.listProspects(selectedId, 800),
       ]);
       setRuns((prev) => {
         const others = prev.filter((r) => r.id !== selectedId);
@@ -89,7 +95,7 @@ export default function CompanyDiscovery() {
     if (selectedId == null) return;
     Promise.all([
       api.yucgoutreach.getRun(selectedId),
-      api.yucgoutreach.listProspects(selectedId, 500),
+      api.yucgoutreach.listProspects(selectedId, 800),
     ]).then(([run, pros]) => {
       setRuns((prev) => {
         const others = prev.filter((r) => r.id !== selectedId);
@@ -138,19 +144,14 @@ export default function CompanyDiscovery() {
 
   return (
     <div className="space-y-8" data-section="yucgoutreach-discovery">
-      <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-deep-navy mb-3">Company discovery pipeline</h2>
-        <ol className="list-decimal list-inside text-sm text-slate-700 space-y-2">
-          <li>
-            <strong>Parallel sources</strong> — website, LinkedIn (Apify), Tavily search.
-          </li>
-          <li>
-            <strong>Review addresses</strong> — checks format, the company’s mail domain, and available source evidence. A later reply or permanent bounce provides stronger evidence about that address.
-          </li>
-          <li>
-            <strong>Export or import</strong> — Excel or main Contacts.
-          </li>
-        </ol>
+      <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-deep-navy mb-1">Look up a company</h2>
+          <p className="text-sm text-slate-600">
+            Search the outreach company list and target spreadsheet, then run a high-volume people search. People appear here as each source is checked.
+          </p>
+        </div>
+        <CompanySuggestions onPick={applyCompany} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
@@ -158,7 +159,7 @@ export default function CompanyDiscovery() {
           onSubmit={onSubmit}
           className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4"
         >
-          <h2 className="text-lg font-semibold text-deep-navy">Start a run</h2>
+          <h2 className="text-lg font-semibold text-deep-navy">Find people</h2>
           {error && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
           )}
@@ -167,15 +168,17 @@ export default function CompanyDiscovery() {
               {info}
             </div>
           )}
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Company name *</label>
-            <input
-              className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
-              aria-label="Company name" value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="Apple"
-            />
-          </div>
+          <CompanyAutocomplete
+            id="discovery-company"
+            label="Company"
+            value={companyName}
+            placeholder="Search pipeline and target-list companies"
+            onChange={(name, option) => {
+              setCompanyName(name);
+              if (option?.domain) setDomain(option.domain);
+            }}
+            onSelect={applyCompany}
+          />
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Domain (recommended)</label>
             <input
@@ -194,14 +197,14 @@ export default function CompanyDiscovery() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Max prospects (up to 500)</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">People to collect (up to 800)</label>
             <input
               type="number"
               min={1}
-              max={500}
+              max={800}
               className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
               aria-label="Maximum prospects" value={maxProspects}
-              onChange={(e) => setMaxProspects(Number(e.target.value) || 100)}
+              onChange={(e) => setMaxProspects(Math.min(800, Math.max(25, Number(e.target.value) || 250)))}
             />
           </div>
           <button
@@ -209,7 +212,7 @@ export default function CompanyDiscovery() {
             disabled={submitting}
             className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-deep-navy text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
           >
-            {submitting ? 'Starting…' : 'Run discovery'}
+            {submitting ? 'Starting…' : 'Find people'}
           </button>
         </form>
 
@@ -250,7 +253,16 @@ export default function CompanyDiscovery() {
               <h2 className="text-lg font-semibold text-deep-navy">
                 Run #{selected.id}: {selected.company_name}
               </h2>
-              <p className="text-sm text-slate-600 mt-1">{selected.progress_message || selected.status}</p>
+              <p className="text-sm text-slate-600 mt-1" role="status">
+                {selected.progress_message || selected.status}
+                {prospects.length ? ` · ${prospects.length} people found so far` : ''}
+                {selected.max_prospects ? ` of ${selected.max_prospects}` : ''}
+              </p>
+              {(selected.status === 'running' || selected.status === 'queued') && (
+                <div className="mt-3 h-2.5 rounded-full bg-pale-sky/70 overflow-hidden" aria-hidden>
+                  <div className="h-full bg-[var(--btn-primary-bg)] transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(4, selected.progress_pct || 0))}%` }} />
+                </div>
+              )}
               {selected.error_message && <p className="text-sm text-red-700 mt-2">{selected.error_message}</p>}
             </div>
             <div className="flex flex-wrap gap-2">
