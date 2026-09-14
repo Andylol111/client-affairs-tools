@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../api';
 import CompanyAutocomplete, { CompanySuggestions, type CompanyOption } from '../CompanyAutocomplete';
 import { legacyMailboxLabel } from '../../lib/contactEvidence';
@@ -40,10 +40,15 @@ function aiLabel(verdict?: string | null): string {
 }
 
 export default function CompanyDiscovery() {
-  const [companyName, setCompanyName] = useState('');
-  const [domain, setDomain] = useState('');
-  const [linkedinUrl, setLinkedinUrl] = useState('');
-  const [maxProspects, setMaxProspects] = useState(250);
+  const [params] = useSearchParams();
+  const [companyName, setCompanyName] = useState(() => params.get('company') || '');
+  const [domain, setDomain] = useState(() => params.get('domain') || '');
+  const [linkedinUrl, setLinkedinUrl] = useState(() => params.get('linkedin') || '');
+  const [titleHints, setTitleHints] = useState(() => params.get('titles') || '');
+  const [maxProspects, setMaxProspects] = useState(() => {
+    const raw = Number(params.get('max') || 250);
+    return Number.isFinite(raw) ? Math.min(800, Math.max(25, raw)) : 250;
+  });
 
   const applyCompany = (option: CompanyOption) => {
     setCompanyName(option.name);
@@ -179,6 +184,16 @@ export default function CompanyDiscovery() {
             }}
             onSelect={applyCompany}
           />
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Titles to prioritize</label>
+            <input
+              className="w-full rounded-lg border border-pale-sky px-3 py-2 text-sm"
+              aria-label="Titles to prioritize"
+              value={titleHints}
+              onChange={(e) => setTitleHints(e.target.value)}
+              placeholder="VPs, project managers"
+            />
+          </div>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Domain (recommended)</label>
             <input

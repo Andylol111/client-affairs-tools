@@ -49,13 +49,13 @@ _JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
 
 def operator_system_prompt() -> str:
     return """You are the in-app operator for YUCG client tools.
-You are a website harness: walk the signed-in member through this app's pages and allowlisted tools. You are not a document chatbot and you are not a free-roaming researcher.
-Indexed documents are optional. An empty source block is normal and is not an error. Do not stall, apologize for missing files, or ask them to upload before using site tools.
-Prioritize knowledge the member already has. Grill them for missing facts only they would know (target titles, company domain, LinkedIn company URL, who they already spoke to) instead of inventing a plan, contacts, or emails.
-You cannot send mail, delete records, change campaign ownership, download models, or claim a write happened until they confirm.
+You are a website harness: fill this app's forms and allowlisted tools. You are not a document chatbot and you are not a free-roaming researcher.
+Indexed documents are optional. An empty source block is normal. Do not stall or ask them to upload before using site tools.
+When they want people at a company, fill Find people (company, titles, domain, LinkedIn URL) and ask only for facts they did not already give. Do not invent contacts, emails, domains, or LinkedIn URLs.
+You cannot send mail, delete records, change campaign ownership, or claim a write happened until they confirm.
 
 Site map:
-- /scraper Find contacts (start a people search)
+- /scraper Find contacts (Find people form)
 - /outreach Pipeline
 - /studio Drafts
 - /yucgoutreach Target lists
@@ -70,15 +70,16 @@ Reply with a single JSON object:
 {
   "answer": "plain language reply the member will read",
   "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|search_person", "args": {}}],
+  "ask": [{"id": "titles|company_domain|linkedin_company_url", "label": "field label", "value": "prefill if they already said it", "required": true, "placeholder": "hint"}],
   "propose": [{"tool": "start_find_people|import_run_to_contacts", "args": {}, "summary": "short confirm label"}],
-  "open": [{"path": "/scraper|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/analytics|/", "label": "button label"}]
+  "open": [{"path": "/scraper?view=company&company=Name|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/analytics|/", "label": "button label"}]
 }
 Rules:
 - Use at most three reads. search_contacts args: q or company. get_discovery_run args: run_id. search_person args: name, optional company. start_find_people args: company_name, optional company_domain, linkedin_company_url, max_prospects (default 250, max 800).
-- Propose start_find_people when the member wants people at a named company. Do not run it yourself.
-- Ask at most two pointed questions about facts the member knows. Do not fill those gaps yourself.
+- For Find people: always emit ask fields for titles (required), company_domain, and linkedin_company_url. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain/linkedin when known).
+- Propose start_find_people for a named company. Do not run it yourself.
 - Never emit send, delete, scrape-stream, or admin tools.
-- If documents do not help, still answer using site tools."""
+- If documents do not help, still operate site tools."""
 
 
 def parse_operator_payload(raw: str) -> dict[str, Any] | None:
@@ -108,6 +109,40 @@ def sanitize_reads(items: Any) -> list[dict[str, Any]]:
             continue
         args = item.get("args") if isinstance(item.get("args"), dict) else {}
         out.append({"tool": tool, "args": args})
+    return out
+
+
+ASK_FIELDS = {
+    "titles": {"label": "Titles to prioritize", "placeholder": "VPs, project managers", "required": True},
+    "company_domain": {"label": "Company domain", "placeholder": "garmin.com", "required": False},
+    "linkedin_company_url": {"label": "LinkedIn company URL", "placeholder": "https://www.linkedin.com/company/garmin", "required": False},
+}
+
+
+def sanitize_ask(items: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(items, list):
+        return out
+    seen: set[str] = set()
+    for item in items[:6]:
+        if not isinstance(item, dict):
+            continue
+        field_id = str(item.get("id") or "").strip()
+        spec = ASK_FIELDS.get(field_id)
+        if not spec or field_id in seen:
+            continue
+        seen.add(field_id)
+        value = str(item.get("value") or "").strip()[:500]
+        label = str(item.get("label") or spec["label"]).strip()[:80] or spec["label"]
+        placeholder = str(item.get("placeholder") or spec["placeholder"]).strip()[:120] or spec["placeholder"]
+        required = spec["required"] if item.get("required") is None else bool(item.get("required"))
+        out.append({
+            "id": field_id,
+            "label": label,
+            "value": value,
+            "required": required,
+            "placeholder": placeholder,
+        })
     return out
 
 

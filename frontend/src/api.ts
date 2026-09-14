@@ -364,6 +364,7 @@ export const api = {
         lookups?: Array<{ tool: string; data: unknown }>;
         pending_actions?: Array<{ tool: string; args: Record<string, unknown>; summary: string }>;
         navigations?: Array<{ path: string; label: string }>;
+        asks?: Array<{ id: string; label: string; value: string; required: boolean; placeholder?: string }>;
       }>('/api/assistant/ask', {
         method: 'POST', body: JSON.stringify(data),
       }),
