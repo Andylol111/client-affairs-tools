@@ -12,8 +12,11 @@ import re
 import uuid
 from contextvars import ContextVar
 from typing import Any
+import logging
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db, row_to_dict
 from app.services.contact_ai_review import _log_row
@@ -647,6 +650,12 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         ),
         completed=True,
     )
+    try:
+        from app.services.roster_watch import remember_discovery_people
+
+        await remember_discovery_people(company, domain, candidates)
+    except Exception:
+        logger.exception("roster remember after Find people failed")
 
 
 async def _yucgoutreach_run_guard(run_id: int, lease_token: str) -> None:
