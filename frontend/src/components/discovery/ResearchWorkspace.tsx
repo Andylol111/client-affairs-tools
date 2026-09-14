@@ -24,34 +24,66 @@ export default function ResearchWorkspace({ projects }: { projects: Project[] })
   const [busy, setBusy] = useState(false);
   const [researching, setResearching] = useState(false);
 
+  const selectedBriefId = selectedBrief?.id;
+
   const loadBriefs = useCallback(async () => {
     try {
       const { items } = await api.research.briefs();
       setBriefs(items);
-      if (items.length && !selectedBrief) setSelectedBrief(items[0]);
-      else {
-        const current = items.find((item) => item.id === selectedBrief?.id);
-        if (current) setSelectedBrief(current);
-      }
+      setSelectedBrief((current) => {
+        if (items.length && !current) return items[0];
+        return items.find((item) => item.id === current?.id) ?? current;
+      });
     } catch (e) { setError(e instanceof Error ? e.message : 'Research briefs are unavailable right now.'); }
-  }, [selectedBrief]);
+  }, []);
 
   const loadState = useCallback(async () => {
-    if (!selectedBrief) return;
+    if (selectedBriefId == null) return;
     try {
       const [companyPage, jobPage, recommendationPage] = await Promise.all([
-        api.research.companies(selectedBrief.id),
+        api.research.companies(selectedBriefId),
         api.research.jobs(),
-        api.research.recommendations(selectedBrief.id),
+        api.research.recommendations(selectedBriefId),
       ]);
-      setCompanies(companyPage.items.filter((company) => company.brief_id === selectedBrief.id));
-      setJobs(jobPage.items.filter((job) => job.brief_id === selectedBrief.id));
-      setRecommendations(recommendationPage.items.filter((recommendation) => recommendation.brief_id === selectedBrief.id));
+      setCompanies(companyPage.items.filter((company) => company.brief_id === selectedBriefId));
+      setJobs(jobPage.items.filter((job) => job.brief_id === selectedBriefId));
+      setRecommendations(recommendationPage.items.filter((recommendation) => recommendation.brief_id === selectedBriefId));
     } catch (e) { setError(e instanceof Error ? e.message : 'Research results are unavailable right now.'); }
-  }, [selectedBrief]);
+  }, [selectedBriefId]);
 
-  useEffect(() => { loadBriefs(); }, []);
-  useEffect(() => { if (selectedBrief) loadState(); }, [selectedBrief?.id]);
+  useEffect(() => {
+    let cancelled = false;
+    api.research.briefs().then(({ items }) => {
+      if (cancelled) return;
+      setBriefs(items);
+      setSelectedBrief((current) => {
+        if (items.length && !current) return items[0];
+        return items.find((item) => item.id === current?.id) ?? current;
+      });
+    }).catch((e) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : 'Research briefs are unavailable right now.');
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (selectedBriefId == null) return;
+    let cancelled = false;
+    Promise.all([
+      api.research.companies(selectedBriefId),
+      api.research.jobs(),
+      api.research.recommendations(selectedBriefId),
+    ]).then(([companyPage, jobPage, recommendationPage]) => {
+      if (cancelled) return;
+      setCompanies(companyPage.items.filter((company) => company.brief_id === selectedBriefId));
+      setJobs(jobPage.items.filter((job) => job.brief_id === selectedBriefId));
+      setRecommendations(recommendationPage.items.filter((recommendation) => recommendation.brief_id === selectedBriefId));
+    }).catch((e) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : 'Research results are unavailable right now.');
+    });
+    return () => { cancelled = true; };
+  }, [selectedBriefId]);
+
   usePolling(loadState, jobs.some((job) => ['queued', 'running', 'paused'].includes(job.status)) || researching, 5000);
 
   const saveBrief = async (brief: Brief) => {
