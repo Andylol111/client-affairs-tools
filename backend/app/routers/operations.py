@@ -4,7 +4,6 @@ Private and internal only.
 """
 import io
 import json
-import os
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
@@ -195,7 +194,7 @@ async def get_aggregates(
         await db.close()
 
 
-# --- YUCG resources (upload for Ollama context) ---
+# --- Legacy YUCG resource register (read/export compatibility) ---
 @router.get("/resources")
 async def list_resources(admin: dict = Depends(get_current_admin)):
     """List ingested YUCG resources. Admin only."""
@@ -253,62 +252,16 @@ async def upload_resource(file: UploadFile = File(...), admin: dict = Depends(ge
         await db.close()
 
 
-# --- Ollama operations query (internal learning from resources + usage) ---
+# --- Retired local-assistant compatibility route ---
 class OllamaQuery(BaseModel):
     query: str
 
 
 @router.post("/ollama/query")
 async def ollama_operations_query(payload: OllamaQuery, admin: dict = Depends(get_current_admin)):
-    """Ask Ollama about YUCG operations using ingested resources + recent usage summary. Admin only. Runs internally."""
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT name, content_text FROM yucg_resources ORDER BY created_at DESC LIMIT 20"
-        )
-        resources = await cursor.fetchall()
-        resource_context = "\n\n".join(
-            f"--- {r['name']} ---\n{(r['content_text'] or '')[:8000]}" for r in resources
-        )[:30000]
-
-        cursor = await db.execute(
-            """SELECT event_type, resource_type, details_json, created_at FROM usage_events
-               ORDER BY created_at DESC LIMIT 500"""
-        )
-        events = await cursor.fetchall()
-        usage_summary = []
-        for e in events[:200]:
-            usage_summary.append(
-                f"{e['created_at']} | {e['event_type']} | {e['resource_type']} | {e['details_json'] or ''}"
-            )
-        usage_context = "\n".join(usage_summary)[:15000]
-
-        prompt = f"""You are an internal operations analyst for YUCG (Yale Undergraduate Consulting Group). Use ONLY the following context to answer. Be concise and data-driven.
-
-YUCG RESOURCES (uploaded docs):
-{resource_context or '(No resources uploaded yet)'}
-
-RECENT USAGE EVENTS (website user actions):
-{usage_context or '(No events yet)'}
-
-QUESTION: {payload.query}
-
-Answer based only on the above. If the data does not contain enough information, say so. Focus on patterns, efficiency, and what leadership could do to streamline operations."""
-
-        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        import httpx
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(
-                f"{ollama_url.rstrip('/')}/api/generate",
-                json={"model": os.getenv("OLLAMA_MODEL", "llama3.2"), "prompt": prompt, "stream": False},
-            )
-        if r.status_code != 200:
-            return {"answer": None, "error": f"Ollama returned {r.status_code}", "context_used": True}
-        data = r.json()
-        answer = (data.get("response") or "").strip()
-        return {"answer": answer, "error": None, "context_used": True}
-    finally:
-        await db.close()
+    """Prevent old clients from bypassing the document permission and Bedrock cost boundary."""
+    del payload,admin
+    raise HTTPException(410,"Use the permission-filtered /api/assistant workspace")
 
 
 # --- Excel export: insights + user behavior patterns ---

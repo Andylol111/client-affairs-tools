@@ -19,6 +19,7 @@ const YucgOutreach = lazy(() => import('./pages/YucgOutreach'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Profile = lazy(() => import('./pages/Profile'));
 const Documents = lazy(() => import('./pages/Documents'));
+const Assistant = lazy(() => import('./pages/Assistant'));
 
 function AppContent() {
   const [user, setUser] = useState<{ id?: number; email: string; name?: string; picture?: string; role?: string } | null>(null);
@@ -115,6 +116,7 @@ function AppContent() {
         <Route path="admin" element={<Admin />} />
         <Route path="profile" element={<Profile />} />
         <Route path="documents" element={<Documents />} />
+        <Route path="assistant" element={<Assistant />} />
         <Route path="projects" element={<Documents projectsOnly />} />
         <Route path="settings" element={<Navigate to="/profile?tab=settings" replace />} />
       </Route>

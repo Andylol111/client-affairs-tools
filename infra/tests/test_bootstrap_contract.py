@@ -20,6 +20,17 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn('Unsupported environment', stack)
         self.assertIn('`export YUCG_APP_ENV=${appEnv}`', stack)
 
+    def test_bedrock_runtime_is_haiku_only_and_bootstrap_matches_iam(self):
+        script = (ROOT / 'infra/lib/user-data.sh').read_text()
+        stack = (ROOT / 'infra/lib/yucg-outreach-stack.ts').read_text()
+        model = 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
+        self.assertIn(f'BEDROCK_MODEL_ID={model}', script)
+        self.assertIn(f'BEDROCK_RANK_MODEL_ID={model}', script)
+        self.assertIn(f'BEDROCK_ALLOWED_MODEL_IDS={model}', script)
+        self.assertIn(f'["{model}"]', stack)
+        self.assertNotIn('claude-opus', stack.lower())
+        self.assertNotIn('claude-sonnet', stack.lower())
+
 
 if __name__ == '__main__':
     unittest.main()

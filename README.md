@@ -13,6 +13,7 @@ Use `AppUrl`: Home, Projects, Contacts, and Outreach (Drafts, Campaigns, Pipelin
 - SQLite stores the shared application records and access permissions. Private documents remain private; project and club sharing are explicit. Browser `localStorage` is not shared.
 - Draft assistance works with an existing contact or a quick compose. You do not have to use Find contacts first.
 - AI on the host is Bedrock (`LLM_PROVIDER=bedrock`). There is no Ollama on the box.
+- The integrated assistant uses permission-filtered document retrieval and the Haiku-only cost boundary described in [`docs/BEDROCK-ASSISTANT.md`](docs/BEDROCK-ASSISTANT.md).
 
 See the [product system map](docs/PRODUCT-SYSTEM-MAP.md) for ownership and integration boundaries, the [outreach pipeline](docs/OUTREACH-PIPELINE.md) for discovery-to-delivery behavior, and the [product design system](docs/PRODUCT-DESIGN-SYSTEM.md) for navigation, language, components, and staged UX gates.
 

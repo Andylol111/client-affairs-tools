@@ -50,6 +50,8 @@ flowchart LR
 
 CloudFront is the public HTTPS edge. The current application origin is a VPC-origin EC2 instance running one non-root container with the FastAPI API and compiled Vite application. SQLite lives on retained encrypted EBS. S3 is used for the object catalog and is the intended byte store for private documents. Bedrock runs bounded draft/ranking inference. Gmail remains the mail transport.
 
+The Assistant indexes bounded readable text from verified document versions into SQLite and retrieves only owner, current-project, or club-visible chunks. Claude Haiku receives the selected excerpts through Bedrock and returns cited, read-only guidance. See [`BEDROCK-ASSISTANT.md`](BEDROCK-ASSISTANT.md).
+
 The cost-oriented shape is deliberate: keep one small coordinator online, keep large immutable bytes in S3, and scale compute or move transactional state only after measured concurrency requires it. Per-member application quotas are safety controls, not AWS billing limits.
 
 ## Integration status
