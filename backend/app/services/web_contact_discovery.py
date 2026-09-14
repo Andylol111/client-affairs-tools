@@ -176,6 +176,7 @@ async def discover_contacts_from_web(
     *,
     max_people: int = 30,
     custom_patterns: list[str] | None = None,
+    title_hints: str | None = None,
     cancel_event: asyncio.Event | None = None,
     on_progress: ProgressHook = None,
 ) -> list[dict]:
@@ -203,6 +204,12 @@ async def discover_contacts_from_web(
         f'"{company}" senior manager OR director biography',
         f'"{company}" press release appointed OR joins OR named',
     ]
+    hints = (title_hints or "").strip()
+    if hints:
+        queries[0:0] = [
+            f'{company} {hints} site:linkedin.com/in',
+            f'"{company}" {hints} email OR contact OR LinkedIn',
+        ]
     if dom:
         queries.extend(
             [

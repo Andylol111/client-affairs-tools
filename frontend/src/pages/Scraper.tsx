@@ -278,6 +278,7 @@ export default function Scraper() {
     params.get('linkedin') || '',
     params.get('titles') || '',
     params.get('max') || '',
+    params.get('run') || '',
   ].join('|');
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
@@ -543,7 +544,7 @@ export default function Scraper() {
     <div className="app-workspace pb-12">
       <PageHeader
         title="Find contacts"
-        subtitle="Look up a company, collect people in volume, or run a saved audience search. Research is selected when you land here."
+        subtitle="Find people = company-wide live search. Person lookup = one named person. Research = audience briefs. Instant scrape = one website."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
 
@@ -573,7 +574,7 @@ export default function Scraper() {
       <div className="mt-8 surface-card rounded-2xl overflow-hidden shadow-sm">
         <div className="px-5 py-4 border-b border-pale-sky">
           <h2 className="text-[15px] font-semibold text-deep-navy">Find one person</h2>
-          <p className="text-[13px] text-slate-500 mt-0.5">Use this when you already know the name. High-volume company search is on Find people.</p>
+          <p className="text-[13px] text-slate-500 mt-0.5">Search the web for one named person. To collect a company roster with inbox checks, use Find people.</p>
         </div>
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

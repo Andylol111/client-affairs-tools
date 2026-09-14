@@ -157,12 +157,24 @@ async def _load_custom_patterns() -> list[str]:
         await db.close()
 
 
-async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str]) -> list[dict]:
+def _title_hints_from_spec(spec: dict[str, Any]) -> str:
+    raw = spec.get("research_json") or ""
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    if isinstance(data, dict):
+        return str(data.get("title_hints") or "").strip()[:500]
+    return ""
+
+
+async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str], title_hints: str = "") -> list[dict]:
     """Supplement merged list with Tavily+LLM name extraction when Apify/web yield few rows."""
     if max_n <= 0 or not (os.getenv("TAVILY_API_KEY") or "").strip():
         return []
+    role = (title_hints or "employees OR leadership").strip()
     results = await _tavily_search(
-        f'{company_name} employees OR leadership site:linkedin.com/in',
+        f'{company_name} {role} site:linkedin.com/in',
         max_results=12,
     )
     if not results:
@@ -172,7 +184,7 @@ async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_
     )
     try:
         data = await _llm_json(
-            f"""Extract up to {max_n} people at "{company_name}". JSON only:
+            f"""Extract up to {max_n} people at "{company_name}"{f' prioritizing {title_hints}' if title_hints else ''}. JSON only:
 {{"people":[{{"full_name":"","title":"","linkedin_url":""}}]}}
 
 Results:
@@ -215,7 +227,7 @@ Results:
     return out
 
 
-def _quality_score(contact: dict) -> float:
+def _quality_score(contact: dict, title_hints: str = "") -> float:
     score = 40.0
     ev = contact.get("email_verification_status") or ""
     if ev == "valid":
@@ -240,6 +252,11 @@ def _quality_score(contact: dict) -> float:
         score += 10
     if contact.get("confidence") == "high":
         score += 8
+    blob = f"{contact.get('title') or ''} {contact.get('name') or ''}".lower()
+    for token in re.split(r"[^a-z0-9]+", (title_hints or "").lower()):
+        if len(token) >= 2 and token in blob:
+            score += 10
+            break
     return max(0.0, min(100.0, score))
 
 
@@ -352,6 +369,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     company = (spec.get("company_name") or "").strip()
     domain_in = (spec.get("company_domain") or "").strip()
     user_linkedin = (spec.get("linkedin_company_url") or "").strip()
+    title_hints = _title_hints_from_spec(spec)
     linkedin_url = user_linkedin
     has_apify = bool((os.getenv("APIFY_API_TOKEN") or "").strip())
     max_prospects = max(1, min(int(spec.get("max_prospects") or 100), YUCG_MAX_PROSPECTS))
@@ -395,7 +413,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         cn = company or (domain.split(".")[0].title() if domain else "")
         if not cn or not (os.getenv("TAVILY_API_KEY") or "").strip():
             return []
-        return await discover_contacts_from_web(cn, domain or None, max_people=web_max)
+        return await discover_contacts_from_web(cn, domain or None, max_people=web_max, title_hints=title_hints)
 
     domain_contacts, web_contacts, meta = await asyncio.gather(
         _domain(),
@@ -426,6 +444,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         ),
         research_json=json.dumps(
             {
+                "title_hints": title_hints or None,
                 "domain_contacts": len(domain_contacts),
                 "linkedin_contacts": len(linkedin_contacts),
                 "web_contacts": len(web_contacts),
@@ -444,7 +463,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     )
 
     if len(merged) < max_prospects:
-        extra = await _tavily_name_seeds(company, domain, max_prospects - len(merged), custom_patterns)
+        extra = await _tavily_name_seeds(company, domain, max_prospects - len(merged), custom_patterns, title_hints)
         seen = {sanitize_email(c.get("email") or "").lower() for c in merged if c.get("email")}
         for row in extra:
             em = sanitize_email(row.get("email") or "").lower()
@@ -509,7 +528,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         )
 
     candidates = [c for c in verified if c.get("ai_verdict") != "junk"]
-    candidates.sort(key=_quality_score, reverse=True)
+    candidates.sort(key=lambda row: _quality_score(row, title_hints), reverse=True)
     candidates = candidates[:max_prospects]
 
     inserted = 0
@@ -530,7 +549,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             email = sanitize_email(c.get("email") or "")
             if not email or not is_employee_outreach_email(email):
                 continue
-            score = _quality_score(c)
+            score = _quality_score(c, title_hints)
             secondary = score - 3 if c.get("contact_source") == "linkedin_inferred" else score
             linkedin = c.get("linkedin_url") or ""
             evidence_obj = {
