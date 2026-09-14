@@ -20,6 +20,38 @@ export type Settings = { signature?: string; signature_image_url?: string; attac
 export type PipelineMetrics = { by_status: { pipeline_status: string; count: number }[] };
 export type OneDriveItem = { id: string; name: string; folder?: object; size?: number };
 
+export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
+export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
+export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
+export type MailboxAssessment = 'not_checked' | 'bad_syntax' | 'domain_has_no_mail_route' | 'mail_route_available' | 'provider_high_confidence' | 'provider_medium_confidence' | 'accept_all_or_risky' | 'recipient_rejected' | 'inconclusive' | 'previously_delivered' | 'human_reply_observed' | 'permanent_failure_observed';
+export type ProjectFit = 'strong' | 'possible' | 'weak' | 'excluded';
+export type RecommendationState = 'ready_to_review' | 'needs_evidence' | 'excluded';
+export type EvidenceSource = { id?: number | string; url: string; excerpt?: string; observed_at?: string | number | null };
+export type ContactEvidence = {
+  person_id?: number; candidate_id?: number; identity: PersonIdentity; employment: EmploymentEvidence;
+  address_origin: AddressOrigin; mailbox: MailboxAssessment; project_fit: ProjectFit;
+  checked_at?: string | number | null; method?: string; source_ids?: Array<number | string>; reason?: string;
+  expires_at?: string | number | null; sources: EvidenceSource[]; conflicts: string[];
+  recommendation_state?: RecommendationState;
+};
+export type AudienceSpec = {
+  industries: string[]; companies: string[]; geography: string[]; size: string[];
+  roles: string[]; seniority: string[]; people_per_company: number; exclusions: string[]; reason: string;
+};
+export type ResearchBrief = { id: number; project_id: number | null; name: string; spec: AudienceSpec; created_at?: string | number };
+export type ResearchCompany = {
+  id: number; brief_id: number; name: string; domain: string; reason: string; sources: EvidenceSource[];
+  match_state: string; disposition?: string | null; warnings: string[]; observed_at?: string | number;
+};
+export type ResearchJob = {
+  id: number; brief_id: number; status: string; completed_tasks: number; total_tasks: number; people_count: number;
+  provider_state?: string | null; error?: string | null; created_at?: string | number;
+};
+export type ContactRecommendation = {
+  id: number; brief_id: number; person: { name: string; title?: string; company?: string }; email?: string | null;
+  evidence: ContactEvidence; state: RecommendationState; explanation: string; disposition?: string | null; contact_id?: number | null;
+};
+
 export type Contact = {
   id: number;
   name?: string | null;
@@ -37,6 +69,7 @@ export type Contact = {
   scrape_source_url?: string;
   ai_rejected?: boolean;
   email_verification_status?: string | null;
+  evidence?: ContactEvidence | null;
   ai_verdict?: string | null;
   ai_reason?: string | null;
   last_sent_at?: string | null;
@@ -284,6 +317,25 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
 }
 
 export const api = {
+  research: {
+    briefs: () => fetchApi<{ items: ResearchBrief[] }>('/api/research/briefs'),
+    saveBrief: (data: Omit<ResearchBrief, 'id' | 'created_at'>, id?: number) =>
+      fetchApi<ResearchBrief>(`/api/research/briefs${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(data) }),
+    companies: (id: number) => fetchApi<{ items: ResearchCompany[] }>(`/api/research/briefs/${id}/companies`),
+    researchCompanies: (id: number) => fetchApi<{ items: ResearchCompany[] }>(`/api/research/briefs/${id}/companies`, { method: 'POST' }),
+    reviewCompany: (id: number, disposition: 'accepted' | 'rejected', reason: string) =>
+      fetchApi<ResearchCompany>(`/api/research/companies/${id}`, { method: 'PATCH', body: JSON.stringify({ disposition, reason }) }),
+    jobs: () => fetchApi<{ items: ResearchJob[] }>('/api/research/jobs'),
+    start: (brief_id: number) => fetchApi<ResearchJob>('/api/research/jobs', { method: 'POST', body: JSON.stringify({ brief_id }) }),
+    jobAction: (id: number, action: 'resume' | 'cancel') => fetchApi<ResearchJob>(`/api/research/jobs/${id}/${action}`, { method: 'POST' }),
+    recommendations: (briefId: number) => fetchApi<{ items: ContactRecommendation[] }>(`/api/research/recommendations?brief_id=${briefId}`),
+    recommendation: (id: number) => fetchApi<ContactRecommendation>(`/api/research/recommendations/${id}`),
+    review: (id: number, disposition: 'accepted' | 'rejected', reason: string) =>
+      fetchApi<ContactRecommendation>(`/api/research/recommendations/${id}/review`, { method: 'POST', body: JSON.stringify({ disposition, reason }) }),
+  },
+  projects: {
+    list: () => fetchApi<Project[]>('/api/workspace/projects'),
+  },
   health: () => fetchApi<{ status: string }>('/api/health'),
   ai: {
     models: () =>

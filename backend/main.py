@@ -37,6 +37,8 @@ from app.services.yucgoutreach_discovery import (
     recover_interrupted_yucgoutreach_runs,
 )
 from app.services.assistant_service import drain_document_index_queue,recover_document_indexes
+from app.routers import research
+from app.services.research_service import recover_research_jobs, drain_research_queue
 
 # CORS: use CORS_ORIGINS env (comma-separated) when going public; default localhost for dev
 _default_origins = [
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await recover_interrupted_yucgoutreach_runs()
     await recover_document_indexes()
+    await recover_research_jobs()
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         drain_queued_yucgoutreach_runs,
@@ -66,6 +69,14 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=15,
         id="assistant_document_index",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        drain_research_queue,
+        "interval",
+        seconds=10,
+        id="contact_research_queue",
         max_instances=1,
         coalesce=True,
     )
@@ -160,6 +171,7 @@ app.include_router(operations.router, prefix="/api/admin/operations", tags=["ope
 app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgoutreach"])
 app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
 app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases"], dependencies=_require_user)
+app.include_router(research.router, prefix="/api/research", tags=["research"], dependencies=_require_user)
 
 
 @app.get("/api/health")

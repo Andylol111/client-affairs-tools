@@ -17,6 +17,7 @@ infra/node_modules/
 infra/dist/
 
 # Planning / agent scratch (product docs stay: infra/README.md, data/README.md)
+.omp/
 AGENTS.md
 MEMORY.md
 memory.md
