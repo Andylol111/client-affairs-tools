@@ -5,6 +5,8 @@ __pycache__/
 venv/
 .venv/
 clientreach.db
+clientreach.db-shm
+clientreach.db-wal
 backend/attachments/
 .DS_Store
 .rag_index/

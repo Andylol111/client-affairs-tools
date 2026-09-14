@@ -54,7 +54,10 @@ def test_payload_and_sanitizers():
     assert parse_operator_payload('{"answer": "  "}') is None
     wrapped = 'Here you go\n{"answer": "Ready", "reads": []}\n'
     assert parse_operator_payload(wrapped)['answer'] == 'Ready'
-    assert 'in-app operator' in assistant_operator.operator_system_prompt()
+    prompt = assistant_operator.operator_system_prompt()
+    assert 'in-app operator' in prompt
+    assert 'website harness' in prompt
+    assert 'optional' in prompt.lower()
 
     assert sanitize_reads(None) == []
     assert sanitize_reads('search_contacts') == []
@@ -90,7 +93,7 @@ def test_payload_and_sanitizers():
     assert proposed[1]['args'] == {'run_id': 12}
     assert len(proposed[1]['summary']) <= 160
 
-    expect_http(lambda: sanitize_propose([{'tool': 'start_find_people', 'args': {}}]))
+    assert sanitize_propose([{'tool': 'start_find_people', 'args': {}}]) == []
     expect_http(lambda: _clean_write_args('start_find_people', {}))
     expect_http(lambda: _clean_write_args('import_run_to_contacts', {}))
     expect_http(lambda: _clean_write_args('import_run_to_contacts', {'run_id': 0}))
@@ -180,6 +183,14 @@ async def run():
         assert result['lookups'][0]['data']['count'] == 1
         assert result['navigations'][0]['path'] == '/scraper'
         assert 'ada@acme.com' in json.dumps(result['lookups'])
+
+        from fastapi import HTTPException as FastAPIHTTPException
+        with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):
+            offline = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'help me find people at Garmin to reach out to')
+        assert offline['pending_actions'][0]['tool'] == 'start_find_people'
+        assert offline['pending_actions'][0]['args']['company_name'] == 'Garmin'
+        assert offline['navigations'][0]['path'] == '/scraper'
+        assert 'offline' in offline['answer'].lower() or 'confirm' in offline['answer'].lower()
 
         runs_before = await execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
         assert runs_before[0]['data'][0]['id'] == 7

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import time
 from typing import Any
 
 # US geo profiles. Converse will not take a bare anthropic.* foundation id.
@@ -19,8 +20,10 @@ BEDROCK_ANTHROPIC: list[dict[str, str]] = [
     },
 ]
 
+_HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 _ALLOWED = {m["id"] for m in BEDROCK_ANTHROPIC}
 _inference_slots = threading.BoundedSemaphore(2)
+_UNAVAILABLE = "The language model is unavailable right now."
 
 
 def allowed_bedrock_models() -> set[str]:
@@ -46,7 +49,7 @@ def default_model_id() -> str:
     explicit = (os.getenv("BEDROCK_MODEL_ID") or os.getenv("LLM_MODEL") or "").strip()
     if explicit:
         return explicit
-    return "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    return _HAIKU
 
 
 def rank_model_id() -> str:
@@ -54,7 +57,7 @@ def rank_model_id() -> str:
     explicit = (os.getenv("BEDROCK_RANK_MODEL_ID") or "").strip()
     if explicit:
         return explicit
-    return "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    return _HAIKU
 
 
 def is_bedrock_model(model_id: str | None) -> bool:
@@ -81,18 +84,16 @@ def complete_text(
     purpose: str = 'inference',
     max_tokens: int = 2048,
 ) -> str:
+    from fastapi import HTTPException
     mid = validate_model(model_id)
     if is_bedrock_model(mid):
         return _bedrock_text(prompt, mid, system, user_id=user_id, purpose=purpose, max_tokens=max_tokens)
-    ollama_name = mid.split(":", 1)[1] if mid.startswith("ollama:") else mid
-    from ollama import chat
-
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    response = chat(model=ollama_name, messages=messages)
-    return (response.message.content or "").strip()
+    try:
+        return _ollama_text(prompt, mid, system)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, _UNAVAILABLE) from exc
 
 
 def complete_json(prompt: str, model_id: str | None = None, system: str | None = None) -> dict[str, Any] | None:
@@ -105,6 +106,72 @@ def complete_json(prompt: str, model_id: str | None = None, system: str | None =
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _ollama_text(prompt: str, model_id: str, system: str | None) -> str:
+    ollama_name = model_id.split(":", 1)[1] if model_id.startswith("ollama:") else model_id
+    from ollama import chat
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    response = chat(model=ollama_name, messages=messages)
+    return (response.message.content or "").strip()
+
+
+_cli_login_client = None
+_cli_login_until = 0.0
+
+
+def _bedrock_client_from_cli_login(region: str, config: Any):
+    """Use `aws login` sessions from AWS_PROFILE when boto3 cannot load them natively."""
+    import subprocess
+    import boto3
+    from fastapi import HTTPException
+
+    global _cli_login_client, _cli_login_until
+    now = time.time()
+    if _cli_login_client is not None and now < _cli_login_until:
+        return _cli_login_client
+    profile = (os.getenv("AWS_PROFILE") or "").strip()
+    if not profile:
+        raise HTTPException(503, _UNAVAILABLE)
+    try:
+        completed = subprocess.run(
+            ["aws", "configure", "export-credentials", "--profile", profile, "--format", "env"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception as exc:
+        raise HTTPException(503, _UNAVAILABLE) from exc
+    if completed.returncode != 0:
+        raise HTTPException(503, _UNAVAILABLE)
+    try:
+        exported: dict[str, str] = {}
+        for line in (completed.stdout or "").splitlines():
+            row = line.strip()
+            if row.startswith("export "):
+                row = row[7:]
+            if "=" not in row:
+                continue
+            key, value = row.split("=", 1)
+            exported[key.strip()] = value.strip().strip('"').strip("'")
+        client = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=config,
+            aws_access_key_id=exported["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=exported["AWS_SECRET_ACCESS_KEY"],
+            aws_session_token=exported.get("AWS_SESSION_TOKEN") or None,
+        )
+    except Exception as exc:
+        raise HTTPException(503, _UNAVAILABLE) from exc
+    _cli_login_client = client
+    _cli_login_until = now + 8 * 60
+    return client
 
 
 def _bedrock_text(
@@ -144,9 +211,23 @@ def _bedrock_text(
             estimated_input_tokens=max(1,(len(prompt)+len(system or ''))//4),
             max_output_tokens=max_tokens,
         )
-        client = boto3.client("bedrock-runtime", region_name=region,
-                             config=Config(connect_timeout=5, read_timeout=60, retries={'total_max_attempts': 1}))
-        resp = client.converse(**kwargs)
+        runtime_config = Config(connect_timeout=5, read_timeout=60, retries={'total_max_attempts': 1})
+        try:
+            client = boto3.client("bedrock-runtime", region_name=region, config=runtime_config)
+            resp = client.converse(**kwargs)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            from botocore.exceptions import NoCredentialsError
+            if not isinstance(exc, NoCredentialsError):
+                raise HTTPException(503, _UNAVAILABLE) from exc
+            try:
+                client = _bedrock_client_from_cli_login(region, runtime_config)
+                resp = client.converse(**kwargs)
+            except HTTPException:
+                raise
+            except Exception as retry_exc:
+                raise HTTPException(503, _UNAVAILABLE) from retry_exc
         usage = resp.get('usage') or {}
         complete_bedrock_invocation(reservation_id,usage.get('inputTokens'),usage.get('outputTokens'))
     finally:
