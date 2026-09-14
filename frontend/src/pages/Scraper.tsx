@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, type Contact, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
@@ -269,7 +270,15 @@ function ResearchTab() {
 }
 
 export default function Scraper() {
+  const [params] = useSearchParams();
   const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'scrape', 'find', 'import'], 'research');
+  const discoveryKey = [
+    params.get('company') || '',
+    params.get('domain') || '',
+    params.get('linkedin') || '',
+    params.get('titles') || '',
+    params.get('max') || '',
+  ].join('|');
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
   const [linkedinUrl, setLinkedinUrl] = useState('');
@@ -557,7 +566,7 @@ export default function Scraper() {
       />
 
       {activeTab === 'research' && <ResearchTab />}
-      {activeTab === 'company' && <CompanyDiscovery />}
+      {activeTab === 'company' && <CompanyDiscovery key={discoveryKey} />}
 
       {activeTab === 'find' && (
       <>

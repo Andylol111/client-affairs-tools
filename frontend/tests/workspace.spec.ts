@@ -113,10 +113,12 @@ for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/docu
 test('assistant keeps source scope visible and returns document citations', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Open assistant' }).click();
-  await expect(page.getByRole('dialog', { name: 'Assistant' })).toBeVisible();
-  await expect(page.getByText('It cannot send mail or delete records.')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Site assistant' })).toBeVisible();
+  await expect(page.getByText('It cannot send mail.')).toBeVisible();
+  await page.getByText('Optional documents').click();
+  await expect(page.getByText('Project report 1')).toBeVisible();
   await page.getByLabel('Question or task').fill('Build an evidence-based plan');
-  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByText('Use the approved project evidence')).toBeVisible();
   await expect(page.getByRole('link', { name: '[D1-C1] Project report 1' })).toHaveAttribute('href', '/documents?q=Project%20report%201');
   await expect(page.getByText('This hour: 0/15')).toBeVisible();
@@ -136,6 +138,7 @@ test('assistant can propose Find people and only runs it after confirm', async (
         pending_actions: [{ tool: 'start_find_people', args: { company_name: 'Acme', max_prospects: 250 }, summary: 'Find people at Acme (up to 250)' }],
         navigations: [{ path: '/scraper', label: 'Find contacts' }],
         lookups: [{ tool: 'search_contacts', data: { count: 0, contacts: [] } }],
+        asks: [{ id: 'titles', label: 'Titles to prioritize', value: '', required: true, placeholder: 'VPs, project managers' }],
       },
     });
   });
@@ -146,10 +149,15 @@ test('assistant can propose Find people and only runs it after confirm', async (
   await page.goto('/outreach');
   await page.getByRole('button', { name: 'Open assistant' }).click();
   await page.getByLabel('Question or task').fill('Find people at Acme');
-  await page.getByRole('button', { name: 'Ask assistant' }).click();
-  await expect(page.getByRole('button', { name: 'Confirm: Find people at Acme (up to 250)' })).toBeVisible();
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' })).toBeVisible();
+  await expect(page.getByLabel('Titles to prioritize *')).toBeVisible();
   expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
-  await page.getByRole('button', { name: 'Confirm: Find people at Acme (up to 250)' }).click();
+  await page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' }).click();
+  await expect(page.getByRole('alert')).toContainText('titles to prioritize');
+  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
+  await page.getByRole('button', { name: 'Skip titles' }).click();
+  await page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' }).click();
   await expect(page.getByText('Started Find people run #12 for Acme.')).toBeVisible();
   expect(mutations).toContain('ACT start_find_people');
   expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
@@ -170,6 +178,7 @@ test('assistant indexes an owned document from the bubble', async ({ page }) => 
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByText('Optional documents').click();
   await page.getByRole('button', { name: 'Index for assistant' }).click();
   expect(indexed).toBe(true);
 });
@@ -189,7 +198,7 @@ test('assistant restores a thread and starts a new chat', async ({ page }) => {
   await page.getByRole('button', { name: 'Find Acme' }).click();
   await expect(page.getByText('Confirm to start the run.')).toBeVisible();
   await page.getByRole('button', { name: 'New chat' }).click();
-  await expect(page.getByText('Writes wait for a confirm button.')).toBeVisible();
+  await expect(page.getByText('It fills the Find people boxes.')).toBeVisible();
 });
 
 test('assistant import confirm opens Pipeline and never sends mail', async ({ page }) => {
@@ -216,7 +225,7 @@ test('assistant import confirm opens Pipeline and never sends mail', async ({ pa
   await page.goto('/scraper');
   await page.getByRole('button', { name: 'Open assistant' }).click();
   await page.getByLabel('Question or task').fill('Import the last run');
-  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' })).toBeVisible();
   expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
   await page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' }).click();
@@ -239,7 +248,7 @@ test('assistant ask failures restore the question and never call act', async ({ 
   await page.goto('/');
   await page.getByRole('button', { name: 'Open assistant' }).click();
   await page.getByLabel('Question or task').fill('Find people at Acme');
-  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await page.getByRole('button', { name: 'Send' }).click();
   await expect(page.getByRole('alert')).toContainText('Too many assistant requests this hour');
   await expect(page.getByLabel('Question or task')).toHaveValue('Find people at Acme');
   expect(mutations).toEqual(['ASK']);
