@@ -1,11 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { api, type Contact, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
+import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import CompanyDiscovery from '../components/discovery/CompanyDiscovery';
 import CompanyAutocomplete from '../components/CompanyAutocomplete';
 import { Notice } from '../components/ui/Primitives';
 import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
 import { useProjects } from '../lib/useProjects';
+import { useUrlTab } from '../lib/useUrlTab';
+
+type ScraperTab = 'research' | 'company' | 'scrape' | 'find' | 'import';
 
 type ScrapeProgressState = {
   phase: string;
@@ -265,6 +269,7 @@ function ResearchTab() {
 }
 
 export default function Scraper() {
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'scrape', 'find', 'import'], 'research');
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
   const [linkedinUrl, setLinkedinUrl] = useState('');
@@ -301,10 +306,10 @@ export default function Scraper() {
   const [showDiscoveryLog, setShowDiscoveryLog] = useState(false);
 
   useEffect(() => {
-    if (!loading) return;
+    if (!loading || activeTab !== 'scrape') return;
     const id = window.setInterval(() => setScrapeTick(Date.now()), 450);
     return () => clearInterval(id);
-  }, [loading]);
+  }, [loading, activeTab]);
 
   useEffect(() => {
     return () => {
@@ -529,16 +534,37 @@ export default function Scraper() {
     <div className="app-workspace pb-12">
       <PageHeader
         title="Find contacts"
-        subtitle="Look up a company from the outreach list, collect a large set of people, and watch each contact as it is checked."
+        subtitle="Look up a company, collect people in volume, or run a saved audience search. Research is selected when you land here."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
 
-      <CompanyDiscovery />
+      <AppSubnav
+        className="mb-8"
+        items={[
+          { id: 'research', label: 'Research' },
+          { id: 'company', label: 'Find people' },
+          { id: 'find', label: 'Person lookup' },
+          { id: 'scrape', label: 'Instant scrape' },
+          { id: 'import', label: 'Import' },
+        ]}
+        active={activeTab}
+        onChange={(id) => {
+          setActiveTab(id as ScraperTab);
+          setError('');
+          if (id !== 'find') setFindResult(null);
+        }}
+        label="Find methods"
+      />
 
+      {activeTab === 'research' && <ResearchTab />}
+      {activeTab === 'company' && <CompanyDiscovery />}
+
+      {activeTab === 'find' && (
+      <>
       <div className="mt-8 surface-card rounded-2xl overflow-hidden shadow-sm">
         <div className="px-5 py-4 border-b border-pale-sky">
           <h2 className="text-[15px] font-semibold text-deep-navy">Find one person</h2>
-          <p className="text-[13px] text-slate-500 mt-0.5">Use this when you already know the name. High-volume company search stays above.</p>
+          <p className="text-[13px] text-slate-500 mt-0.5">Use this when you already know the name. High-volume company search is on Find people.</p>
         </div>
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -594,11 +620,14 @@ export default function Scraper() {
           )}
         </div>
       )}
+      </>
+      )}
 
-      <details className="mt-8 surface-card rounded-2xl border border-pale-sky overflow-hidden" open={loading || !!scrapeProgress}>
+      {activeTab === 'scrape' && (
+      <details className="mt-0 surface-card rounded-2xl border border-pale-sky overflow-hidden" open>
         <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Instant website scrape</summary>
         <div className="px-5 pb-5 space-y-4 border-t border-pale-sky">
-          <p className="text-[13px] text-slate-500 pt-3">Live progress for a single domain. For dozens or hundreds of people, use Find people above.</p>
+          <p className="text-[13px] text-slate-500 pt-3">Live progress for a single domain. For dozens or hundreds of people, use the Find people tab.</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <CompanyAutocomplete
               id="scrape-company"
@@ -682,7 +711,10 @@ export default function Scraper() {
         </div>
       </details>
 
-      <details className="mt-4 surface-card rounded-2xl border border-pale-sky overflow-hidden">
+      )}
+
+      {activeTab === 'import' && (
+      <details className="mt-0 surface-card rounded-2xl border border-pale-sky overflow-hidden" open>
         <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Import a spreadsheet</summary>
         <div className="px-5 pb-5 border-t border-pale-sky">
           <p className="text-[13px] text-slate-500 py-3">CSV or Excel with name, email, title, company.</p>
@@ -693,13 +725,7 @@ export default function Scraper() {
         </div>
       </details>
 
-      <details className="mt-4 surface-card rounded-2xl border border-pale-sky overflow-hidden">
-        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Saved audience searches</summary>
-        <div className="px-5 pb-5 border-t border-pale-sky pt-4">
-          <p className="text-[13px] text-slate-500 mb-4">Optional. Use Find people above for volume. Audience searches keep a named brief when you want a reusable filter.</p>
-          <ResearchTab />
-        </div>
-      </details>
+      )}
 
       {error && <p className="text-[#ff3b30] text-[13px] px-1 mt-4" role="alert">{error}</p>}
       {infoMessage && <p className="text-emerald-600 text-[13px] px-1 mt-2">{infoMessage}</p>}
