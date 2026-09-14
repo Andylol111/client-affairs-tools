@@ -375,6 +375,9 @@ async def record_mailbox_event(db, candidate_id: int, actor_id: int, state: str,
     if state not in (Mailbox.HUMAN_REPLY_OBSERVED.value, Mailbox.PERMANENT_FAILURE_OBSERVED.value, Mailbox.PREVIOUSLY_DELIVERED.value):
         return
     key = f'mailbox:{event_key}:{state}' if event_key else None
+    from app.services.roster_email import apply_mailbox_proof
+
+    await apply_mailbox_proof(db, candidate_id, state)
     await _store_check(db, candidate_id, actor_id, {
         'mailbox': state, 'method': 'message_tracking', 'reason': reason,
         'checked_at': now_iso(), 'expires_at': None, 'cost_units': 0,

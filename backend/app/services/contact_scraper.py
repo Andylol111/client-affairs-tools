@@ -992,6 +992,8 @@ def compute_contact_confidence(
         score += 18
     elif src == "web_discovery":
         score += 22 if email_verified else 14
+    elif src.startswith("roster_"):
+        score += 20 if email_verified else 14
     elif src == "inferred":
         score += 12
     elif email_verified or found_with_name:
