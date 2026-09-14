@@ -996,7 +996,7 @@ async def list_contacts(
     user: dict | None = Depends(get_current_user_optional),
 ):
     """Paginated canonical contacts. Standard users see their contacts plus shared unassigned rows."""
-    limit = max(1, min(limit, 500))
+    limit = max(1, min(limit, 2000))
     offset = max(0, offset)
     db = await get_db()
     try:

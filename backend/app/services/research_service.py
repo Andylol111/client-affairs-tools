@@ -362,13 +362,13 @@ async def discover_companies(db, brief: dict, user: dict) -> list[dict]:
     brief_id = int(brief['id'])
     sources: list[dict] = []
     queries = []
-    for name in (spec.get('companies') or [])[:6]:
+    for name in (spec.get('companies') or [])[:40]:
         queries.append(f'{name} official company website homepage')
     for industry in (spec.get('industries') or [])[:3]:
         geo = ' '.join((spec.get('geography') or [])[:2])
         queries.append(f'companies in {industry} {geo} official website')
     try:
-        for query in queries[:6]:
+        for query in queries[:16]:
             sources.extend(await P.search_sources(owner, query))
     except P.ProviderUnavailable:
         pass
@@ -637,8 +637,9 @@ async def _task_person_discovery(db, row: dict) -> None:
                              stop_reason='Interpretation unavailable; sources retained for a later run')
         return
     people = interpretation.get('people') or []
+    cap = max(1, min(int(_json(row['spec_json'], {}).get('people_per_company') or 25), 100))
     accepted_people = 0
-    for person in people[:30]:
+    for person in people[:cap]:
         cited = [int(s) for s in (person.get('source_ids') or []) if isinstance(s, (int, str))][:20]
         if not cited or person.get('identity') in ('rejected',) or person.get('project_fit') == 'excluded':
             continue

@@ -776,7 +776,7 @@ export default function Admin() {
           <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-2">Assistant knowledge</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">The shared Assistant uses the same private document register as Projects. Access is checked for every retrieval, and Amazon Bedrock receives only the short source excerpts needed for an answer.</p>
-            <div className="flex flex-wrap gap-2"><Link to="/documents" className="ui-button ui-button--secondary">Manage documents</Link><Link to="/assistant" className="ui-button ui-button--primary">Open assistant</Link></div>
+            <div className="flex flex-wrap gap-2"><Link to="/documents" className="ui-button ui-button--secondary">Manage documents</Link><Link to="/?assistant=1" className="ui-button ui-button--primary">Open assistant</Link></div>
           </div>
         </div>
       )}
