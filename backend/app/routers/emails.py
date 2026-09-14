@@ -39,12 +39,8 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
     """Generate a grounded starting draft for a contact."""
     db = await get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM contacts WHERE id = ?", (req.contact_id,)
-        )
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(404, "Contact not found")
+        from app.services.contact_access import require_contact_access
+        row = await require_contact_access(db, req.contact_id, user)
         contact = dict(row)
 
         from app.services.contact_scraper import normalize_domain

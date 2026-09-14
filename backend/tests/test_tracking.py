@@ -125,10 +125,21 @@ async def test_storage_and_sync():
     with patch.object(gmail_api, 'get_valid_access_token', AsyncMock(return_value=('token', 'owner@example.org'))), patch.object(gmail_api.httpx, 'AsyncClient', send_client), patch.dict(os.environ, {'BACKEND_URL': 'https://club.example.org', 'API_BASE_URL': ''}):
         await gmail_api.send_via_gmail_api_with_tracking(1, 'person@example.org', 'Hello', 'Body', 1)
         await gmail_api.send_via_gmail_api_with_tracking(1, 'person@example.org', 'Reminder', 'Body', 1)
+    def uncertain_handler(_request):
+        return httpx.Response(503, text='provider unavailable')
+    def uncertain_client(**kwargs):
+        return original_client(transport=httpx.MockTransport(uncertain_handler), **kwargs)
+    with patch.object(gmail_api, 'get_valid_access_token', AsyncMock(return_value=('token', 'owner@example.org'))), patch.object(gmail_api.httpx, 'AsyncClient', uncertain_client), patch.dict(os.environ, {'BACKEND_URL': 'https://club.example.org', 'API_BASE_URL': ''}):
+        try:
+            await gmail_api.send_via_gmail_api_with_tracking(1, 'person@example.org', 'Uncertain', 'Body', 1)
+            raise AssertionError('Expected an uncertain Gmail result')
+        except RuntimeError as exc:
+            assert 'uncertain' in str(exc)
     db = await get_db()
     rows = await (await db.execute('SELECT * FROM outreach_messages WHERE id > 2')).fetchall()
-    assert len(rows) == 2 and rows[0]['tracking_token'] != rows[1]['tracking_token']
-    assert rows[0]['rfc_message_id'] != rows[1]['rfc_message_id'] and all(r['sent_at'] for r in rows)
+    assert len(rows) == 3 and rows[0]['tracking_token'] != rows[1]['tracking_token']
+    assert rows[0]['rfc_message_id'] != rows[1]['rfc_message_id'] and all(r['sent_at'] for r in rows[:2])
+    assert rows[2]['sent_at'] is None
     await db.close()
 
 

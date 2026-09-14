@@ -136,7 +136,8 @@ async def init_db():
                 replied_at TIMESTAMP,
                 last_error TEXT,
                 FOREIGN KEY (campaign_id) REFERENCES campaigns(id),
-                FOREIGN KEY (contact_id) REFERENCES contacts(id)
+                FOREIGN KEY (contact_id) REFERENCES contacts(id),
+                UNIQUE (campaign_id, contact_id)
             );
 
             CREATE TABLE IF NOT EXISTS email_events (
@@ -206,6 +207,21 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_generated_emails_created ON generated_emails(created_at);
         """)
         await db.commit()
+        # Older SQLite databases predate the table-level uniqueness rule above.
+        # Preserve their history while preventing any new duplicate recipient row.
+        if not is_postgres():
+            await db.executescript("""
+                CREATE TRIGGER IF NOT EXISTS prevent_duplicate_campaign_contact
+                BEFORE INSERT ON campaign_contacts
+                WHEN EXISTS (
+                    SELECT 1 FROM campaign_contacts
+                    WHERE campaign_id = NEW.campaign_id AND contact_id = NEW.contact_id
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'duplicate campaign recipient');
+                END;
+            """)
+            await db.commit()
         # Migration: add user_id to existing generated_emails (if table exists without it)
         try:
             await db.execute("ALTER TABLE generated_emails ADD COLUMN user_id INTEGER REFERENCES users(id)")
@@ -596,6 +612,9 @@ async def init_db():
                 prospects_count INTEGER DEFAULT 0,
                 research_json TEXT,
                 error_message TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                lease_token TEXT,
+                lease_expires_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP
@@ -650,6 +669,17 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_yucg_prospect_targets_sector ON yucg_prospect_targets(sector);
         """)
         await db.commit()
+
+        for col, col_type in [
+            ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("lease_token", "TEXT"),
+            ("lease_expires_at", "TIMESTAMP"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE yucgoutreach_discovery_runs ADD COLUMN {col} {col_type}")
+                await db.commit()
+            except Exception:
+                pass
 
         for col, col_type in [
             ("email_verification_status", "TEXT"),

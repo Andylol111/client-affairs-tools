@@ -3,7 +3,7 @@ export type TrackedMessage = { id: number; sent_at?: string | null; events: Trac
 export type CampaignRecipient = {
   id: number; contact_id: number; name?: string | null; email: string; company?: string | null;
   status: string; sent_at?: string | null; opened_at?: string | null; replied_at?: string | null;
-  email_subject?: string | null; last_error?: string | null; messages?: TrackedMessage[];
+  email_subject?: string | null; email_body?: string | null; last_error?: string | null; messages?: TrackedMessage[];
 };
 export type TrackingFilter = 'all' | 'sent' | 'opened' | 'replied' | 'bounced' | 'waiting';
 

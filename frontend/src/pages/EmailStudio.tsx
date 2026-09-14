@@ -16,6 +16,26 @@ function lastSendHint(c: { last_sent_at?: string | null; last_campaign_name?: st
   return c.last_campaign_name ? `Last send: ${c.last_campaign_name} · ${when}` : `Last send ${when}`;
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char] || char);
+}
+
+function renderCampaignTemplate(value: string, contact: Contact, htmlBody = false): string {
+  const rawFields: Record<string, string> = {
+    name: contact.name || '',
+    first_name: (contact.name || '').trim().split(/\s+/)[0] || '',
+    company: contact.company || '',
+    title: contact.title || '',
+    email: contact.email || '',
+  };
+  const fields = htmlBody
+    ? Object.fromEntries(Object.entries(rawFields).map(([key, field]) => [key, escapeHtml(field)]))
+    : rawFields;
+  return value.replace(/{{\s*(name|first_name|company|title|email)\s*}}/gi, (_, key: string) => fields[key.toLowerCase()] || '');
+}
+
 async function loadCompanyEmployees(companies: string[]): Promise<Contact[]> {
   const items: Contact[] = [];
   let offset = 0;
@@ -26,6 +46,17 @@ async function loadCompanyEmployees(companies: string[]): Promise<Contact[]> {
       limit: 500,
       offset,
     });
+    items.push(...page.items);
+    offset += page.limit;
+    if (offset >= page.total) return items;
+  }
+}
+
+async function loadAllReleaseContacts(releaseId: number, q?: string, signal?: AbortSignal): Promise<Contact[]> {
+  const items: Contact[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await api.contacts.list({ release_id: releaseId, q, limit: 500, offset }, signal);
     items.push(...page.items);
     offset += page.limit;
     if (offset >= page.total) return items;
@@ -176,8 +207,8 @@ export default function EmailStudio() {
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [contactsPanelExpanded, setContactsPanelExpanded] = useState(true);
   const [aiGeneratorExpanded, setAiGeneratorExpanded] = useState(true);
-  const [contactSearch, setContactSearch] = useState('');
-  const [releaseFilter, setReleaseFilter] = useState('');
+  const [contactSearch, setContactSearch] = useState(() => new URLSearchParams(window.location.search).get('q') || '');
+  const [releaseFilter, setReleaseFilter] = useState(() => new URLSearchParams(window.location.search).get('release_id') || '');
   const [releases, setReleases] = useState<Release[]>([]);
   const [onedriveOpen, setOnedriveOpen] = useState(false);
   const [onedriveConfigured, setOnedriveConfigured] = useState(false);
@@ -192,6 +223,7 @@ export default function EmailStudio() {
   const [campaignName, setCampaignName] = useState('');
   const [campaignBusy, setCampaignBusy] = useState(false);
   const [campaignMessage, setCampaignMessage] = useState<string | null>(null);
+  const [createdCampaignId, setCreatedCampaignId] = useState<number | null>(null);
   const [campaignPanelOpen, setCampaignPanelOpen] = useState(false);
   const [studioContactsListOpen, setStudioContactsListOpen] = useState(true);
   const [studioCompanyListOpen, setStudioCompanyListOpen] = useState(false);
@@ -217,8 +249,12 @@ export default function EmailStudio() {
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      api.contacts.list(contactListParams(), controller.signal)
-        .then((page) => setContacts(page.items))
+      const params = contactListParams();
+      const request = params.release_id
+        ? loadAllReleaseContacts(params.release_id, params.q, controller.signal)
+        : api.contacts.list(params, controller.signal).then((page) => page.items);
+      request
+        .then(setContacts)
         .catch((error) => {
           if (!(error instanceof DOMException && error.name === 'AbortError')) setContacts([]);
         });
@@ -504,9 +540,16 @@ export default function EmailStudio() {
     try {
       const subjects: Record<string, string> = {};
       const bodies: Record<string, string> = {};
+      const isTemplate = /{{\s*(name|first_name|company|title|email)\s*}}/i.test(`${email.subject}\n${email.body}`);
       for (const id of ids) {
-        subjects[String(id)] = email.subject;
-        bodies[String(id)] = email.body;
+        const contact = studioCampaignContacts.find(item => item.id === id);
+        if (contact && isTemplate) {
+          subjects[String(id)] = renderCampaignTemplate(email.subject, contact);
+          bodies[String(id)] = renderCampaignTemplate(email.body, contact, true);
+        } else if (id === selected?.id) {
+          subjects[String(id)] = email.subject;
+          bodies[String(id)] = email.body;
+        }
       }
       const camp = await api.campaigns.create(name);
       await api.campaigns.addContacts(camp.id, {
@@ -517,7 +560,12 @@ export default function EmailStudio() {
       if (campaignSequenceId) {
         await api.campaigns.update(camp.id, { sequence_id: Number(campaignSequenceId) });
       }
-      setCampaignMessage(`Draft campaign #${camp.id} saved. Review and release it from Send.`);
+      setCreatedCampaignId(camp.id);
+      const personalized = Object.keys(subjects).length;
+      const draftNote = personalized < ids.length
+        ? ` ${ids.length - personalized} recipient(s) use their own latest saved draft and must be completed before release.`
+        : '';
+      setCampaignMessage(`Draft campaign #${camp.id} saved.${draftNote}`);
     } catch (e) {
       const eMessage = e instanceof Error ? e.message : 'Request failed';
       setCampaignMessage(eMessage || 'Campaign failed');
@@ -1221,6 +1269,12 @@ export default function EmailStudio() {
                       </div>
                     </div>
                   )}
+                  {selectedCampaignContactIds.size > 1 && (
+                    <p className="rounded-lg bg-pale-sky/25 p-3 text-xs text-slate-700">
+                      For a shared template, use <code>{'{{first_name}}'}</code>, <code>{'{{name}}'}</code>, <code>{'{{company}}'}</code>, <code>{'{{title}}'}</code>, or <code>{'{{email}}'}</code>.
+                      Without placeholders, this editor applies only to the person currently open; every other recipient keeps their own saved draft for review.
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <label className="block text-xs font-medium text-deep-navy dark:text-slate-400 mb-1">Campaign name</label>
@@ -1258,10 +1312,10 @@ export default function EmailStudio() {
                       Save campaign draft
                     </button>
                     <Link
-                      to="/campaigns"
+                      to={createdCampaignId ? `/campaigns/${createdCampaignId}` : '/campaigns'}
                       className="inline-flex items-center px-3 py-2 text-sm font-medium text-[var(--accent)] hover:text-[var(--accent-hover)] underline underline-offset-2"
                     >
-                      Open Campaigns
+                      {createdCampaignId ? 'Review this campaign' : 'Open Campaigns'}
                     </Link>
                   </div>
                   {campaignMessage && (
@@ -1338,8 +1392,8 @@ export default function EmailStudio() {
                   </div>
                   {attachmentsEnabled && (
                     <div className="email-studio-block w-full p-3 rounded-lg border dark:border-slate-600">
-                      <h4 className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Attachments</h4>
-                      <p className="text-xs text-deep-navy/80 dark:text-slate-400 mb-2">Select files to include with this email (intro PDFs, past workstreams, etc.)</p>
+                      <h4 className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Test-send attachments</h4>
+                      <p className="text-xs text-deep-navy/80 dark:text-slate-400 mb-2">These files apply only to the next one-off test email. For campaign files, insert a reviewed private document share link into the message.</p>
                       {attachmentLibrary.length === 0 ? (
                         <p className="text-xs text-deep-navy/70 dark:text-slate-400">No attachments in library. Admins can upload in Profile → Settings.</p>
                       ) : (
@@ -1372,7 +1426,7 @@ export default function EmailStudio() {
                         </div>
                       )}
                       {selectedAttachmentIds.size > 0 && (
-                        <p className="text-xs text-deep-navy/80 dark:text-slate-400 mt-2">{selectedAttachmentIds.size} file(s) will be attached</p>
+                        <p className="text-xs text-deep-navy/80 dark:text-slate-400 mt-2">{selectedAttachmentIds.size} file(s) will be attached to the next test send only</p>
                       )}
                       {user.role === 'admin' && <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
                         <span className="text-xs text-deep-navy dark:text-slate-400">Cloud:</span>

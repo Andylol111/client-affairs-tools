@@ -28,6 +28,10 @@ async function mockWorkspace(page: Page) {
     else if (path === '/api/workspace/storage-quota') body = { quota_bytes: 1073741824, reserved_bytes: 24000, available_bytes: 1073717824 };
     else if (path === '/api/workspace/projects') body = [{ id: 1, name: 'Consulting project', semester: 'Fall 2026' }];
     else if (path === '/api/workspace/documents') body = Array.from({ length: 24 }, (_, index) => ({ id: index + 1, title: `Project report ${index + 1}`, owner_user_id: index ? 2 : 1, owner_email: index ? 'bob@yale.edu' : 'alice@yale.edu', project_id: 1, project_name: 'Consulting project', visibility: 'project', current_version: 1, revision: 1 }));
+    else if (path === '/api/assistant/sources') body = [{ id: 1, title: 'Project report 1', owner_user_id: 1, project_id: 1, project_name: 'Consulting project', visibility: 'project', current_version: 1, index_state: 'ready', character_count: 4200 }];
+    else if (path === '/api/assistant/threads') body = [];
+    else if (path === '/api/assistant/usage') body = { member_requests: 0, club_requests: 0, member_input_tokens: 0, member_output_tokens: 0, club_input_tokens: 0, club_output_tokens: 0, member_estimated_usd: 0, club_estimated_usd: 0, pricing_note: 'Estimate' };
+    else if (path === '/api/assistant/ask') body = { answer: 'Use the approved project evidence [D1-C1].', thread_id: 9, model: 'haiku', grounded: true, sources: [{ id: 'D1-C1', document_id: 1, title: 'Project report 1', project_name: 'Consulting project' }] };
     else if (/\/documents\/\d+\/versions$/.test(path)) body = [{ id: 1, state: 'ready', filename: 'report.pdf', byte_size: 1000, created_at: 1788960000 }];
     else if (/\/documents\/\d+\/shares$/.test(path)) body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
@@ -94,7 +98,7 @@ test('workspace scroll keeps navigation stable without a fixed backdrop', async 
   await page.screenshot({ path: testInfo.outputPath('documents-scrolled.png'), fullPage: false });
 });
 
-for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
+for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/assistant', 'Assistant'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
   test(`accessible page: ${title}`, async ({ page }, testInfo) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -103,6 +107,16 @@ for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/docu
     await page.screenshot({ path: testInfo.outputPath('page.png'), fullPage: false });
   });
 }
+
+test('assistant keeps source scope visible and returns document citations', async ({ page }) => {
+  await page.goto('/assistant');
+  await expect(page.getByText('Claude Haiku 4.5 on Amazon Bedrock')).toBeVisible();
+  await page.getByLabel('Question or task').fill('Build an evidence-based plan');
+  await page.getByRole('button', { name: 'Ask assistant' }).click();
+  await expect(page.getByText('Use the approved project evidence')).toBeVisible();
+  await expect(page.getByRole('link', { name: '[D1-C1] Project report 1' })).toHaveAttribute('href', '/documents?q=Project%20report%201');
+  await expect(page.getByText('This hour: 0/15')).toBeVisible();
+});
 
 test('checking an uncertain dispatch never calls a send endpoint', async ({ page }) => {
   const mutations: string[] = [];
@@ -114,6 +128,34 @@ test('checking an uncertain dispatch never calls a send endpoint', async ({ page
   await page.getByRole('button', { name: 'Check Sent mail', exact: true }).click();
   await expect(page.getByText('No confirmed match. Still quarantined.')).toBeVisible();
   expect(mutations).toEqual(['/api/campaigns/1/dispatches/reconcile']);
+});
+
+test('campaign review exposes the exact recipient message for repair before release', async ({ page }) => {
+  let updateBody = '';
+  await page.route('**/api/campaigns/1/dispatches', route => route.fulfill({ json: [] }));
+  await page.route('**/api/campaigns/1/contact/11?*', route => {
+    updateBody = new URL(route.request().url()).searchParams.get('body') || '';
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route('**/api/campaigns/1', async route => {
+    return route.fulfill({ json: {
+      ...campaigns[0],
+      counts: { pending: 1 },
+      readiness: { ready: true, issues: [] },
+      contacts: [{
+        id: 11, contact_id: 7, name: 'Client Person', email: 'client@example.org',
+        company: 'Example', status: 'pending', email_subject: 'Original subject',
+        email_body: '<p>Original <a href="https://files.example.org/proposal">proposal</a></p>', messages: [],
+      }],
+    } });
+  });
+  await page.goto('/campaigns/1');
+  const recipient = page.getByRole('listitem').filter({ hasText: 'Client Person' });
+  await recipient.getByRole('button', { name: 'Edit message' }).click();
+  await expect(recipient.locator('textarea')).toHaveValue('Original proposal (https://files.example.org/proposal)');
+  await recipient.locator('textarea').fill('Recipient-specific revision');
+  await recipient.getByRole('button', { name: 'Save message' }).click();
+  await expect.poll(() => updateBody).toBe('Recipient-specific revision');
 });
 
 test('pending file reservations expose recovery only to the owner', async ({ page }) => {

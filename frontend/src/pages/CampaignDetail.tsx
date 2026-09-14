@@ -115,7 +115,7 @@ export default function CampaignDetail() {
   const readiness = campaign.readiness || { ready: false, issues: ['Loading readiness…'] };
   const counts = campaign.counts || {};
   const canManage = canManageCampaign(campaign, user.id);
-  const canEdit = canManage && !['releasing', 'sent'].includes(campaign.status);
+  const canEdit = canManage && campaign.status === 'draft';
 
   return (
     <div className="app-workspace max-w-6xl">
@@ -180,7 +180,16 @@ export default function CampaignDetail() {
       {canManage && <TrackingSync onSynced={refresh} />}
       <CampaignRecipients
         readOnly={!canManage}
+        editable={canEdit}
         contacts={campaign.contacts || []}
+        onUpdate={async (campaignContactId, subject, body) => {
+          await api.campaigns.updateContactEmail(campaignId, campaignContactId, subject, body);
+          await refresh();
+        }}
+        onRemove={async (campaignContactId) => {
+          await api.campaigns.removeContact(campaignId, campaignContactId);
+          await refresh();
+        }}
         onMarkReplied={async (campaignContactId) => {
           await api.outreach.markReplied(campaignContactId);
           await refresh();
@@ -238,7 +247,7 @@ export default function CampaignDetail() {
       <ConfirmDialog
         open={confirmRelease}
         title="Release this campaign?"
-        body={`${campaign.contacts?.length || 0} recipients will enter the paced send queue. You can pause future batches from this page.`}
+        body={`${counts.pending || 0} recipients will enter the paced send queue. You can pause future batches from this page.`}
         confirmLabel="Release campaign"
         busy={busy}
         onClose={() => setConfirmRelease(false)}

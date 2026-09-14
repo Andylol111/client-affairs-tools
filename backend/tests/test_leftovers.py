@@ -52,17 +52,13 @@ def test_pending_2fa_not_authenticated() -> None:
         assert r.json().get("authenticated") is False
 
 
-def test_anthropic_catalog_opus_to_haiku() -> None:
+def test_anthropic_catalog_is_haiku_only_by_default() -> None:
     from app.services.llm import BEDROCK_ANTHROPIC, is_bedrock_model, list_models
 
     ids = {m["id"] for m in BEDROCK_ANTHROPIC}
     labels = {m["label"] for m in BEDROCK_ANTHROPIC}
-    assert ids == {
-        "us.anthropic.claude-opus-5",
-        "us.anthropic.claude-sonnet-5",
-        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    }
-    assert "Claude Opus 4" not in labels
+    assert ids == {"us.anthropic.claude-haiku-4-5-20251001-v1:0"}
+    assert all("Opus" not in label and "Sonnet" not in label for label in labels)
     assert is_bedrock_model("us.anthropic.claude-opus-5")
     assert not is_bedrock_model("ollama:llama3.2")
     catalog = list_models()
@@ -112,6 +108,6 @@ if __name__ == "__main__":
     test_bounce_from_mailer_daemon()
     test_thinkcell_table_names()
     test_pending_2fa_not_authenticated()
-    test_anthropic_catalog_opus_to_haiku()
+    test_anthropic_catalog_is_haiku_only_by_default()
     test_spa_week_route_uses_index()
     print("ok")
