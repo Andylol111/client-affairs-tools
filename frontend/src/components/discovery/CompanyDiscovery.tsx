@@ -79,22 +79,6 @@ export default function CompanyDiscovery() {
     });
   }, []);
 
-  useEffect(() => {
-    const company = params.get('company');
-    const nextDomain = params.get('domain');
-    const linkedin = params.get('linkedin');
-    const titles = params.get('titles');
-    const max = params.get('max');
-    if (company) setCompanyName(company);
-    if (nextDomain) setDomain(nextDomain);
-    if (linkedin) setLinkedinUrl(linkedin);
-    if (titles) setTitleHints(titles);
-    if (max) {
-      const parsed = Number(max);
-      if (Number.isFinite(parsed)) setMaxProspects(Math.min(800, Math.max(25, parsed)));
-    }
-  }, [params]);
-
   const refreshSelected = useCallback(async () => {
     if (selectedId == null) return;
     try {
