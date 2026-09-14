@@ -233,9 +233,20 @@ async def finish_upload(document_id: int, version_id: int, user: dict = Depends(
             raise HTTPException(409,'Upload is no longer pending')
         await db.execute("UPDATE workspace_document_versions SET state='ready',s3_version_id=? WHERE id=? AND state='pending'",(head['VersionId'],version_id))
         await db.execute('UPDATE workspace_documents SET current_version=?,revision=revision+1 WHERE id=? AND current_version<?',(version_id,document_id,version_id))
-        await audit(db,user['id'],'document_upload_complete','document',document_id,{'version_id':version_id,'byte_size':row['byte_size']})
+        suffix=row['filename'].lower().rsplit('.',1)[-1] if '.' in row['filename'] else ''
+        supported=row['content_type'].lower().startswith('text/') or suffix in {'txt','md','csv','json','pdf'} or row['content_type'].lower().split(';',1)[0]=='application/pdf'
+        if row['byte_size']<=8*1024*1024 and supported:
+            await db.execute("""INSERT INTO assistant_document_indexes(version_id,document_id,state)
+                VALUES(?,?,'pending') ON CONFLICT(version_id) DO UPDATE SET state='pending',last_error=NULL""",(version_id,document_id))
+            index_result={'state':'pending'}
+        else:
+            message='File remains downloadable but is not a supported assistant source' if supported else 'Assistant indexing supports text, Markdown, CSV, JSON, and PDF files'
+            await db.execute("""INSERT INTO assistant_document_indexes(version_id,document_id,state,last_error)
+                VALUES(?,?,'failed',?) ON CONFLICT(version_id) DO UPDATE SET state='failed',last_error=excluded.last_error""",(version_id,document_id,message))
+            index_result={'state':'failed','message':message}
+        await audit(db,user['id'],'document_upload_complete','document',document_id,{'version_id':version_id,'byte_size':row['byte_size'],'assistant_index':index_result['state']})
         await db.commit()
-        return {'ok':True}
+        return {'ok':True,'assistant_index':index_result}
     finally:
         await db.close()
 

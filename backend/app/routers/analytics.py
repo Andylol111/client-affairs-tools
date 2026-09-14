@@ -197,7 +197,7 @@ async def export_analytics_csv():
         cursor = await db.execute(
             """SELECT c.name, c.id,
                  COUNT(cc.id) as total,
-                 SUM(CASE WHEN cc.status = 'sent' THEN 1 ELSE 0 END) as sent,
+                 SUM(CASE WHEN cc.sent_at IS NOT NULL THEN 1 ELSE 0 END) as sent,
                  SUM(CASE WHEN cc.opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened,
                  SUM(CASE WHEN cc.replied_at IS NOT NULL THEN 1 ELSE 0 END) as replied
                FROM campaigns c
@@ -230,7 +230,7 @@ async def get_ai_insights():
                  SUM(CASE WHEN cc.replied_at IS NOT NULL THEN 1 ELSE 0 END) as replied,
                  COUNT(*) as total
                FROM campaigns c
-               JOIN campaign_contacts cc ON cc.campaign_id = c.id AND cc.status = 'sent'
+               JOIN campaign_contacts cc ON cc.campaign_id = c.id AND cc.sent_at IS NOT NULL
                GROUP BY c.id"""
         )
         rows = await cursor.fetchall()

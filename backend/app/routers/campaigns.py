@@ -146,22 +146,45 @@ async def _campaign_readiness(db, campaign_id: int) -> dict:
                   OR trim(COALESCE(d.body,cc.email_body, '')) = '')""",
         (campaign_id,),
     )).fetchone())["count"])
-    from app.services.mail_address import validate_recipient
+    from app.services.mail_address import validate_header, validate_recipient
     recipient_rows = await (await db.execute(
-        """SELECT COALESCE(d.recipient,c.email) AS email FROM campaign_contacts cc
+        """SELECT COALESCE(d.recipient,c.email) AS email,
+        COALESCE(d.subject,cc.email_subject,'') AS subject,
+        COALESCE(d.body,cc.email_body,'') AS body FROM campaign_contacts cc
         JOIN contacts c ON c.id=cc.contact_id
         LEFT JOIN outreach_dispatches d ON d.dispatch_key='initial:' || cc.id
         WHERE cc.campaign_id=? AND cc.status IN ('pending','sending','failed')""",(campaign_id,),
     )).fetchall()
     invalid_recipients = 0
+    invalid_content = 0
     for row in recipient_rows:
         try:
             validate_recipient(row['email'])
         except ValueError:
             invalid_recipients += 1
+        try:
+            validate_header(row["subject"])
+            if len(row["subject"]) > 200 or len(row["body"]) > 50000:
+                raise ValueError("Message is too large")
+        except ValueError:
+            invalid_content += 1
     issues = []
+    duplicate_rows = await (await db.execute(
+        """SELECT COUNT(*) AS n FROM (
+               SELECT contact_id FROM campaign_contacts WHERE campaign_id=?
+               GROUP BY contact_id HAVING COUNT(*)>1
+           ) duplicates""",
+        (campaign_id,),
+    )).fetchone()
+    duplicate_contacts = int(duplicate_rows["n"] or 0)
+    if duplicate_contacts:
+        issues.append(
+            f"Remove duplicate rows for {duplicate_contacts} recipient(s) before release; legacy duplicates are never sent automatically."
+        )
     if invalid_recipients:
         issues.append(f"Use one valid bare email address for each of {invalid_recipients} recipient(s).")
+    if invalid_content:
+        issues.append(f"Fix unsafe or oversized content for {invalid_content} recipient(s).")
     if total == 0:
         issues.append("Add at least one recipient.")
     if incomplete:
@@ -180,20 +203,23 @@ async def _campaign_readiness(db, campaign_id: int) -> dict:
 
 
 @router.get("")
-async def list_campaigns():
-    """List all campaigns."""
+async def list_campaigns(user: dict = Depends(get_current_user)):
+    """List campaigns visible to this member; admins can audit the whole club."""
     db = await get_db()
     try:
+        where = "" if user.get("role") == "admin" else "WHERE c.owner_user_id = ?"
+        params = () if user.get("role") == "admin" else (user["id"],)
         cursor = await db.execute(
             """SELECT c.*,
                (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id) AS contact_count,
-               (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id AND status = 'sent') AS sent_count,
+               (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id AND sent_at IS NOT NULL) AS sent_count,
                (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id AND status = 'pending') AS pending_count,
                (SELECT COUNT(*) FROM outreach_dispatches d JOIN campaign_contacts cc ON cc.id=d.campaign_contact_id
                   WHERE cc.campaign_id=c.id AND d.dispatch_key='initial:' || cc.id AND d.state='ready') AS queued_count,
                (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id AND status = 'sending') AS sending_count,
                (SELECT COUNT(*) FROM campaign_contacts WHERE campaign_id = c.id AND status = 'failed') AS failed_count
-               FROM campaigns c ORDER BY created_at DESC"""
+               FROM campaigns c """ + where + " ORDER BY c.created_at DESC",
+            params,
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -296,7 +322,20 @@ async def add_contacts_to_campaign(
         bodies = payload.email_bodies or {}
         attached = 0
 
+        from app.services.contact_access import require_contact_access
+        added = 0
+        seen_contact_ids = set()
         for cid in payload.contact_ids:
+            if cid in seen_contact_ids:
+                continue
+            seen_contact_ids.add(cid)
+            await require_contact_access(db, cid, user)
+            exists = await (await db.execute(
+                "SELECT 1 FROM campaign_contacts WHERE campaign_id = ? AND contact_id = ? LIMIT 1",
+                (campaign_id, cid),
+            )).fetchone()
+            if exists:
+                continue
             subj = subjects.get(str(cid), "")
             body = bodies.get(str(cid), "")
             draft_id = None
@@ -313,11 +352,12 @@ async def add_contacts_to_campaign(
                     subj = subj or (draft["subject"] or "")
                     body = body or (draft["body"] or "")
             await db.execute(
-                """INSERT OR IGNORE INTO campaign_contacts
+                """INSERT INTO campaign_contacts
                    (campaign_id, contact_id, email_subject, email_body, status)
                    VALUES (?, ?, ?, ?, 'pending')""",
                 (campaign_id, cid, subj, body),
             )
+            added += 1
             if draft_id:
                 await db.execute(
                     "UPDATE generated_emails SET campaign_id = ? WHERE id = ?",
@@ -325,7 +365,7 @@ async def add_contacts_to_campaign(
                 )
                 attached += 1
         await db.commit()
-        return {"ok": True, "added": len(payload.contact_ids), "drafts_attached": attached}
+        return {"ok": True, "added": added, "drafts_attached": attached}
     finally:
         await db.close()
 
@@ -341,9 +381,32 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
         if campaign["status"] != "releasing":
             await db.commit()
             return []
+        duplicate = await (await db.execute(
+            """SELECT 1 FROM campaign_contacts WHERE campaign_id=?
+               GROUP BY contact_id HAVING COUNT(*)>1 LIMIT 1""",
+            (campaign_id,),
+        )).fetchone()
+        if duplicate:
+            await db.execute(
+                "UPDATE campaigns SET status='needs_attention', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (campaign_id,),
+            )
+            await db.commit()
+            return []
+        daily_limit = max(1, int(os.getenv("CAMPAIGN_DAILY_SEND_LIMIT", "100") or 100))
+        reserved_today = await (await db.execute(
+            """SELECT COUNT(*) AS n FROM outreach_dispatches
+               WHERE sender_user_id=? AND claimed_at IS NOT NULL
+                 AND date(claimed_at)=date('now')""",
+            (sender,),
+        )).fetchone()
+        remaining = max(0, daily_limit - int(reserved_today["n"] or 0))
+        if remaining == 0:
+            await db.commit()
+            return []
         rows = await (await db.execute(
             "SELECT * FROM campaign_contacts WHERE campaign_id=? AND status='pending' ORDER BY id LIMIT ?",
-            (campaign_id, limit),
+            (campaign_id, min(limit, remaining)),
         )).fetchall()
         claimed = []
         for row in rows:
@@ -401,7 +464,9 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
                 tid = send_meta.get("thread_id")
                 mid = send_meta.get("message_id")
                 await db.execute(
-                    """UPDATE campaign_contacts SET status = 'sent', sent_at = CURRENT_TIMESTAMP,
+                    """UPDATE campaign_contacts SET
+                       status = CASE WHEN status = 'sending' THEN 'sent' ELSE status END,
+                       sent_at = COALESCE(sent_at, CURRENT_TIMESTAMP),
                        last_sequence_sent_at = CURRENT_TIMESTAMP,
                        sent_by_user_id = ?,
                        gmail_thread_id = COALESCE(?, gmail_thread_id),
@@ -418,7 +483,19 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
                     await asyncio.sleep(send_delay)
             except Exception as e:
                 from app.services.dispatch_service import finish
-                await finish(db, f"initial:{row['id']}", error=e)
+                from app.services.gmail_api import DeliveryNotAttemptedError
+                safe_to_retry = isinstance(e, DeliveryNotAttemptedError)
+                if safe_to_retry:
+                    await db.execute(
+                        "DELETE FROM outreach_messages WHERE dispatch_key=? AND sent_at IS NULL",
+                        (f"initial:{row['id']}",),
+                    )
+                await finish(
+                    db,
+                    f"initial:{row['id']}",
+                    error=e,
+                    safe_to_retry=safe_to_retry,
+                )
                 await db.execute(
                     """UPDATE campaign_contacts SET status = 'failed', last_error = ?
                        WHERE id = ? AND status = 'sending'""",
@@ -601,8 +678,23 @@ async def drain_releasing_campaigns(limit: int | None = None) -> dict:
         uid = row["released_by"]
         if not uid:
             continue
-        out.append(await drain_campaign(row["id"], int(uid), limit=n))
-    return {"ok": True, "campaigns": len(out), "results": out}
+        try:
+            out.append(await drain_campaign(row["id"], int(uid), limit=n))
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                failed_db = await get_db()
+                try:
+                    await failed_db.execute(
+                        "UPDATE campaigns SET status='needs_attention' WHERE id=? AND status='releasing'",
+                        (row["id"],),
+                    )
+                    await failed_db.commit()
+                finally:
+                    await failed_db.close()
+            out.append({"ok": False, "campaign_id": row["id"], "error": str(exc.detail)[:1000]})
+        except Exception as exc:
+            out.append({"ok": False, "campaign_id": row["id"], "error": str(exc)[:1000]})
+    return {"ok": all(item.get("ok") for item in out), "campaigns": len(out), "results": out}
 
 
 @router.delete("/{campaign_id}")
@@ -717,6 +809,39 @@ async def update_campaign_contact_email(
             f"UPDATE campaign_contacts SET {', '.join(updates)} WHERE campaign_id = ? AND id = ?",
             params,
         )
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.delete("/{campaign_id}/contact/{cc_id}")
+async def remove_campaign_contact(
+    campaign_id: int, cc_id: int, user: dict = Depends(get_current_user),
+):
+    """Remove a recipient while a campaign is still editable."""
+    db = await get_db()
+    try:
+        from app.services.dispatch_service import begin_write
+        await begin_write(db)
+        campaign_state = await require_campaign_owner(db, campaign_id, user["id"])
+        if campaign_state["status"] not in {"draft", "paused", "needs_attention"}:
+            raise HTTPException(409, "Pause the campaign before changing its recipients")
+        frozen = await (await db.execute(
+            "SELECT 1 FROM outreach_dispatches WHERE campaign_contact_id=? LIMIT 1", (cc_id,)
+        )).fetchone()
+        if frozen:
+            raise HTTPException(409, "Released recipients are immutable; create a new campaign")
+        row = await (await db.execute(
+            "SELECT contact_id FROM campaign_contacts WHERE id=? AND campaign_id=?", (cc_id, campaign_id)
+        )).fetchone()
+        if not row:
+            raise HTTPException(404, "Campaign recipient not found")
+        await db.execute(
+            "UPDATE generated_emails SET campaign_id=NULL WHERE campaign_id=? AND contact_id=? AND user_id=?",
+            (campaign_id, row["contact_id"], user["id"]),
+        )
+        await db.execute("DELETE FROM campaign_contacts WHERE id=? AND campaign_id=?", (cc_id, campaign_id))
         await db.commit()
         return {"ok": True}
     finally:

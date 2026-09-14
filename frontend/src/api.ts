@@ -293,6 +293,24 @@ export const api = {
         groups: { id: string; label: string; models: { id: string; label: string; tier: string; blurb: string }[] }[];
       }>('/api/ai/models'),
   },
+  assistant: {
+    sources: () => fetchApi<Array<{
+      id: number; title: string; owner_user_id: number; project_id?: number | null; project_name?: string | null;
+      visibility: string; current_version: number; index_state?: string | null; character_count?: number; last_error?: string | null;
+    }>>('/api/assistant/sources'),
+    indexDocument: (documentId: number) =>
+      fetchApi<{ state: string; chunks?: number; characters?: number }>(`/api/assistant/documents/${documentId}/index`, { method: 'POST' }),
+    threads: () => fetchApi<Array<{ id: number; title: string; created_at: number; updated_at: number }>>('/api/assistant/threads'),
+    messages: (threadId: number) => fetchApi<Array<{
+      id: number; role: 'user' | 'assistant'; content: string; created_at: number;
+      sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }>;
+    }>>(`/api/assistant/threads/${threadId}`),
+    ask: (data: { question: string; thread_id?: number; project_id?: number; document_ids?: number[] }) =>
+      fetchApi<{ answer: string; thread_id: number; model: string; grounded: boolean; sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }> }>('/api/assistant/ask', {
+        method: 'POST', body: JSON.stringify(data),
+      }),
+    usage: () => fetchApi<{ member_requests: number; club_requests: number; member_input_tokens: number; member_output_tokens: number; club_input_tokens: number; club_output_tokens: number; member_estimated_usd: number; club_estimated_usd: number; pricing_note: string }>('/api/assistant/usage'),
+  },
   telemetry: {
     event: (data: { event_type: string; resource_type?: string; details?: Record<string, unknown> }) =>
       fetchApi<unknown>('/api/telemetry/event', { method: 'POST', body: JSON.stringify(data) }).catch(() => {}),
@@ -555,6 +573,8 @@ export const api = {
       fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
         method: 'PATCH',
       }),
+    removeContact: (campaignId: number, ccId: number) =>
+      fetchApi<{ ok: boolean }>(`/api/campaigns/${campaignId}/contact/${ccId}`, { method: 'DELETE' }),
     update: (id: number, data: { sequence_id?: number | null }) =>
       fetchApi<unknown>(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
@@ -744,11 +764,6 @@ export const api = {
           return res.json();
         },
       },
-      ollamaQuery: (query: string) =>
-        fetchApi<{ answer: string | null; error: string | null }>('/api/admin/operations/ollama/query', {
-          method: 'POST',
-          body: JSON.stringify({ query }),
-        }),
       exportInsightsExcel: async (days?: number) => {
         const res = await fetch(
           `${API_BASE}/api/admin/operations/export/insights?days=${days ?? 30}`,

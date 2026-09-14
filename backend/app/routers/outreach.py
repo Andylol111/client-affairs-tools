@@ -52,6 +52,20 @@ async def assign_contact_owner(contact_id: int, payload: AssignOwner, user: dict
     """Assign contact to a team member (owner_id). For team collaboration."""
     db = await get_db()
     try:
+        from app.services.contact_access import require_contact_access
+        contact = await require_contact_access(db, contact_id, user)
+        if user.get("role") != "admin":
+            allowed_owner_ids = {None, int(user["id"])}
+            if payload.owner_id not in allowed_owner_ids:
+                raise HTTPException(403, "Only administrators can assign contacts to another member")
+            if contact["owner_id"] not in allowed_owner_ids:
+                raise HTTPException(404, "Contact not found")
+        if payload.owner_id is not None:
+            target = await (await db.execute(
+                "SELECT id FROM users WHERE id = ? AND is_active = 1", (payload.owner_id,)
+            )).fetchone()
+            if not target:
+                raise HTTPException(422, "Owner must be an active member")
         await db.execute(
             "UPDATE contacts SET owner_id = ? WHERE id = ?",
             (payload.owner_id, contact_id),
@@ -66,6 +80,8 @@ async def assign_contact_owner(contact_id: int, payload: AssignOwner, user: dict
 async def update_contact_pipeline(contact_id: int, payload: PipelineUpdate, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        from app.services.contact_access import require_contact_access
+        await require_contact_access(db, contact_id, user)
         await db.execute(
             "UPDATE contacts SET pipeline_status = ? WHERE id = ?",
             (payload.pipeline_status, contact_id),
@@ -81,6 +97,8 @@ async def update_contact_pipeline(contact_id: int, payload: PipelineUpdate, user
 async def list_contact_notes(contact_id: int, user: dict = Depends(get_current_user_optional)):
     db = await get_db()
     try:
+        from app.services.contact_access import require_contact_access
+        await require_contact_access(db, contact_id, user)
         cursor = await db.execute(
             "SELECT * FROM contact_notes WHERE contact_id = ? ORDER BY created_at DESC",
             (contact_id,),
@@ -95,6 +113,8 @@ async def list_contact_notes(contact_id: int, user: dict = Depends(get_current_u
 async def create_note(payload: NoteCreate, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        from app.services.contact_access import require_contact_access
+        await require_contact_access(db, payload.contact_id, user)
         cursor = await db.execute(
             "INSERT INTO contact_notes (contact_id, user_id, note) VALUES (?, ?, ?)",
             (payload.contact_id, user.get("id"), payload.note),
@@ -110,6 +130,8 @@ async def create_note(payload: NoteCreate, user: dict = Depends(get_current_user
 async def list_contact_activities(contact_id: int, user: dict = Depends(get_current_user_optional)):
     db = await get_db()
     try:
+        from app.services.contact_access import require_contact_access
+        await require_contact_access(db, contact_id, user)
         cursor = await db.execute(
             "SELECT * FROM contact_activities WHERE contact_id = ? ORDER BY created_at DESC",
             (contact_id,),
@@ -124,6 +146,8 @@ async def list_contact_activities(contact_id: int, user: dict = Depends(get_curr
 async def create_activity(payload: ActivityCreate, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        from app.services.contact_access import require_contact_access
+        await require_contact_access(db, payload.contact_id, user)
         cursor = await db.execute(
             "INSERT INTO contact_activities (contact_id, activity_type, details) VALUES (?, ?, ?)",
             (payload.contact_id, payload.activity_type, payload.details),
@@ -222,10 +246,8 @@ async def create_sequence(payload: SequenceCreate, user: dict = Depends(get_curr
 async def get_contact_profile(contact_id: int, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(404, "Contact not found")
+        from app.services.contact_access import require_contact_access
+        row = await require_contact_access(db, contact_id, user)
         contact = dict(row)
 
         cursor = await db.execute("SELECT * FROM contact_profiles WHERE contact_id = ?", (contact_id,))
@@ -258,10 +280,8 @@ async def get_contact_profile(contact_id: int, user: dict = Depends(get_current_
 async def refresh_contact_profile(contact_id: int, user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(404, "Contact not found")
+        from app.services.contact_access import require_contact_access
+        row = await require_contact_access(db, contact_id, user)
         contact = dict(row)
         result = analyze_contact_profile(
             name=contact.get("name"),
@@ -440,17 +460,32 @@ class OutreachCampaignAddContacts(BaseModel):
     contact_ids: list[int]
 
 
+async def _require_worklist(db, campaign_id: int, user: dict, *, write: bool = False):
+    row = await (await db.execute("SELECT * FROM outreach_campaigns WHERE id=?", (campaign_id,))).fetchone()
+    if not row:
+        raise HTTPException(404, "Target list not found")
+    if row["type"] == "individual" and row["owner_id"] != user["id"] and user.get("role") != "admin":
+        raise HTTPException(404, "Target list not found")
+    if write and row["type"] == "community" and user.get("role") != "admin":
+        raise HTTPException(403, "Administrator required to change a club target list")
+    return row
+
+
 @router.get("/campaigns")
 async def list_outreach_campaigns(user: dict = Depends(get_current_user)):
     """List community and individual outreach campaigns. Community = institution priorities; individual = per-user."""
     db = await get_db()
     try:
+        where = "" if user.get("role") == "admin" else "WHERE oc.type='community' OR oc.owner_id=?"
+        params = () if user.get("role") == "admin" else (user["id"],)
         cursor = await db.execute(
             """SELECT oc.*, u.name as owner_name, u.email as owner_email,
                (SELECT COUNT(*) FROM outreach_campaign_contacts WHERE campaign_id = oc.id) as contact_count
                FROM outreach_campaigns oc
                LEFT JOIN users u ON oc.owner_id = u.id
+               """ + where + """
                ORDER BY oc.type ASC, oc.priority DESC, oc.updated_at DESC"""
+            , params
         )
         rows = await cursor.fetchall()
         return [row_to_dict(r) for r in rows]
@@ -463,6 +498,8 @@ async def create_outreach_campaign(payload: OutreachCampaignCreate, user: dict =
     """Create a community or individual outreach campaign."""
     if payload.type not in ("community", "individual"):
         raise HTTPException(400, "type must be community or individual")
+    if payload.type == "community" and user.get("role") != "admin":
+        raise HTTPException(403, "Administrator required to create a club target list")
     db = await get_db()
     try:
         owner_id = user["id"] if payload.type == "individual" else None
@@ -482,6 +519,7 @@ async def get_outreach_campaign(campaign_id: int, user: dict = Depends(get_curre
     """Get campaign with contacts."""
     db = await get_db()
     try:
+        await _require_worklist(db, campaign_id, user)
         cursor = await db.execute(
             """SELECT oc.*, u.name as owner_name, u.email as owner_email
                FROM outreach_campaigns oc LEFT JOIN users u ON oc.owner_id = u.id
@@ -492,11 +530,13 @@ async def get_outreach_campaign(campaign_id: int, user: dict = Depends(get_curre
         if not row:
             raise HTTPException(404, "Campaign not found")
         campaign = row_to_dict(row)
+        visibility = "" if user.get("role") == "admin" else "AND (c.owner_id=? OR c.owner_id IS NULL)"
+        params = (campaign_id,) if user.get("role") == "admin" else (campaign_id, user["id"])
         cursor = await db.execute(
             """SELECT c.* FROM contacts c
                JOIN outreach_campaign_contacts occ ON occ.contact_id = c.id
-               WHERE occ.campaign_id = ?""",
-            (campaign_id,),
+               WHERE occ.campaign_id = ? """ + visibility,
+            params,
         )
         campaign["contacts"] = [row_to_dict(r) for r in await cursor.fetchall()]
         return campaign
@@ -511,7 +551,10 @@ async def add_contacts_to_outreach_campaign(
     """Add contacts to an outreach campaign."""
     db = await get_db()
     try:
+        await _require_worklist(db, campaign_id, user, write=True)
+        from app.services.contact_access import require_contact_access
         for cid in payload.contact_ids:
+            await require_contact_access(db, cid, user)
             await db.execute(
                 "INSERT OR IGNORE INTO outreach_campaign_contacts (campaign_id, contact_id) VALUES (?, ?)",
                 (campaign_id, cid),
@@ -533,6 +576,7 @@ async def remove_contact_from_outreach_campaign(
     """Remove a contact from an outreach campaign."""
     db = await get_db()
     try:
+        await _require_worklist(db, campaign_id, user, write=True)
         await db.execute(
             "DELETE FROM outreach_campaign_contacts WHERE campaign_id = ? AND contact_id = ?",
             (campaign_id, contact_id),
@@ -552,6 +596,7 @@ async def delete_outreach_campaign(campaign_id: int, user: dict = Depends(get_cu
     """Delete an outreach campaign."""
     db = await get_db()
     try:
+        await _require_worklist(db, campaign_id, user, write=True)
         await db.execute("DELETE FROM outreach_campaign_contacts WHERE campaign_id = ?", (campaign_id,))
         await db.execute("DELETE FROM outreach_campaigns WHERE id = ?", (campaign_id,))
         await db.commit()
@@ -565,10 +610,13 @@ async def delete_outreach_campaign(campaign_id: int, user: dict = Depends(get_cu
 async def get_pipeline_metrics(user: dict = Depends(get_current_user)):
     db = await get_db()
     try:
+        visibility = "" if user.get("role") == "admin" else "AND (owner_id=? OR owner_id IS NULL)"
+        params = () if user.get("role") == "admin" else (user["id"],)
         cursor = await db.execute(
             """SELECT pipeline_status, COUNT(*) as count FROM contacts
-               WHERE pipeline_status IS NOT NULL AND pipeline_status != ''
-               GROUP BY pipeline_status"""
+               WHERE pipeline_status IS NOT NULL AND pipeline_status != '' """
+            + visibility + " GROUP BY pipeline_status",
+            params,
         )
         rows = await cursor.fetchall()
         return {"by_status": [dict(r) for r in rows]}

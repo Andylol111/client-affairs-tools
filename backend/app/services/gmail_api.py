@@ -19,6 +19,10 @@ GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
 GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
 
 
+class DeliveryNotAttemptedError(ValueError):
+    """The provider rejected the request before Gmail could accept the message."""
+
+
 async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
     """
     Get a valid access token for the user. Refreshes if expired.
@@ -141,7 +145,7 @@ async def send_via_gmail_api(
     validate_header(from_name or "")
     result = await get_valid_access_token(user_id)
     if not result:
-        raise ValueError(
+        raise DeliveryNotAttemptedError(
             "No Gmail access. Connect your own Gmail account in Profile, under Integrations."
         )
     access_token, from_email = result
@@ -227,7 +231,7 @@ async def send_via_gmail_api_multipart(
     validate_header(from_name or "")
     result = await get_valid_access_token(user_id)
     if not result:
-        raise ValueError(
+        raise DeliveryNotAttemptedError(
             "No Gmail access. Connect your own Gmail account in Profile, under Integrations."
         )
     access_token, from_email = result
@@ -256,11 +260,13 @@ async def send_via_gmail_api_multipart(
             },
         )
         if r.status_code == 401:
-            raise ValueError(
+            raise DeliveryNotAttemptedError(
                 "Gmail access expired. Sign out and sign in again to re-authorize."
             )
-        if r.status_code >= 400:
-            raise RuntimeError(f"Gmail API error: {r.status_code} - {r.text}")
+        if 400 <= r.status_code < 500:
+            raise DeliveryNotAttemptedError(f"Gmail rejected the send request ({r.status_code}).")
+        if r.status_code >= 500:
+            raise RuntimeError(f"Gmail send result is uncertain ({r.status_code}); reconcile before retrying.")
     return True
 
 
@@ -288,7 +294,7 @@ async def send_via_gmail_api_with_tracking(
     validate_header(from_name or "")
     result = await get_valid_access_token(user_id)
     if not result:
-        raise ValueError(
+        raise DeliveryNotAttemptedError(
             "No Gmail access. Connect your own Gmail account in Profile, under Integrations."
         )
     access_token, from_email = result
@@ -345,11 +351,13 @@ async def send_via_gmail_api_with_tracking(
             },
         )
         if r.status_code == 401:
-            raise ValueError(
+            raise DeliveryNotAttemptedError(
                 "Gmail access expired. Sign out and sign in again to re-authorize."
             )
-        if r.status_code >= 400:
-            raise RuntimeError(f"Gmail API error: {r.status_code} - {r.text}")
+        if 400 <= r.status_code < 500:
+            raise DeliveryNotAttemptedError(f"Gmail rejected the send request ({r.status_code}).")
+        if r.status_code >= 500:
+            raise RuntimeError(f"Gmail send result is uncertain ({r.status_code}); reconcile before retrying.")
         data = r.json()
         db = await get_db()
         try:

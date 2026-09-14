@@ -28,9 +28,11 @@ runs:
         JWT_SECRET: p2-test-secret-not-a-known-default-xx
       run: |
         for test in \
+          test_assistant_boundaries.py \
           test_environment_security.py \
           test_sender_isolation.py \
           test_dispatch_safety.py \
+          test_outreach_pipeline.py \
           test_workspace_boundaries.py \
           test_membership_admission.py \
           test_telemetry_security.py \

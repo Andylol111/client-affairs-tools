@@ -18,7 +18,7 @@ def test_bedrock_rank_is_haiku() -> None:
     os.environ.pop("LLM_MODEL", None)
     assert llm_provider() == "bedrock"
     assert "haiku" in rank_model_id().lower()
-    assert rank_model_id() != default_model_id()
+    assert rank_model_id() == default_model_id(), "Interactive and ranking work share the reviewed low-cost model"
 
 
 def test_explicit_rank_wins() -> None:

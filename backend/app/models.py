@@ -1,5 +1,5 @@
 """Pydantic models for YUCG Outreach."""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
@@ -72,7 +72,7 @@ class CampaignCreate(BaseModel):
 
 
 class CampaignContactAdd(BaseModel):
-    contact_ids: list[int]
+    contact_ids: list[int] = Field(min_length=1, max_length=500)
     email_subjects: Optional[dict[str, str]] = None  # contact_id -> subject
     email_bodies: Optional[dict[str, str]] = None    # contact_id -> body
 
