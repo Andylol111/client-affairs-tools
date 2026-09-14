@@ -685,3 +685,50 @@ async def list_catalog(_admin: dict = Depends(get_current_admin)):
         for p in PREFIXES:
             prefixes.append({"prefix": p, "objects": list_prefix(p if p.endswith("/") else p, 20)})
     return {"bucket": catalog_bucket() or None, "objects": objects, "prefixes": prefixes}
+
+
+# --- External email verification provider controls (admin only) ---
+@router.get("/email-verification/capacity")
+async def email_verification_capacity(admin: dict = Depends(get_current_admin)):
+    """Remaining daily external-validation capacity, without exposing any address."""
+    from app.services.email_verification import provider_capacity
+
+    capacity = await provider_capacity(actor_id=admin["id"])
+    await log_audit(admin["id"], "email_verification_capacity_view", "provider", None, "")
+    return capacity
+
+
+class EmailVerificationEnabledBody(BaseModel):
+    enabled: bool
+    reason: Optional[str] = None
+
+
+@router.post("/email-verification/enabled")
+async def set_email_verification_enabled(
+    payload: EmailVerificationEnabledBody, admin: dict = Depends(get_current_admin)
+):
+    """Immediate provider kill switch. Local syntax/DNS checks are unaffected."""
+    from app.services.email_verification import set_provider_enabled
+
+    result = await set_provider_enabled(actor_id=admin["id"], enabled=payload.enabled)
+    await log_audit(
+        admin["id"],
+        "email_verification_enabled" if payload.enabled else "email_verification_disabled",
+        "provider",
+        None,
+        (payload.reason or "")[:500],
+    )
+    return result
+
+
+# --- Contact research operational metrics (admin only) ---
+@router.get("/research/metrics")
+async def research_metrics_view(admin: dict = Depends(get_current_admin)):
+    """Privacy-safe research run, evidence, and provider aggregates."""
+    from app.services.research_service import research_metrics
+
+    db = await get_db()
+    try:
+        return await research_metrics(db, actor_id=admin["id"])
+    finally:
+        await db.close()

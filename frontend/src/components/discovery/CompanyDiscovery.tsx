@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
+import { legacyMailboxLabel } from '../../lib/contactEvidence';
 import { Link } from 'react-router-dom';
 
 type RunRow = {
@@ -29,13 +30,6 @@ type DiscoveryProspectRow = {
   fit_status?: string;
 };
 
-function inboxLabel(status?: string | null): string {
-  if (status === 'valid') return 'Verified';
-  if (status === 'mx') return 'MX available';
-  if (status === 'invalid') return 'Invalid';
-  if (status === 'risky') return 'Risky';
-  return status || 'Unknown';
-}
 
 function aiLabel(verdict?: string | null): string {
   if (verdict === 'real') return 'Relevant';
@@ -334,8 +328,7 @@ export default function CompanyDiscovery() {
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Email</th>
                   <th className="px-3 py-2 font-medium">Title</th>
-                  <th className="px-3 py-2 font-medium">Source</th>
-                  <th className="px-3 py-2 font-medium">Inbox</th>
+                  <th className="px-3 py-2 font-medium">Mailbox assessment</th>
                   <th className="px-3 py-2 font-medium">AI</th>
                   <th className="px-3 py-2 font-medium">Score</th>
                   <th className="px-3 py-2 font-medium">Fit</th>
@@ -359,7 +352,7 @@ export default function CompanyDiscovery() {
                     <td className="px-3 py-2 max-w-[200px] truncate">{p.email || '—'}</td>
                     <td className="px-3 py-2 max-w-[180px] truncate">{p.title || '—'}</td>
                     <td className="px-3 py-2 text-xs">{p.contact_source || '—'}</td>
-                    <td className="px-3 py-2 text-xs">{inboxLabel(p.email_verification_status)}</td>
+                    <td className="px-3 py-2 text-xs">{legacyMailboxLabel(p.email_verification_status)}</td>
                     <td className="px-3 py-2 text-xs" title={p.ai_reason || ''}>
                       {aiLabel(p.ai_verdict)}
                     </td>

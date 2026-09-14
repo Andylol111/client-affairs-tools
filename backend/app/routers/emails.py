@@ -1,5 +1,6 @@
 """Member-owned email drafts and controlled test delivery."""
 from fastapi import APIRouter, HTTPException, Depends
+import json
 from starlette.concurrency import run_in_threadpool
 from app.services.generation_policy import reserve_generation
 from pydantic import BaseModel
@@ -45,6 +46,8 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
 
         from app.services.contact_scraper import normalize_domain
         company_domain = normalize_domain(contact.get("company_domain") or "")
+        from app.services.generation_policy import draft_evidence
+        evidence = await draft_evidence(db, contact, user["id"])
 
         await reserve_generation(user['id'], req.model)
         subject, body = await run_in_threadpool(generate_email,
@@ -58,12 +61,13 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
             custom_instructions=req.custom_instructions,
             value_proposition=req.value_proposition,
             model=req.model,
+            evidence=evidence,
         )
         signature = await get_member_setting(user["id"], "signature") or ""
         await db.execute(
-            """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
-               VALUES (?, ?, ?, ?, ?)""",
-            (user["id"], req.contact_id, subject, body, signature),
+            """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature, evidence_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (user["id"], req.contact_id, subject, body, signature, json.dumps(evidence)),
         )
         await db.commit()
 
@@ -125,6 +129,23 @@ async def generate_email_template(
     from app.services.contact_scraper import normalize_domain, sanitize_email
 
     company_domain = normalize_domain(req.company or "") if req.company else ""
+    em = sanitize_email(req.email or "").strip().lower()
+    evidence = {"sources": [], "context_origin": "user_provided",
+                "user_provided": {"name": req.name, "title": req.title, "company": req.company}}
+    if em:
+        db = await get_db()
+        try:
+            from app.services.delivery_policy import require_recipient_allowed
+            await require_recipient_allowed(db, em)
+            existing = await (await db.execute("SELECT * FROM contacts WHERE lower(email)=?", (em,))).fetchone()
+            if existing:
+                from app.services.contact_access import require_contact_access
+                await require_contact_access(db, existing["id"], user)
+                from app.services.generation_policy import draft_evidence
+                evidence = {**await draft_evidence(db, dict(existing), user["id"]),
+                            "user_provided": evidence["user_provided"]}
+        finally:
+            await db.close()
     await reserve_generation(user['id'], req.model)
     subject, body = await run_in_threadpool(generate_email,
         contact_name=req.name,
@@ -137,20 +158,24 @@ async def generate_email_template(
         custom_instructions=req.custom_instructions,
         value_proposition=req.value_proposition,
         model=req.model,
+        evidence=evidence,
     )
     contact_id = None
-    em = sanitize_email(req.email or "").strip()
     if user and em:
         db = await get_db()
         try:
             contact_id = await _upsert_contact_by_email(
                 db, email=em, name=req.name, title=req.title, company=req.company
             )
+            from app.services.contact_intelligence import ingest_contact
+            await ingest_contact(db, actor_id=user["id"], origin="user_supplied",
+                                 contact={"id": contact_id, "email": em, "name": req.name,
+                                          "title": req.title, "company": req.company})
             signature = await get_member_setting(user["id"], "signature") or ""
             await db.execute(
-                """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (user["id"], contact_id, subject, body, signature),
+                """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature, evidence_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (user["id"], contact_id, subject, body, signature, json.dumps(evidence)),
             )
             await db.commit()
         finally:
@@ -250,6 +275,33 @@ async def delete_generated_email_draft(
         if cursor.rowcount == 0:
             raise HTTPException(404, "Draft not found")
         return {"ok": True, "id": draft_id}
+    finally:
+        await db.close()
+
+@router.get("/generated/{draft_id}/evidence")
+async def get_generated_email_evidence(draft_id: int, user: dict = Depends(get_current_user)):
+    """Show the exact evidence a member-owned draft was grounded in."""
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT id, user_id, contact_id, evidence_json FROM generated_emails WHERE id = ?",
+            (draft_id,),
+        )).fetchone()
+        if not row:
+            raise HTTPException(404, "Draft not found")
+        if row["user_id"] != user["id"]:
+            raise HTTPException(403, "Drafts are member-owned")
+        try:
+            evidence = json.loads(row["evidence_json"] or "{}")
+        except ValueError:
+            evidence = {}
+        return {
+            "id": row["id"],
+            "contact_id": row["contact_id"],
+            "context_origin": evidence.get("context_origin") or "user_provided",
+            "sources": evidence.get("sources", []),
+            "checked_at": evidence.get("checked_at"),
+        }
     finally:
         await db.close()
 

@@ -17,6 +17,7 @@ from app.models import ContactCreate, ScrapeRequest, SearchPersonRequest
 from app.auth_deps import get_current_user_optional, get_current_user, get_current_admin
 from app.services.audit_service import log_audit
 from app.services.usage_service import log_event
+from app.services.contact_intelligence import ingest_contact, contact_evidence, assess_address
 from app.services.contact_merge import merge_contacts
 from app.services.contact_scraper import (
     scrape_contacts_from_domain,
@@ -61,6 +62,8 @@ async def _execute_scrape(
     req: ScrapeRequest,
     on_progress: ProgressCallback = None,
     cancel_event: asyncio.Event | None = None,
+    *,
+    actor_id: int,
 ) -> dict:
     """
     Core scrape pipeline. Optional on_progress receives {"type":"progress", "phase", "pct", "message", "detail?"}.
@@ -256,9 +259,9 @@ async def _execute_scrape(
         pct = base + (done / max(total, 1)) * span
         label = {
             "identity": "Identity gate",
-            "verify": "Inbox agents",
-            "ai": "AI agents",
-            "done": "Agents finished",
+            "verify": "Mail address checks",
+            "ai": "Evidence review",
+            "done": "Checks completed",
         }.get(phase, "Verifying")
         await emit("prepare", pct, label, detail or f"{done}/{total}")
 
@@ -283,12 +286,21 @@ async def _execute_scrape(
         f"{junk_count} flagged as junk by AI" if junk_count else "Saving to database…",
     )
 
+    for candidate in save_candidates:
+        candidate["mailbox_assessment"] = await assess_address(
+            sanitize_email(candidate.get("email") or ""), actor_id=actor_id
+        )
     db = await get_db()
     created = []
     returned: list[dict] = []
     duplicates_skipped = 0
     total_save = max(len(save_candidates), 1)
     try:
+        await db.execute(
+            "INSERT INTO discovery_run_owners (scrape_run_id, owner_id) VALUES (?, ?)",
+            (scrape_run_id, actor_id),
+        )
+        await db.commit()
         # Build result rows for saveable contacts only (junk excluded from UI)
         result_by_email: dict[str, dict] = {}
         for c in save_candidates:
@@ -323,6 +335,10 @@ async def _execute_scrape(
                 cursor = await db.execute("SELECT * FROM contacts WHERE email = ?", (email_clean,))
                 existing = await cursor.fetchone()
                 if existing:
+                    if existing["owner_id"] is not None and int(existing["owner_id"]) != actor_id:
+                        duplicates_skipped += 1
+                        result_by_email.pop(email_clean, None)
+                        continue
                     duplicates_skipped += 1
                     row = dict(existing)
                     if row.get("email"):
@@ -357,11 +373,15 @@ async def _execute_scrape(
                             row["id"],
                         ),
                     )
+                    result_by_email[email_clean]["evidence"] = await ingest_contact(
+                        db, contact={**c, "id": row["id"], "email": email_clean},
+                        actor_id=actor_id,
+                    )
                     await db.commit()
                     continue
                 cursor = await db.execute(
-                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, contact_source, email_verification_status, email_pattern, ai_verdict, ai_reason, ai_source_note)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, contact_source, email_verification_status, email_pattern, ai_verdict, ai_reason, ai_source_note, owner_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         c.get("name"),
                         email_clean,
@@ -377,15 +397,22 @@ async def _execute_scrape(
                         c.get("ai_verdict"),
                         c.get("ai_reason"),
                         c.get("ai_source_note"),
+                        actor_id,
                     ),
                 )
                 row_id = cursor.lastrowid
+                evidence = await ingest_contact(
+                    db, contact={**c, "id": row_id, "email": email_clean},
+                    actor_id=actor_id,
+                )
                 await db.commit()
-                created.append({"id": row_id, **c, "email": email_clean, "company_domain": domain_clean, "already_exists": False})
+                created.append({"id": row_id, **c, "email": email_clean, "company_domain": domain_clean, "already_exists": False, "evidence": evidence})
                 result_by_email[email_clean] = {**created[-1], "ai_rejected": False}
             except Exception:
+                # Per-row tolerance predates the evidence work: one bad row must not
+                # discard the rest of the scrape. The failed row is dropped from results.
                 await db.rollback()
-                pass
+                result_by_email.pop(sanitize_email(c.get("email") or ""), None)
 
         returned = list(result_by_email.values())
 
@@ -414,79 +441,90 @@ async def _execute_scrape(
     }
 
 
+def _import_row(raw: dict) -> dict | None:
+    row = {}
+    for key, value in raw.items():
+        if key is None or isinstance(value, (list, tuple)):
+            raise HTTPException(400, "Each row must match the file header.")
+        text = str(value or "").strip()
+        if len(text) > 2000 or text.startswith(("=", "+", "-", "@")):
+            raise HTTPException(400, "Remove formulas and keep each field under 2,000 characters.")
+        row[str(key).strip().lower().replace(" ", "_")] = text
+    email = row.get("email") or row.get("e-mail") or row.get("email_address")
+    if not email or not is_employee_outreach_email(email):
+        return None
+    return {
+        "name": row.get("name") or row.get("full_name") or "",
+        "email": sanitize_email(email).lower(),
+        "title": row.get("title") or row.get("job_title") or row.get("position") or "",
+        "company": row.get("company") or row.get("organization") or "",
+        "company_domain": row.get("domain") or row.get("company_domain") or "",
+        "linkedin_url": row.get("linkedin") or row.get("linkedin_url") or "",
+    }
+
+
 def _parse_csv(content: bytes) -> list[dict]:
-    """Parse CSV, auto-detect delimiter. Expects columns: name, email, title, company (email required)."""
-    text = content.decode("utf-8-sig", errors="replace")
+    """Parse a bounded UTF-8 CSV without interpreting spreadsheet formulas."""
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "Save the CSV using UTF-8 encoding and upload it again.")
     reader = csv.DictReader(io.StringIO(text))
     rows = []
-    for r in reader:
-        row = {k.strip().lower().replace(" ", "_"): v.strip() if v else "" for k, v in r.items()}
-        email = row.get("email") or row.get("e-mail") or row.get("email_address")
-        if not email or "@" not in email:
-            continue
-        if not is_employee_outreach_email(str(email).strip()):
-            continue
-        rows.append({
-            "name": row.get("name") or row.get("full_name") or "",
-            "email": email,
-            "title": row.get("title") or row.get("job_title") or row.get("position") or "",
-            "company": row.get("company") or row.get("organization") or "",
-            "company_domain": row.get("domain") or row.get("company_domain") or "",
-            "linkedin_url": row.get("linkedin") or row.get("linkedin_url") or "",
-        })
+    try:
+        for count, raw in enumerate(reader, 1):
+            if count > 1000:
+                raise HTTPException(400, "Upload at most 1,000 contact rows at a time.")
+            row = _import_row(raw)
+            if row:
+                rows.append(row)
+    except csv.Error:
+        raise HTTPException(400, "Check the CSV delimiters and field lengths, then upload it again.")
     return rows
 
 
 def _parse_excel(content: bytes) -> list[dict]:
-    """Parse Excel (.xlsx). Uses first sheet, expects header row with name, email, title, company."""
+    """Read bounded XLSX values, rejecting formulas rather than cached results."""
+    from zipfile import ZipFile, BadZipFile
+    from openpyxl import load_workbook
+
     try:
-        from openpyxl import load_workbook
-    except ImportError:
-        raise HTTPException(500, "openpyxl not installed")
-    wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    ws = wb.active
-    if not ws:
-        return []
-    rows_iter = ws.iter_rows(values_only=True)
-    headers = [str(h).strip().lower().replace(" ", "_") if h else "" for h in next(rows_iter, [])]
-    col_map = {h: i for i, h in enumerate(headers) if h}
-    email_col = col_map.get("email") or col_map.get("e-mail") or col_map.get("email_address")
-    if email_col is None:
-        email_col = next((i for i, h in enumerate(headers) if h and "email" in h), None)
-    if email_col is None:
-        return []
-    rows = []
-    name_col = col_map.get("name") or col_map.get("full_name")
-    title_col = col_map.get("title") or col_map.get("job_title") or col_map.get("position")
-    company_col = col_map.get("company") or col_map.get("organization")
-    domain_col = col_map.get("domain") or col_map.get("company_domain")
-    linkedin_col = col_map.get("linkedin") or col_map.get("linkedin_url")
-    for row in rows_iter:
-        vals = list(row) if row else []
-        email = (vals[email_col] if email_col is not None and email_col < len(vals) else "") or ""
-        if not email or "@" not in str(email):
-            continue
-        if not is_employee_outreach_email(str(email).strip()):
-            continue
-        rows.append({
-            "name": str(vals[name_col] or "") if name_col is not None and name_col < len(vals) else "",
-            "email": str(email).strip(),
-            "title": str(vals[title_col] or "") if title_col is not None and title_col < len(vals) else "",
-            "company": str(vals[company_col] or "") if company_col is not None and company_col < len(vals) else "",
-            "company_domain": str(vals[domain_col] or "") if domain_col is not None and domain_col < len(vals) else "",
-            "linkedin_url": str(vals[linkedin_col] or "") if linkedin_col is not None and linkedin_col < len(vals) else "",
-        })
-    return rows
+        with ZipFile(io.BytesIO(content)) as archive:
+            if len(archive.infolist()) > 200 or sum(item.file_size for item in archive.infolist()) > 20 * 1024 * 1024:
+                raise HTTPException(400, "The expanded workbook exceeds the 20 MB limit.")
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=False)
+    except (BadZipFile, ValueError, KeyError):
+        raise HTTPException(400, "Upload a valid Excel .xlsx workbook.")
+    try:
+        sheet = workbook.active
+        if sheet is None:
+            return []
+        if sheet.max_column and sheet.max_column > 50:
+            raise HTTPException(400, "Upload a workbook with at most 50 columns.")
+        values = sheet.iter_rows(values_only=True)
+        headers = [str(value or "") for value in next(values, [])]
+        rows = []
+        for count, values_row in enumerate(values, 1):
+            if count > 1000:
+                raise HTTPException(400, "Upload at most 1,000 contact rows at a time.")
+            row = _import_row(dict(zip(headers, values_row)))
+            if row:
+                rows.append(row)
+        return rows
+    finally:
+        workbook.close()
 
 
 @router.post("/import")
 async def import_contacts(
     file: UploadFile = File(...),
     skip_duplicates: bool = True,
-    user: dict | None = Depends(get_current_user_optional),
+    user: dict = Depends(get_current_user),
 ):
     """Import contacts from CSV or Excel. Duplicates (by email) are skipped by default; set skip_duplicates=false to get errors on duplicate."""
-    content = await file.read()
+    content = await file.read(5 * 1024 * 1024 + 1)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Upload a file smaller than 5 MB.")
     filename = (file.filename or "").lower()
     if filename.endswith(".csv"):
         rows = _parse_csv(content)
@@ -496,6 +534,8 @@ async def import_contacts(
         raise HTTPException(400, "Upload CSV or Excel (.xlsx)")
     if not rows:
         raise HTTPException(400, "No valid contacts found. Ensure file has 'email' column and at least one row.")
+    for row in rows:
+        row["mailbox_assessment"] = await assess_address(row["email"], actor_id=user["id"])
     db = await get_db()
     created = []
     duplicates_skipped = 0
@@ -507,14 +547,23 @@ async def import_contacts(
                     duplicates_skipped += 1
                     continue
                 domain_clean = normalize_domain(c.get("company_domain") or "")
-                if skip_duplicates:
-                    cursor = await db.execute("SELECT id FROM contacts WHERE email = ?", (email_clean,))
-                    if await cursor.fetchone():
-                        duplicates_skipped += 1
-                        continue
+                existing = await (await db.execute(
+                    "SELECT id, owner_id FROM contacts WHERE email = ?", (email_clean,)
+                )).fetchone()
+                if existing:
+                    if not skip_duplicates:
+                        raise HTTPException(409, "The file contains an address already in the catalog.")
+                    if existing["owner_id"] is None or int(existing["owner_id"]) == user["id"]:
+                        await ingest_contact(
+                            db, contact={**c, "id": existing["id"]}, actor_id=user["id"],
+                            origin="imported_without_evidence",
+                        )
+                        await db.commit()
+                    duplicates_skipped += 1
+                    continue
                 cursor = await db.execute(
-                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department)
-                       VALUES (?, ?, ?, ?, ?, ?, 'medium', ?)""",
+                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, owner_id)
+                       VALUES (?, ?, ?, ?, ?, ?, 'medium', ?, ?)""",
                     (
                         c.get("name") or "Unknown",
                         email_clean,
@@ -523,16 +572,20 @@ async def import_contacts(
                         domain_clean,
                         c.get("linkedin_url"),
                         None,
+                        user["id"],
                     ),
                 )
                 row_id = cursor.lastrowid
+                evidence = await ingest_contact(
+                    db, contact={**c, "id": row_id}, actor_id=user["id"],
+                    origin="imported_without_evidence",
+                )
                 await db.commit()
-                created.append({"id": row_id, **c})
+                created.append({"id": row_id, **c, "evidence": evidence})
             except Exception:
                 await db.rollback()
                 if not skip_duplicates:
                     raise
-                pass
     finally:
         await db.close()
     if user:
@@ -634,10 +687,20 @@ Respond in clear bullet points and one short paragraph. If no contact info is fo
 
 
 @router.get("/discovery-log")
-async def list_discovery_log(scrape_run_id: str, limit: int = 500):
+async def list_discovery_log(scrape_run_id: str, limit: int = 500, user: dict = Depends(get_current_user)):
     """Review AI + source audit trail for a scrape run."""
     if not scrape_run_id.strip():
         raise HTTPException(400, "scrape_run_id is required")
+    db = await get_db()
+    try:
+        owned = await (await db.execute(
+            "SELECT 1 FROM discovery_run_owners WHERE scrape_run_id = ? AND owner_id = ?",
+            (scrape_run_id.strip(), user["id"]),
+        )).fetchone()
+        if not owned:
+            raise HTTPException(404, "Research run not found")
+    finally:
+        await db.close()
     rows = await get_discovery_log(scrape_run_id.strip(), limit=min(limit, 2000))
     return {"scrape_run_id": scrape_run_id, "entries": rows, "count": len(rows)}
 
@@ -653,13 +716,13 @@ async def list_company_email_patterns(domain: str):
 
 
 @router.post("/scrape")
-async def scrape_contacts(req: ScrapeRequest):
+async def scrape_contacts(req: ScrapeRequest, user: dict = Depends(get_current_user)):
     """Scrape contacts from domain, company name, and/or LinkedIn company URL."""
-    return await _execute_scrape(req, None)
+    return await _execute_scrape(req, None, actor_id=user["id"])
 
 
 @router.post("/scrape-stream")
-async def scrape_contacts_stream(req: ScrapeRequest, request: Request):
+async def scrape_contacts_stream(req: ScrapeRequest, request: Request, user: dict = Depends(get_current_user)):
     """Same pipeline as /scrape but streams NDJSON progress events for live UI feedback."""
 
     async def event_generator():
@@ -684,7 +747,7 @@ async def scrape_contacts_stream(req: ScrapeRequest, request: Request):
 
         async def run() -> None:
             try:
-                outcome["result"] = await _execute_scrape(req, push, cancel_event=cancel)
+                outcome["result"] = await _execute_scrape(req, push, cancel_event=cancel, actor_id=user["id"])
             except ScrapeCancelled as sc:
                 outcome["cancelled"] = True
                 outcome["partial"] = sc.snapshot
@@ -1002,6 +1065,8 @@ async def list_contacts(
                 r["email"] = sanitize_email(r["email"])
             if r.get("company_domain"):
                 r["company_domain"] = normalize_domain(r["company_domain"])
+            # Evidence lives on the detail endpoint; a list page must not run
+            # one evidence query per row against the shared SQLite host.
         if employee_only:
             result = [r for r in result if is_employee_outreach_email(r.get("email") or "")]
         return {"items": result, "total": total, "limit": limit, "offset": offset}
@@ -1010,29 +1075,39 @@ async def list_contacts(
 
 
 @router.post("")
-async def create_contact(contact: ContactCreate, user: dict | None = Depends(get_current_user_optional)):
+async def create_contact(contact: ContactCreate, user: dict = Depends(get_current_user)):
     """Manually add a contact."""
+    email = sanitize_email(contact.email).lower()
+    if not email or not is_employee_outreach_email(email):
+        raise HTTPException(400, "Enter an individual professional email address.")
+    assessment = await assess_address(email, actor_id=user["id"])
     db = await get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url, confidence, department, owner_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 contact.name,
-                contact.email,
+                email,
                 contact.title,
                 contact.company,
                 contact.company_domain,
                 contact.linkedin_url,
                 contact.confidence or "medium",
                 contact.department,
+                user["id"],
             ),
         )
-        await db.commit()
         row_id = cursor.lastrowid
+        evidence = await ingest_contact(
+            db, contact={**contact.model_dump(), "id": row_id, "email": email, "mailbox_assessment": assessment},
+            actor_id=user["id"], origin="user_supplied",
+        )
+        await db.commit()
         cursor = await db.execute("SELECT * FROM contacts WHERE id = ?", (row_id,))
         row = await cursor.fetchone()
         d = dict(row)
+        d["evidence"] = evidence
         if d.get("email"):
             d["email"] = sanitize_email(d["email"])
         if user:
@@ -1057,6 +1132,7 @@ async def get_contact(contact_id: int, user: dict = Depends(get_current_user)):
             d["email"] = sanitize_email(d["email"])
         if d.get("company_domain"):
             d["company_domain"] = normalize_domain(d["company_domain"])
+        d["evidence"] = await contact_evidence(db, contact_id, user["id"])
         return d
     finally:
         await db.close()

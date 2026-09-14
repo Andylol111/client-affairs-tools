@@ -268,6 +268,19 @@ export default function EmailStudio() {
   useEffect(() => {
     api.yucg.listReleases().then(setReleases).catch(() => setReleases([]));
   }, []);
+  // Deep link from research acceptance: preselect the exact accepted contact.
+  const deepLinkContactId = Number(new URLSearchParams(window.location.search).get('contact_id')) || null;
+  const [deepLinkApplied, setDeepLinkApplied] = useState(false);
+  const deepLinkTarget = !deepLinkApplied && deepLinkContactId != null
+    ? contacts.find((contact) => contact.id === deepLinkContactId)
+    : undefined;
+  if (deepLinkTarget) {
+    setDeepLinkApplied(true);
+    setSelected(deepLinkTarget);
+    setEmail(null);
+    setSelectedDraftId(null);
+    setMobileStep('edit');
+  }
 
   const sidebarSelectedIds = useMemo(() => {
     const allowed = new Set(contacts.map((c) => c.id));
