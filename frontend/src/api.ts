@@ -357,8 +357,21 @@ export const api = {
       id: number; role: 'user' | 'assistant'; content: string; created_at: number;
       sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }>;
     }>>(`/api/assistant/threads/${threadId}`),
-    ask: (data: { question: string; thread_id?: number; project_id?: number; document_ids?: number[] }) =>
-      fetchApi<{ answer: string; thread_id: number; model: string; grounded: boolean; sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }> }>('/api/assistant/ask', {
+    ask: (data: { question: string; thread_id?: number; project_id?: number; document_ids?: number[]; page_path?: string }) =>
+      fetchApi<{
+        answer: string; thread_id: number; model: string; grounded: boolean;
+        sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }>;
+        lookups?: Array<{ tool: string; data: unknown }>;
+        pending_actions?: Array<{ tool: string; args: Record<string, unknown>; summary: string }>;
+        navigations?: Array<{ path: string; label: string }>;
+      }>('/api/assistant/ask', {
+        method: 'POST', body: JSON.stringify(data),
+      }),
+    act: (data: { tool: string; args: Record<string, unknown>; thread_id?: number }) =>
+      fetchApi<{
+        ok: boolean; answer: string; thread_id?: number | null;
+        navigations?: Array<{ path: string; label: string }>;
+      }>('/api/assistant/act', {
         method: 'POST', body: JSON.stringify(data),
       }),
     usage: () => fetchApi<{ member_requests: number; club_requests: number; member_input_tokens: number; member_output_tokens: number; club_input_tokens: number; club_output_tokens: number; member_estimated_usd: number; club_estimated_usd: number; pricing_note: string }>('/api/assistant/usage'),

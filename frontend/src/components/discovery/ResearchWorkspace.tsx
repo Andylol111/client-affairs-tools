@@ -144,13 +144,18 @@ export default function ResearchWorkspace({ projects }: { projects: Project[] })
   };
 
   const editableBrief = useMemo(() => selectedBrief ? { id: selectedBrief.id, project_id: selectedBrief.project_id, name: selectedBrief.name, spec: selectedBrief.spec } : null, [selectedBrief]);
-  const exhausted = jobs.some((job) => job.provider_state === 'exhausted');
+  const exhausted = jobs.some((job) => job.provider_state === 'exhausted' || (job.status === 'paused' && job.provider_state === 'exhausted'));
   const outage = jobs.some((job) => job.provider_state === 'unavailable');
 
   return <div className="research-workspace space-y-6">
     {error && <Notice tone="danger">{error}</Notice>}
     {info && <Notice tone="success">{info}</Notice>}
-    {exhausted && <Notice tone="warning">External validation credits are used up for today. Local evidence is saved, and checking resumes tomorrow. No paid provider is ever used automatically.</Notice>}
+    {exhausted && (
+      <Notice tone="warning">
+        <p>External validation credits are used up for today.</p>
+        <p>Local evidence is saved, and checking resumes tomorrow. No paid provider is ever used automatically.</p>
+      </Notice>
+    )}
     {outage && <Notice tone="warning">A research provider is unreachable right now. Saved results are kept, and the run pauses instead of losing work.</Notice>}
     {briefs.length > 0 && <div className="research-brief-select">
       <label htmlFor="brief-select">Audience brief</label>

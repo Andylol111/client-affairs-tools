@@ -44,7 +44,7 @@ from app.services.discovery_policy import should_run_linkedin
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-YUCG_MAX_PROSPECTS = int(os.getenv("YUCG_MAX_PROSPECTS", "500"))
+YUCG_MAX_PROSPECTS = int(os.getenv("YUCG_MAX_PROSPECTS", "800"))
 
 
 async def _llm_json(prompt: str) -> dict[str, Any]:

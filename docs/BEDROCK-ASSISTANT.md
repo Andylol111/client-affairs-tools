@@ -12,7 +12,7 @@ The website uses one permission-filtered assistant built on the existing applica
 6. A short prompt containing those chunks goes to Claude Haiku 4.5 through Bedrock Converse.
 7. The response is stored in a member-owned thread and links back to the documents it cited.
 
-The assistant cannot send an email, mutate the outreach pipeline, share a document, or claim that an action happened. Those operations remain explicit website actions with their existing authorization and delivery gates.
+The assistant cannot send an email, delete records, or claim that an action happened. Lookups (contacts, discovery runs, target companies) run in the same permission scope as the existing APIs. Writes (`start_find_people`, `import_run_to_contacts`) are proposed in chat and execute only after the member presses Confirm. Those operations remain explicit website actions with their existing authorization and delivery gates.
 
 ## Why this is retrieval, not training
 
@@ -49,8 +49,8 @@ These values are environment configuration and must be changed through reviewed 
 
 1. Measure source count, extraction failures, retrieval latency, token usage, and unanswered questions.
 2. Add DOCX extraction and resumable background indexing if real uploads require them.
-3. Add read-only tools for contacts, campaign status, and project metadata with the same member scope as their existing APIs. Tool output remains untrusted context.
-4. Add explicit draft actions that produce reviewable changes in Studio. Sending and record mutation stay outside the model loop.
+3. Read-only tools for contacts, discovery runs, and target companies use the same member scope as their existing APIs. Tool output remains untrusted context.
+4. Confirmed writes are limited to starting Find people and importing a finished run into Contacts. Sending mail, deletes, and campaign release stay outside the model loop.
 5. Build a regression evaluation set from administrator-approved questions, expected citations, privacy negatives, and hallucination checks.
 6. Consider batch inference for non-interactive classification and summarization, since AWS discounts supported batch workloads. Consider a managed knowledge base only when measured scale warrants its additional resources.
 

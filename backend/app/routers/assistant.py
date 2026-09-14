@@ -9,6 +9,7 @@ from pydantic import BaseModel,Field
 from app.auth_deps import get_current_user
 from app.database import get_db
 from app.services.assistant_service import accessible_sources,answer,index_document_version
+from app.services.assistant_operator import execute_write
 from app.services.generation_policy import reserve_assistant_request
 
 router=APIRouter()
@@ -19,6 +20,13 @@ class AskRequest(BaseModel):
     thread_id: int | None=None
     project_id: int | None=None
     document_ids: list[int]=Field(default_factory=list,max_length=20)
+    page_path: str | None=Field(None,max_length=200)
+
+
+class ActRequest(BaseModel):
+    tool: str=Field(min_length=1,max_length=80)
+    args: dict=Field(default_factory=dict)
+    thread_id: int | None=None
 
 
 async def _thread(db,thread_id: int,user_id: int):
@@ -97,7 +105,7 @@ async def ask(payload: AskRequest,user: dict=Depends(get_current_user)):
         finally:
             await db.close()
     await reserve_assistant_request(user['id'])
-    result=await answer(user,question,payload.project_id,payload.document_ids,history)
+    result=await answer(user,question,payload.project_id,payload.document_ids,history,payload.page_path)
     now=int(time.time())
     db=await get_db()
     try:
@@ -119,6 +127,27 @@ async def ask(payload: AskRequest,user: dict=Depends(get_current_user)):
     finally:
         await db.close()
     return {**result,'thread_id':thread_id}
+
+
+@router.post('/act')
+async def act(payload: ActRequest,user: dict=Depends(get_current_user)):
+    """Execute one confirmed write. Sending mail and deletes are not in the catalog."""
+    result=await execute_write(user,payload.tool.strip(),payload.args or {})
+    now=int(time.time())
+    thread_id=payload.thread_id
+    db=await get_db()
+    try:
+        if thread_id is not None:
+            await _thread(db,thread_id,user['id'])
+            await db.execute("INSERT INTO assistant_messages(thread_id,role,content,sources_json,created_at) VALUES(?,'assistant',?,?,?)",
+                (thread_id,result['answer'],'[]',now))
+            await db.execute('UPDATE assistant_threads SET updated_at=? WHERE id=?',(now,thread_id))
+            await db.commit()
+        else:
+            thread_id=None
+    finally:
+        await db.close()
+    return {**result,'thread_id':thread_id,'sources':[],'pending_actions':[],'lookups':[]}
 
 
 @router.get('/usage')

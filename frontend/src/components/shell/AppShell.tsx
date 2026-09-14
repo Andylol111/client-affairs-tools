@@ -4,9 +4,10 @@ import { getNavItems } from '../../lib/navConfig';
 import AppShellHeader from './AppShellHeader';
 import AppShellMobile from './AppShellMobile';
 import AppShellDrawer from './AppShellDrawer';
+import AssistantBubble from '../AssistantBubble';
 
 type AppShellProps = {
-  user: { email: string; name?: string; picture?: string; role?: string };
+  user: { id?: number; email: string; name?: string; picture?: string; role?: string };
   onLogout: () => void;
   pageKey?: string;
   headerExtra?: ReactNode;
@@ -41,6 +42,7 @@ export default function AppShell({ user, onLogout, pageKey, headerExtra }: AppSh
         items={navItems}
         onLogout={handleLogout}
       />
+      <AssistantBubble user={user} />
     </div>
   );
 }

@@ -12,8 +12,7 @@ export type NavItemId =
   | 'yucgoutreach'
   | 'admin'
   | 'documents'
-  | 'projects'
-  | 'assistant';
+  | 'projects';
 
 export type NavItem = {
   id: NavItemId;
@@ -27,7 +26,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', to: '/', label: 'Home', shortLabel: 'Home' },
   { id: 'projects', to: '/projects', label: 'Projects', shortLabel: 'Projects' },
   { id: 'documents', to: '/documents', label: 'Documents', shortLabel: 'Documents' },
-  { id: 'assistant', to: '/assistant', label: 'Assistant', shortLabel: 'Assistant' },
   { id: 'yucgoutreach', to: '/yucgoutreach', label: 'Target lists', shortLabel: 'Targets' },
   { id: 'studio', to: '/studio', label: 'Drafts', shortLabel: 'Drafts' },
   { id: 'campaigns', to: '/campaigns', label: 'Campaigns', shortLabel: 'Campaigns' },
