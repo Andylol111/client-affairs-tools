@@ -20,6 +20,7 @@ from app.services.prospect_coordinator import (
     score_prospect,
 )
 from app.services.yucg_ollama_recommender import ai_recommend_prospects
+from app.services.roster_watch import list_rosters, roster_detail
 
 router = APIRouter()
 
@@ -50,6 +51,24 @@ class ExportShortlistRequest(BaseModel):
         None,
         description="Boost ranking by contact type (same as recommend query param)",
     )
+
+
+@router.get("/rosters")
+async def get_rosters(
+    user: dict = Depends(get_current_user),
+    q: str = "",
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Public-company officer/director metadata from the weekly SEC watch."""
+    return {"rosters": await list_rosters(q=q, limit=limit)}
+
+
+@router.get("/rosters/{roster_id}")
+async def get_roster(roster_id: int, user: dict = Depends(get_current_user)):
+    row = await roster_detail(roster_id)
+    if not row:
+        raise HTTPException(404, "Roster not found")
+    return row
 
 
 @router.post("/prospects/refresh")
