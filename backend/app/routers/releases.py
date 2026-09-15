@@ -128,7 +128,7 @@ async def mint_person(
     user: dict = Depends(get_current_user),
 ):
     """1–2 pattern emails from a name + target domain. Status inferred, never verified."""
-    from app.services.company_email_cache import build_email_for_person_sync
+    from app.services.company_email_cache import build_email_for_person
     from app.services.email_verifier import verify_mx
 
     db = await get_db()
@@ -142,10 +142,11 @@ async def mint_person(
         if not target:
             raise HTTPException(404, "Target not found")
         domain = target.get("company_domain")
+        email = await build_email_for_person(body.full_name, domain or "") if domain else None
         mx_ok = False
-        if domain:
-            mx_ok, _ = await verify_mx(domain)
-        email = build_email_for_person_sync(body.full_name, domain or "") if domain else None
+        host = (email or "").rsplit("@", 1)[-1] if email and "@" in email else domain
+        if host:
+            mx_ok, _ = await verify_mx(host)
         cur = await db.execute(
             """INSERT INTO outreach_release_people
                (release_id, target_id, full_name, title, email, company_domain,

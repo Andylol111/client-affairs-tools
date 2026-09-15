@@ -1,11 +1,13 @@
 """Shared mailbox assessment. External provider calls stay out of caller transactions."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urljoin, urlparse
 
 from fastapi import HTTPException
 
@@ -25,6 +27,23 @@ logger = logging.getLogger(__name__)
 
 DAILY_CAP = 25
 CACHE_DAYS = max(1, min(int(os.getenv("VERIFALIA_RESPONSE_CACHE_DAYS", "14") or 14), 90))
+
+VERIFALIA_ENDPOINT = "https://api.verifalia.com/v2.7/email-validations"
+VERIFALIA_WAIT_MS = 15000
+_CLASSIFICATION = {
+    "deliverable": Mailbox.PROVIDER_HIGH_CONFIDENCE,
+    "undeliverable": Mailbox.RECIPIENT_REJECTED,
+    "risky": Mailbox.ACCEPT_ALL_OR_RISKY,
+    "unknown": Mailbox.INCONCLUSIVE,
+}
+_STATUS = {
+    "success": Mailbox.PROVIDER_HIGH_CONFIDENCE,
+    "serveriscatchall": Mailbox.ACCEPT_ALL_OR_RISKY,
+    "mailboxdoesnotexist": Mailbox.RECIPIENT_REJECTED,
+    "domaindoesnotexist": Mailbox.RECIPIENT_REJECTED,
+    "domainismisconfigured": Mailbox.RECIPIENT_REJECTED,
+    "domainhasnullmx": Mailbox.RECIPIENT_REJECTED,
+}
 
 
 def _day() -> str:
@@ -154,13 +173,55 @@ async def assess_address(email: str, *, actor_id: int, external: bool = False, m
     if not external:
         return result
 
-    if not _enabled():
-        result["provider_state"] = "disabled"
-        result["reason"] = "External mailbox validation is not configured. Mail-domain availability is recorded."
-        return result
     if not reason and manual:
         raise HTTPException(422, "A reason is required to spend a validation credit")
-    return await _external(raw, actor_id=actor_id, manual=manual, fallback=result)
+    provider = (os.getenv("INBOX_VERIFY_PROVIDER") or "smtp").strip().lower()
+    if provider == "verifalia":
+        if not _enabled():
+            result["provider_state"] = "disabled"
+            result["reason"] = "External mailbox validation is not configured. Mail-domain availability is recorded."
+            return result
+        return await _external(raw, actor_id=actor_id, manual=manual, fallback=result)
+    return await _inhouse_smtp(raw, actor_id=actor_id, fallback=result)
+
+
+async def _inhouse_smtp(email: str, *, actor_id: int, fallback: dict) -> dict:
+    """Catch-all + RCPT. Port 25 blocked returns unavailable, never invalid."""
+    check = await verify_email_deliverability(email, smtp_probe=True, force_smtp=True)
+    mailbox = mailbox_from_legacy(check)
+    probe = check.get("smtp_probe")
+    domain = email.rsplit("@", 1)[-1]
+    if probe in (None, "unknown") and check.get("catch_all") is not True:
+        return {
+            **fallback,
+            "mailbox": Mailbox.INCONCLUSIVE.value,
+            "method": "smtp_rcpt",
+            "provider_state": "unavailable",
+            "reason": "Mail server did not answer a recipient probe",
+        }
+    from app.services.mail_domain_map import mark_catch_all, store_mx_result
+
+    if check.get("mx_valid") is not None:
+        await store_mx_result(domain, bool(check.get("mx_valid")))
+    if check.get("catch_all"):
+        await mark_catch_all(domain)
+    result = _result(
+        mailbox,
+        "smtp_rcpt",
+        check.get("reason") or "Recipient probe",
+        provider_state="complete",
+        expires_at=(datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+    )
+    if mailbox == Mailbox.RECIPIENT_REJECTED.value:
+        db = await get_db()
+        try:
+            from app.services.roster_email import apply_provider_verdict
+
+            await apply_provider_verdict(db, email, "rejected")
+            await db.commit()
+        finally:
+            await db.close()
+    return result
 
 
 async def _external(email: str, *, actor_id: int, manual: bool, fallback: dict) -> dict:
@@ -217,17 +278,19 @@ async def _external(email: str, *, actor_id: int, manual: bool, fallback: dict) 
                     "method": "verifalia"}
     db = await get_db()
     try:
+        state = str(provider.get("provider_state") or "")
         await db.execute(
             "UPDATE verification_reservations SET status=? WHERE id=?",
-            ("complete" if provider.get("provider_state") not in ("unavailable",) else "inconclusive", reservation_id),
+            ("complete" if state not in ("unavailable", "exhausted") else "inconclusive", reservation_id),
         )
-        expires = (datetime.now(timezone.utc) + timedelta(days=CACHE_DAYS)).isoformat()
-        provider["expires_at"] = expires
-        await db.execute(
-            """INSERT INTO verification_cache(address_hash,actor_id,result_json,expires_at) VALUES(?,?,?,?)
-               ON CONFLICT(address_hash,actor_id) DO UPDATE SET result_json=excluded.result_json,expires_at=excluded.expires_at""",
-            (_hash(email), actor_id, json.dumps(provider), expires),
-        )
+        if state not in ("unavailable", "exhausted"):
+            expires = (datetime.now(timezone.utc) + timedelta(days=CACHE_DAYS)).isoformat()
+            provider["expires_at"] = expires
+            await db.execute(
+                """INSERT INTO verification_cache(address_hash,actor_id,result_json,expires_at) VALUES(?,?,?,?)
+                   ON CONFLICT(address_hash,actor_id) DO UPDATE SET result_json=excluded.result_json,expires_at=excluded.expires_at""",
+                (_hash(email), actor_id, json.dumps(provider), expires),
+            )
         if provider.get("mailbox") == Mailbox.RECIPIENT_REJECTED.value:
             from app.services.roster_email import apply_provider_verdict
 
@@ -238,33 +301,149 @@ async def _external(email: str, *, actor_id: int, manual: bool, fallback: dict) 
     return provider
 
 
+def _verifalia_payload(response) -> dict:
+    try:
+        data = response.json()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _verifalia_job_id(data: dict) -> str | None:
+    overview = data.get("overview")
+    if isinstance(overview, dict):
+        job_id = str(overview.get("id") or "").strip()
+        if job_id:
+            return job_id
+    job_id = str(data.get("id") or "").strip()
+    return job_id or None
+
+
+def _verifalia_in_progress(status_code: int, data: dict) -> bool:
+    if status_code == 202:
+        return True
+    overview = data.get("overview") if isinstance(data.get("overview"), dict) else data
+    return str((overview or {}).get("status") or "") == "InProgress"
+
+
+def _verifalia_entry(data: dict) -> dict | None:
+    def first(box):
+        if isinstance(box, list) and box and isinstance(box[0], dict):
+            return box[0]
+        if isinstance(box, dict):
+            inner = box.get("data")
+            if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+                return inner[0]
+            if box.get("classification") or box.get("status"):
+                return box
+        return None
+
+    return first(data.get("entries")) or first(data.get("data"))
+
+
+def _verifalia_poll_url(location: str | None, job_id: str | None) -> str | None:
+    loc = (location or "").strip()
+    if loc:
+        if loc.startswith("/"):
+            loc = urljoin("https://api.verifalia.com/", loc.lstrip("/"))
+        parsed = urlparse(loc)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme == "https" and host == "api.verifalia.com" and "/email-validations" in (parsed.path or ""):
+            return loc.split("#", 1)[0]
+    job = (job_id or "").strip()
+    if job and 8 <= len(job) <= 80 and all(c.isalnum() or c in "-_" for c in job):
+        return f"{VERIFALIA_ENDPOINT}/{job}"
+    return None
+
+
+def _with_wait(url: str) -> str:
+    if "waitTime=" in url:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}waitTime={VERIFALIA_WAIT_MS}"
+
+
+def _retry_delay(response) -> float:
+    raw = str(response.headers.get("Retry-After") or "").strip()
+    if raw:
+        try:
+            return min(8.0, max(0.0, float(raw)))
+        except ValueError:
+            pass
+    return 0.5
+
+
+def _from_verifalia_entry(entry: dict, job_id: str | None) -> dict:
+    classification = str(entry.get("classification") or "").strip()
+    status = str(entry.get("status") or "").strip()
+    mailbox = _CLASSIFICATION.get(classification.lower()) or _STATUS.get(status.lower()) or Mailbox.INCONCLUSIVE
+    if classification and status and status.lower() != classification.lower():
+        reason = f"Provider classification: {classification} ({status})"
+    else:
+        reason = f"Provider classification: {classification or status or 'unknown'}"
+    return _result(
+        mailbox.value,
+        "verifalia",
+        reason,
+        cost=1,
+        provider_state="complete",
+        provider_request_id=(job_id or "")[:80] or None,
+    )
+
+
 async def _verifalia(email: str) -> dict:
     import httpx
 
     key = (os.getenv("VERIFALIA_API_KEY") or "").strip()
-    mapping = {
-        "Success": Mailbox.PROVIDER_HIGH_CONFIDENCE.value,
-        "Risky": Mailbox.ACCEPT_ALL_OR_RISKY.value,
-        "Unknown": Mailbox.INCONCLUSIVE.value,
-        "Failure": Mailbox.RECIPIENT_REJECTED.value,
-    }
-    async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+    unavailable = _result(
+        Mailbox.INCONCLUSIVE.value,
+        "verifalia",
+        "External validation returned an error",
+        provider_state="unavailable",
+    )
+    async with httpx.AsyncClient(timeout=25.0, trust_env=False) as client:
         response = await client.post(
-            "https://api.verifalia.com/v2.6/email-validations",
+            _with_wait(VERIFALIA_ENDPOINT),
             auth=(key, ""),
             json={"entries": [{"inputData": email}]},
         )
-    if response.status_code == 402:
-        return _result(Mailbox.INCONCLUSIVE.value, "verifalia", "Free validation credits were refused by the provider", provider_state="exhausted")
-    if response.status_code >= 400:
-        return _result(Mailbox.INCONCLUSIVE.value, "verifalia", "External validation returned an error", provider_state="unavailable")
-    data = response.json()
-    entries = data.get("entries") or {}
-    status = None
-    if isinstance(entries, dict):
-        status = entries.get("classification") or entries.get("status")
-    elif isinstance(entries, list) and entries:
-        status = (entries[0] or {}).get("classification") or (entries[0] or {}).get("status")
-    mailbox = mapping.get(str(status or ""), Mailbox.INCONCLUSIVE.value)
-    return _result(mailbox, "verifalia", f"Provider classification: {status or 'unknown'}", cost=1,
-                   provider_state="complete", provider_request_id=str(data.get("id") or "")[:80] or None)
+        if response.status_code == 402:
+            return _result(
+                Mailbox.INCONCLUSIVE.value,
+                "verifalia",
+                "Free validation credits were refused by the provider",
+                provider_state="exhausted",
+            )
+        if response.status_code >= 400:
+            return unavailable
+        data = _verifalia_payload(response)
+        job_id = _verifalia_job_id(data)
+        polls = 0
+        while _verifalia_in_progress(response.status_code, data) and polls < 4:
+            poll_url = _verifalia_poll_url(response.headers.get("Location"), job_id)
+            if not poll_url:
+                break
+            await asyncio.sleep(_retry_delay(response))
+            response = await client.get(_with_wait(poll_url), auth=(key, ""))
+            polls += 1
+            if response.status_code >= 400:
+                return unavailable
+            data = _verifalia_payload(response)
+            job_id = job_id or _verifalia_job_id(data)
+        if _verifalia_in_progress(response.status_code, data):
+            return _result(
+                Mailbox.INCONCLUSIVE.value,
+                "verifalia",
+                "External validation did not finish in time. Local mail-domain results are saved.",
+                provider_state="unavailable",
+                provider_request_id=(job_id or "")[:80] or None,
+            )
+        entry = _verifalia_entry(data)
+        if not entry:
+            return _result(
+                Mailbox.INCONCLUSIVE.value,
+                "verifalia",
+                "External validation returned no mailbox result",
+                provider_state="unavailable",
+                provider_request_id=(job_id or "")[:80] or None,
+            )
+        return _from_verifalia_entry(entry, job_id)
