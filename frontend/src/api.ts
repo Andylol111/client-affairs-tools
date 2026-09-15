@@ -212,10 +212,10 @@ export type YucgRecommendation = {
 };
 
 export type YucgRecommendResponse = {
-  mode: 'rules' | 'ollama' | 'ai';
+  mode: 'rules' | 'ai';
   count: number;
   recommendations: YucgRecommendation[];
-  ollama_error?: string | null;
+  error?: string | null;
   model?: string | null;
 };
 

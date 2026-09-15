@@ -172,7 +172,7 @@ async def recommend_prospect_targets(
         "count": len(items),
         "recommendations": items,
         "model": None,
-        "ollama_error": None,
+        "error": None,
     }
 
 
@@ -182,8 +182,8 @@ async def ai_recommend_targets(
     user: dict = Depends(get_current_user),
 ):
     """
-    Ollama recommendations using YUCG website corpus + top spreadsheet candidates.
-    Each item cites spreadsheet row_index, yaleconsulting.org URL/excerpt, and reasoning_chain.
+    Rank companies from the YUCG website corpus + spreadsheet candidates.
+    Uses Bedrock Haiku (rank_model_id).
     """
     try:
         result = await ai_recommend_prospects(
@@ -196,8 +196,8 @@ async def ai_recommend_targets(
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
 
-    if result.get("ollama_error") and not result.get("recommendations"):
-        raise HTTPException(503, detail=result["ollama_error"])
+    if result.get("error") and not result.get("recommendations"):
+        raise HTTPException(503, detail=result["error"])
     return result
 
 

@@ -304,6 +304,7 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
         params = {"view": "company", "company": cleaned["company_name"], "run": str(created["id"])}
         if cleaned.get("company_domain"):
             params["domain"] = cleaned["company_domain"]
+
         if cleaned.get("title_hints"):
             params["titles"] = cleaned["title_hints"]
         dest = "/scraper?" + urlencode(params)

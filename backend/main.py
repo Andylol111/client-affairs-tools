@@ -41,6 +41,7 @@ from app.routers import research
 from app.services.research_service import recover_research_jobs, drain_research_queue
 from app.services.roster_watch import drain_roster_queue, enroll_prospect_companies
 from app.services.roster_email import drain_roster_emails
+from app.services.roster_adjudicate import drain_roster_adjudication
 
 # CORS: use CORS_ORIGINS env (comma-separated) when going public; default localhost for dev
 _default_origins = [
@@ -96,6 +97,14 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=300,
         id="company_roster_emails",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        drain_roster_adjudication,
+        "interval",
+        minutes=20,
+        id="company_roster_adjudicate",
         max_instances=1,
         coalesce=True,
     )

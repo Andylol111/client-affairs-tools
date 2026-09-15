@@ -963,7 +963,7 @@ async def roster_detail(roster_id: int) -> dict[str, Any] | None:
         people = await (
             await db.execute(
                 """SELECT full_name, title, role_type, source, inferred_email, employment,
-                          last_seen_at, missed_checks, source_url, email_status, email_checked_at
+                          last_seen_at, missed_checks, source_url, email_status, email_checked_at, verdict, verdict_reason
                    FROM company_roster_people WHERE roster_id=?
                    ORDER BY employment, title, full_name""",
                 (roster_id,),

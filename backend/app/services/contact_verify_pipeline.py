@@ -1,6 +1,6 @@
 """
 Unified contact verification pipeline — identity → parallel inbox + AI agent pools.
-Inbox verification and Ollama name review run concurrently after local identity pass.
+Inbox verification and Bedrock name review run concurrently after local identity pass.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from app.services.company_email_cache import (
 )
 from app.services.contact_ai_review import (
     AI_REVIEW_ENABLED,
-    OLLAMA_MODEL,
     _log_row,
+    _review_model,
     run_ai_review_agents,
 )
 from app.services.contact_scraper import (
@@ -265,7 +265,7 @@ async def run_contact_verify_pipeline(
             row["ai_reason"] = str(rev.get("reason") or "")[:500]
             row["ai_source_note"] = str(rev.get("source_note") or "")[:500]
             row["ai_name_plausible"] = bool(rev.get("name_plausible"))
-            model = OLLAMA_MODEL
+            model = _review_model()
         elif not AI_REVIEW_ENABLED:
             row["ai_verdict"] = "unreviewed"
             row["ai_reason"] = "AI review disabled"
@@ -273,9 +273,9 @@ async def run_contact_verify_pipeline(
             model = None
         else:
             row["ai_verdict"] = "unreviewed"
-            row["ai_reason"] = "Ollama unavailable or parse failed for this contact"
+            row["ai_reason"] = "Review model unavailable or parse failed for this contact"
             row["ai_source_note"] = ""
-            model = OLLAMA_MODEL
+            model = _review_model()
 
         discovery_log.append(
             _log_row(
@@ -312,7 +312,7 @@ async def run_contact_verify_pipeline(
             row["ai_reason"] = str(rev.get("reason") or "")[:500]
             row["ai_source_note"] = str(rev.get("source_note") or "")[:500]
             row["ai_name_plausible"] = bool(rev.get("name_plausible"))
-            model = OLLAMA_MODEL
+            model = _review_model()
         elif not AI_REVIEW_ENABLED:
             row["ai_verdict"] = "unreviewed"
             row["ai_reason"] = "AI review disabled"
@@ -320,9 +320,9 @@ async def run_contact_verify_pipeline(
             model = None
         else:
             row["ai_verdict"] = "unreviewed"
-            row["ai_reason"] = "Ollama unavailable or parse failed for this contact"
+            row["ai_reason"] = "Review model unavailable or parse failed for this contact"
             row["ai_source_note"] = ""
-            model = OLLAMA_MODEL
+            model = _review_model()
         discovery_log.append(
             _log_row(
                 row,

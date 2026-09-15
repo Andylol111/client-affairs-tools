@@ -42,31 +42,13 @@ _active_lease: ContextVar[str | None] = ContextVar("yucgoutreach_lease", default
 class DiscoveryLeaseLost(RuntimeError):
     """This worker no longer owns the durable discovery run."""
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 YUCG_MAX_PROSPECTS = int(os.getenv("YUCG_MAX_PROSPECTS", "800"))
 
 
 async def _llm_json(prompt: str) -> dict[str, Any]:
-    from app.services.llm import complete_json, llm_provider, rank_model_id
+    from app.services.llm import complete_json, rank_model_id
 
-    if llm_provider() == "bedrock":
-        return await asyncio.to_thread(complete_json, prompt, rank_model_id()) or {}
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        r = await client.post(
-            f"{OLLAMA_URL.rstrip('/')}/api/chat",
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "format": "json",
-            },
-        )
-        if r.status_code != 200:
-            return {}
-        content = (r.json().get("message") or {}).get("content") or "{}"
-        data = json.loads(content)
-        return data if isinstance(data, dict) else {}
+    return await asyncio.to_thread(complete_json, prompt, rank_model_id()) or {}
 
 
 async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:

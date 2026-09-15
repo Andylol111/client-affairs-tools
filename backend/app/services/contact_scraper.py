@@ -879,7 +879,7 @@ def extract_domain_from_company(company_name: str) -> Optional[str]:
     return f"{base.lower()}.com"
 
 def is_heuristic_junk_contact(contact: dict, company_name: str | None = None) -> tuple[bool, str]:
-    """Fast local junk gate — skips Ollama for obvious nav/product/role rows."""
+    """Fast local junk gate — skips Bedrock for obvious nav/product/role rows."""
     name = (contact.get("name") or "").strip()
     if not name:
         return True, "missing name"

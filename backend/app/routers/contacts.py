@@ -555,7 +555,7 @@ async def import_contacts(
 
 @router.post("/search-person")
 async def search_person(req: SearchPersonRequest):
-    """Search the web for information about a person (name + optional company). Uses Tavily if TAVILY_API_KEY is set; optional LLM summary via Ollama."""
+    """Search the web for information about a person (name + optional company). Uses Tavily if TAVILY_API_KEY is set; optional LLM summary via Bedrock."""
     query = req.name.strip()
     if req.company and req.company.strip():
         query = f"{query} {req.company.strip()}"
@@ -605,9 +605,7 @@ async def search_person(req: SearchPersonRequest):
         for x in data.get("results") or []
     ]
 
-    # Optional: LLM summary via Ollama
     summary = None
-    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
     if results:
         snippets = "\n\n".join(
             f"[{i+1}] {r.get('title', '')}\n{r.get('content', '')}" for i, r in enumerate(results[:6])
@@ -622,18 +620,11 @@ Search results:
 {snippets}
 
 Respond in clear bullet points and one short paragraph. If no contact info is found, say so."""
-
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client_ollama:
-                resp = await client_ollama.post(
-                    f"{ollama_url.rstrip('/')}/api/generate",
-                    json={"model": "llama3.2", "prompt": prompt, "stream": False},
-                )
-                if resp.status_code == 200:
-                    body = resp.json()
-                    summary = (body.get("response") or "").strip()
+            from app.services.llm import complete_text, rank_model_id
+            summary = (await asyncio.to_thread(complete_text, prompt, rank_model_id())).strip() or None
         except Exception:
-            pass
+            summary = None
 
     return {
         "query": query,

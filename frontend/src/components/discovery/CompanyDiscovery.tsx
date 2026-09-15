@@ -115,14 +115,11 @@ export default function CompanyDiscovery() {
   }, [selectedId, refreshSelected]);
 
   const [clubMemory, setClubMemory] = useState<Record<string, unknown> | null>(null);
+  const rosterQuery = companyName.trim();
   useEffect(() => {
-    const name = companyName.trim();
-    if (name.length < 3) {
-      setClubMemory(null);
-      return;
-    }
+    if (rosterQuery.length < 3) return;
     const t = setTimeout(() => {
-      api.yucgoutreach.listRosters(name, 1)
+      api.yucgoutreach.listRosters(rosterQuery, 1)
         .then((res) => {
           const top = res.rosters?.[0];
           setClubMemory(top && Number(top.people_count || 0) > 0 ? top : null);
@@ -130,7 +127,8 @@ export default function CompanyDiscovery() {
         .catch(() => setClubMemory(null));
     }, 450);
     return () => clearTimeout(t);
-  }, [companyName]);
+  }, [rosterQuery]);
+  const shownClubMemory = rosterQuery.length < 3 ? null : clubMemory;
 
   useEffect(() => {
     const hasActive = runs.some((r) => r.status === 'running' || r.status === 'queued');
@@ -190,14 +188,14 @@ export default function CompanyDiscovery() {
         >
           <h2 className="text-lg font-semibold text-deep-navy">Start a company search</h2>
           <p className="text-sm text-slate-600">Company, titles, and a domain produce the best results. Empty domain is looked up from the company name.</p>
-          {clubMemory && (
+          {shownClubMemory && (
             <p className="text-[13px] rounded-lg bg-pale-sky/40 border border-pale-sky/60 px-3 py-2 text-deep-navy">
-              Club memory: {Number(clubMemory.people_count)} officer(s) known at {String(clubMemory.company_name)}
-              {Number(clubMemory.current_count || 0) < Number(clubMemory.people_count || 0)
-                ? ` · ${Number(clubMemory.current_count)} still there`
+              Club memory: {Number(shownClubMemory.people_count)} officer(s) known at {String(shownClubMemory.company_name)}
+              {Number(shownClubMemory.current_count || 0) < Number(shownClubMemory.people_count || 0)
+                ? ` · ${Number(shownClubMemory.current_count)} still there`
                 : ''}
-              {Number(clubMemory.emails_ready || 0) > 0
-                ? ` · ${Number(clubMemory.emails_ready)} with derived work email`
+              {Number(shownClubMemory.emails_ready || 0) > 0
+                ? ` · ${Number(shownClubMemory.emails_ready)} with derived work email`
                 : ''}{' '}
               — they merge into this search automatically.
             </p>

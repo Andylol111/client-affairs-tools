@@ -276,6 +276,7 @@ def _find_people_path(company: str, titles: str = "", domain: str = "") -> str:
         params["titles"] = titles
     if domain:
         params["domain"] = domain
+
     return "/scraper?" + urlencode(params)
 
 
@@ -289,8 +290,8 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
     if offline:
         answer = (
             f"Find people is ready for {company} without the language model. "
-            "Fill titles and domain, then Start search. That runs the live company search "
-            "(web + club roster + inbox checks). Person lookup is only for one named person."
+            "Fill titles, domain, and LinkedIn, then Start search. That runs the live company search "
+            "(web + LinkedIn + inbox checks). Person lookup is only for one named person."
         )
     else:
         answer = (
@@ -417,7 +418,7 @@ async def answer(
         warehouse = f"{saved} already saved in the warehouse" if saved else "none already saved in the warehouse"
         answer_text = (
             f"{answer_text}\n\n{warehouse} at {company}. That is not the live search. "
-            "Start search collects new people from the company website, web search, and the club roster, then checks inboxes."
+            "Start search collects new people from the company website, web search, LinkedIn, then checks inboxes."
         )
     return {
         'answer': answer_text,
