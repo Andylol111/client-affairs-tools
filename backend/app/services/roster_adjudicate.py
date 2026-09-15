@@ -68,12 +68,23 @@ async def fetch_20f_section(cik: str, max_chars: int = 6000) -> str:
         text = re.sub(r"&[a-z#0-9]+;", " ", text)
         text = re.sub(r"\s+", " ", text)
         low = text.lower()
-        i = low.find("directors and senior management")
-        if i < 0:
-            i = low.find("senior management")
-        if i < 0:
+        matches = [m.start() for m in re.finditer(r"directors and senior management", low)]
+        if not matches:
+            matches = [m.start() for m in re.finditer(r"senior management", low)]
+        # The table of contents repeats the heading with bare page numbers; the
+        # real Item 6A body follows with prose about people. Pick the last
+        # occurrence that is followed by people-talk, not a contents line.
+        chosen = -1
+        for i in reversed(matches):
+            seg = text[i : i + 1200].lower()
+            if re.search(r"(\bmr\.|\bmrs\.|\bms\.|\bbeneficial owner|\bofficer since|\bdirector since|\bis a member of|\bbeen a|\bexecutive officer)", seg):
+                chosen = i
+                break
+        if chosen < 0:
+            chosen = matches[-1] if matches else -1
+        if chosen < 0:
             return ""
-        return text[i : i + max_chars]
+        return text[chosen : chosen + max_chars]
     return ""
 
 
