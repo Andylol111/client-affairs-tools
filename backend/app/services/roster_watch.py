@@ -18,7 +18,8 @@ from urllib.parse import quote
 import httpx
 
 from app.database import get_db
-from app.services.contact_scraper import infer_email_from_name, normalize_domain, person_name_key
+from app.services.company_email_cache import build_email_for_person_sync
+from app.services.contact_scraper import normalize_domain, person_name_key
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -481,7 +482,7 @@ def _infer_email(name: str, domain: str | None) -> str | None:
     if not domain:
         return None
     try:
-        return infer_email_from_name(name, domain)
+        return build_email_for_person_sync(name, domain)
     except Exception:
         return None
 

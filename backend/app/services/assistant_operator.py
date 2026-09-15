@@ -77,7 +77,7 @@ Reply with a single JSON object:
 Rules:
 - Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, title_hints, max_prospects (default 250, max 800).
 - For Find people: always emit ask fields for titles (required) and company_domain. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain when known).
-- Propose start_find_people for a named company. Do not run it yourself.
+- Propose start_find_people for a named company. Do not run it yourself. "Companies like X" / "similar to X" means Find people at X.
 - Never emit send, delete, scrape-stream, or admin tools.
 - If documents do not help, still operate site tools."""
 

@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 from app.database import get_db, row_to_dict
 from app.services.contact_ai_review import _log_row
 from app.services.contact_merge import merge_contacts
+from app.services.company_email_cache import build_email_for_person_sync
 from app.services.contact_scraper import (
     extract_domain_from_company,
-    infer_email_from_name,
     is_employee_outreach_email,
     is_heuristic_junk_contact,
     is_valid_person_contact,
@@ -189,7 +189,7 @@ Results:
             continue
         email = ""
         if dom:
-            email = infer_email_from_name(name, dom, custom_patterns) or ""
+            email = build_email_for_person_sync(name, dom, custom_patterns=custom_patterns) or ""
         if not email:
             continue
         out.append(
@@ -396,31 +396,35 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     kw1 = meta.get("keywords") or ""
     kw2 = meta.get("keywords_2") or ""
     roster_contacts: list[dict] = []
+    roster_note = ""
     try:
-        from app.services.roster_email import cached_roster_contacts, refresh_roster_on_demand
+        from app.services.roster_email import cached_roster_contacts, refresh_roster_on_demand, roster_refresh_note
 
         roster_contacts = await cached_roster_contacts(company, domain)
         if not roster_contacts:
             # Cold club memory for this company: SEC-refresh it now instead of waiting on the drain.
             roster_contacts = await refresh_roster_on_demand(company, domain)
+        roster_note = await roster_refresh_note(company, domain)
     except Exception:
         logger.exception("roster cache-first lookup failed")
     if roster_contacts:
         domain_contacts = domain_contacts + roster_contacts
+    n_site = max(0, len(domain_contacts) - len(roster_contacts))
+    n_web = len(web_contacts)
 
     await _run_update(
         run_id,
         progress_pct=22.0,
         progress_message=(
-            f"Sources: website {len(domain_contacts) - len(roster_contacts)} · roster {len(roster_contacts)} · "
-            f"web {len(web_contacts)} — merging…"
+            f"Sources: website {n_site} · roster {len(roster_contacts)} · web {n_web} — merging…"
         ),
         research_json=json.dumps(
             {
                 "title_hints": title_hints or None,
-                "domain_contacts": len(domain_contacts) - len(roster_contacts),
+                "domain_contacts": n_site,
                 "roster_contacts": len(roster_contacts),
-                "web_contacts": len(web_contacts),
+                "web_contacts": n_web,
+                "roster_note": roster_note or None,
             }
         ),
     )
@@ -460,8 +464,9 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             status="completed",
             progress_pct=100.0,
             progress_message=(
-                "No contacts found. Website and the SEC/Companies House registers came up empty for this "
-                "company — a domain or title hints may help; otherwise no public source names these people."
+                f"No contacts saved. Website {n_site} · roster {len(roster_contacts)} · web {n_web}"
+                + (f" ({roster_note})" if roster_note else "")
+                + ". Large-company sites rarely publish person emails; officers appear when the SEC fetch succeeds."
             ),
             prospects_count=0,
             completed=True,

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import secrets
 import smtplib
 import socket
 import ipaddress
@@ -26,14 +27,38 @@ INBOX_VERIFY_MODE = os.getenv("INBOX_VERIFY_MODE", "mx").strip().lower()
 _smtp_sem = asyncio.Semaphore(max(1, SMTP_MAX_CONCURRENT))
 
 
-def _effective_smtp_probe(requested: bool) -> bool:
+def _effective_smtp_probe(requested: bool, *, force: bool = False) -> bool:
     if not requested:
         return False
+    if force:
+        return True
     if INBOX_VERIFY_MODE == "mx":
         return False
     if INBOX_VERIFY_MODE == "smtp":
         return True
     return requested if INBOX_VERIFY_MODE == 'auto' else False
+
+
+async def detect_catch_all(
+    domain: str,
+    mx_host: str,
+    timeout: float,
+    cache: dict[str, str] | None = None,
+) -> str:
+    """Probe a random local-part. catch_all | selective | unknown."""
+    cache = cache if cache is not None else {}
+    if domain in cache:
+        return cache[domain]
+    fake = f"nombox.{secrets.token_hex(6)}@{domain}"
+    probe = await _smtp_rcpt_probe(fake, mx_host, timeout)
+    if probe == "accepted":
+        verdict = "catch_all"
+    elif probe == "invalid":
+        verdict = "selective"
+    else:
+        verdict = "unknown"
+    cache[domain] = verdict
+    return verdict
 
 
 async def verify_mx(domain: str) -> tuple[bool | None, list[str]]:
@@ -149,23 +174,25 @@ async def verify_email_deliverability(
     smtp_probe: bool = True,
     smtp_timeout: float | None = None,
     mx_cache: dict[str, tuple[bool, list[str]]] | None = None,
+    catch_all_cache: dict[str, str] | None = None,
+    force_smtp: bool = False,
 ) -> dict[str, Any]:
     """
     Returns status: valid | likely_valid | invalid | unknown
     """
     email = (email or "").strip().lower()
     if not verify_email_format(email)['valid']:
-        return {"status": "invalid", "mx_valid": False, "reason": "bad_format"}
+        return {"status": "invalid", "mx_valid": False, "reason": "bad_format", "catch_all": None}
 
     local, domain = email.rsplit("@", 1)
     if not re.match(r"^[a-z0-9._+-]+$", local):
-        return {"status": "invalid", "mx_valid": False, "reason": "bad_local"}
+        return {"status": "invalid", "mx_valid": False, "reason": "bad_local", "catch_all": None}
 
     mx_valid, mx_hosts = await get_mx_cached(domain, mx_cache)
     if mx_valid is None:
-        return {"status": "unknown", "mx_valid": None, "reason": "dns_unavailable", "mailbox_exists": None}
+        return {"status": "unknown", "mx_valid": None, "reason": "dns_unavailable", "mailbox_exists": None, "catch_all": None}
     if not mx_valid:
-        return {"status": "invalid", "mx_valid": False, "reason": "no_mx"}
+        return {"status": "invalid", "mx_valid": False, "reason": "no_mx", "catch_all": None}
 
     result: dict[str, Any] = {
         "status": "likely_valid",
@@ -174,21 +201,30 @@ async def verify_email_deliverability(
         "matched_pattern": pattern_for_email(email, full_name) if full_name else None,
         "smtp_probe": None,
         "mailbox_exists": None,
+        "catch_all": None,
         "reason": "mail_route_found_mailbox_unconfirmed",
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    if not _effective_smtp_probe(smtp_probe) or not mx_hosts:
+    if not _effective_smtp_probe(smtp_probe, force=force_smtp) or not mx_hosts:
         return result
 
     timeout = smtp_timeout if smtp_timeout is not None else SMTP_PROBE_TIMEOUT
+    catch = await detect_catch_all(domain, mx_hosts[0], timeout, catch_all_cache)
+    if catch == "catch_all":
+        result["smtp_probe"] = "catch_all"
+        result["catch_all"] = True
+        result["reason"] = "domain_accepts_all_recipients"
+        return result
+    if catch == "selective":
+        result["catch_all"] = False
     probe = await _smtp_rcpt_probe(email, mx_hosts[0], timeout)
     result["smtp_probe"] = probe
     if probe == "invalid":
         result["status"] = "invalid"
         result["reason"] = "recipient_rejected_5.1.1"
-    else:
-        result["status"] = "likely_valid"
+    elif probe == "accepted" and catch == "selective":
+        result["reason"] = "recipient_accepted_not_catch_all"
     return result
 
 
@@ -218,6 +254,7 @@ def _verify_mx_only(
         "matched_pattern": pattern_for_email(email, full_name) if full_name else None,
         "smtp_probe": None,
         "mailbox_exists": None,
+        "catch_all": None,
         "reason": "mail_route_found_mailbox_unconfirmed",
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -269,6 +306,7 @@ async def verify_emails_parallel(
     done = 0
     lock = asyncio.Lock()
     total = len(normalized)
+    catch_cache: dict[str, str] = {}
 
     async def _one(email: str, full_name: str | None, probe: bool) -> dict[str, Any]:
         nonlocal done
@@ -279,6 +317,7 @@ async def verify_emails_parallel(
                 smtp_probe=probe,
                 smtp_timeout=smtp_timeout,
                 mx_cache=cache,
+                catch_all_cache=catch_cache,
             )
             if on_progress:
                 async with lock:

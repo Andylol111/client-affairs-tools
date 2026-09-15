@@ -140,6 +140,14 @@ async def _core() -> None:
     assert pemble["email"] == "clifton.pemble@garmin.com"
     assert all(strict_email_name_alignment(row["name"], row["email"]) for row in rows if row["email"])
 
+    from app.services.contact_merge import merge_contacts
+
+    nameless = [dict(row, email="") for row in rows]
+    merged = merge_contacts(nameless, "Garmin", "garmin.com")
+    assert {m["name"] for m in merged} >= {"Clifton A. Pemble", "Cheng-Wei Wang"}
+    assert all(m.get("email") for m in merged)
+    assert (await RE.roster_refresh_note("Garmin", "garmin.com")).startswith("public")
+
     # Warm path: cache reads never touch SEC.
     with patch.object(R, "_http_get", side_effect=AssertionError("SEC hit on warm path")):
         warm = await RE.cached_roster_contacts("Garmin", "garmin.com")

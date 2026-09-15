@@ -235,11 +235,11 @@ _DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
 
 def _named_company(question: str) -> str:
     match = re.search(
-        r"\b(?:at|for)\s+([A-Z][A-Za-z0-9&.'-]{1,40}(?:\s+[A-Z][A-Za-z0-9&.'-]{1,40}){0,3})",
+        r"\b(?:companies? like|like|at|for)\s+([A-Z][A-Za-z0-9&.'-]{1,40}(?:\s+[A-Z][A-Za-z0-9&.'-]{1,40}){0,3})",
         question or "",
     )
     name = (match.group(1) if match else "").strip()
-    if not name or name.lower() in {"yale", "yucg"}:
+    if not name or name.lower() in {"yale", "yucg", "companies", "people", "contacts"}:
         return ""
     return name[:500]
 
@@ -334,7 +334,7 @@ def _harness_fallback_payload(question: str) -> str:
         return json.dumps(payload)
     return json.dumps({
         "answer": (
-            "The language model is offline, but I can still fill this app's forms. Which company should we search, "
+            "I couldn't complete that with the language model on this turn. Which company should we search, "
             "and what titles or people do you already know you want to reach?"
         ),
         "reads": [],
@@ -362,19 +362,17 @@ async def answer(
         f"CURRENT PAGE\n{page}\n\nSOURCE BLOCKS\n{sources_block}\n\n"
         f"RECENT CONVERSATION\n{prior or '(new conversation)'}\n\nMEMBER QUESTION\n{question}"
     )
-    cheap = _find_people_payload(question)
-    if cheap:
-        response = json.dumps(cheap)
-    else:
-        try:
-            response = await asyncio.to_thread(
-                complete_text,prompt,rank_model_id(),operator_system_prompt(),
-                user_id=user['id'],purpose='assistant',max_tokens=900,
-            )
-        except HTTPException as exc:
-            if exc.status_code != 503:
-                raise
-            response = _harness_fallback_payload(question)
+    used_llm = False
+    try:
+        response = await asyncio.to_thread(
+            complete_text,prompt,rank_model_id(),operator_system_prompt(),
+            user_id=user['id'],purpose='assistant',max_tokens=900,
+        )
+        used_llm = True
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        response = _harness_fallback_payload(question)
     payload = parse_operator_payload(response)
     if payload:
         answer_text = str(payload.get('answer') or '').strip()
@@ -423,7 +421,7 @@ async def answer(
     return {
         'answer': answer_text,
         'sources': [source for source in citations if source['id'] in cited],
-        'model': 'site-tools' if cheap else rank_model_id(),
+        'model': rank_model_id() if used_llm else 'site-tools',
         'grounded': bool(context),
         'lookups': lookups,
         'pending_actions': pending,
