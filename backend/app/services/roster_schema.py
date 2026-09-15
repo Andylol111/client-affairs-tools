@@ -47,6 +47,7 @@ async def init_roster_schema(db):
             verdict TEXT,
             verdict_reason TEXT,
             adjudicated_at TEXT,
+            email_provider_checked_at TEXT,
             UNIQUE(roster_id, normalized_name)
         );
         CREATE INDEX IF NOT EXISTS idx_roster_people_employment
@@ -57,6 +58,8 @@ async def init_roster_schema(db):
     people_columns = {
         row["name"] for row in await (await db.execute("PRAGMA table_info(company_roster_people)")).fetchall()
     }
+    if people_columns and "email_provider_checked_at" not in people_columns:
+        await db.execute("ALTER TABLE company_roster_people ADD COLUMN email_provider_checked_at TEXT")
     if people_columns and "verdict" not in people_columns:
         await db.execute("ALTER TABLE company_roster_people ADD COLUMN verdict TEXT")
         await db.execute("ALTER TABLE company_roster_people ADD COLUMN verdict_reason TEXT")
