@@ -520,7 +520,8 @@ async def _upsert_people(
                            source_url=COALESCE(?, source_url),
                            accession=COALESCE(?, accession),
                            inferred_email=COALESCE(?, inferred_email),
-                           employment=?, last_seen_at=?, missed_checks=0
+                           employment=CASE WHEN company_roster_people.employment='ghost' THEN 'ghost' ELSE ? END,
+                           last_seen_at=?, missed_checks=0
                        WHERE id=?""",
                     (
                         person["full_name"],
@@ -963,7 +964,7 @@ async def roster_detail(roster_id: int) -> dict[str, Any] | None:
         people = await (
             await db.execute(
                 """SELECT full_name, title, role_type, source, inferred_email, employment,
-                          last_seen_at, missed_checks, source_url, email_status, email_checked_at, verdict, verdict_reason
+                          last_seen_at, missed_checks, source_url, email_status, email_checked_at, verdict, verdict_reason, email_provider_checked_at
                    FROM company_roster_people WHERE roster_id=?
                    ORDER BY employment, title, full_name""",
                 (roster_id,),
