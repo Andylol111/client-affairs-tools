@@ -112,8 +112,12 @@ for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/docu
 
 test('assistant keeps source scope visible and returns document citations', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
+  const fab = page.getByRole('button', { name: 'Open assistant' });
+  await expect(fab.locator('svg')).toBeVisible();
+  await expect(fab).not.toHaveText('AI');
+  await fab.click();
   await expect(page.getByRole('dialog', { name: 'Site assistant' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Assistant is open' }).locator('svg')).toBeVisible();
   await expect(page.getByText('It cannot send mail.')).toBeVisible();
   await page.getByText('Optional documents').click();
   await expect(page.getByText('Project report 1')).toBeVisible();
@@ -190,13 +194,20 @@ test('assistant restores a thread and starts a new chat', async ({ page }) => {
   await page.route('**/api/assistant/threads/9', route => route.fulfill({
     json: [
       { id: 1, role: 'user', content: 'Find people at Acme', created_at: 1, sources: [] },
-      { id: 2, role: 'assistant', content: 'Confirm to start the run.', created_at: 2, sources: [] },
+      {
+        id: 2, role: 'assistant', content: 'Confirm to start the run.', created_at: 2, sources: [],
+        pending_actions: [{ tool: 'start_find_people', args: { company_name: 'Acme', max_prospects: 250 }, summary: 'Find people at Acme (up to 250)' }],
+        asks: [{ id: 'titles', label: 'Titles to prioritize', value: '', required: true, placeholder: 'VPs, project managers' }],
+        navigations: [{ path: '/scraper?view=company&company=Acme', label: 'Find people' }],
+      },
     ],
   }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Open assistant' }).click();
   await page.getByRole('button', { name: 'Find Acme' }).click();
   await expect(page.getByText('Confirm to start the run.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Find people', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'New chat' }).click();
   await expect(page.getByText('It fills the Find people boxes.')).toBeVisible();
 });

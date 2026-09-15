@@ -9,7 +9,7 @@ from pydantic import BaseModel,Field
 from app.auth_deps import get_current_user
 from app.database import get_db
 from app.services.assistant_service import accessible_sources,answer,index_document_version
-from app.services.assistant_operator import execute_write
+from app.services.assistant_operator import execute_write, sanitize_ask, sanitize_open, sanitize_propose
 from app.services.generation_policy import reserve_assistant_request
 
 router=APIRouter()
@@ -34,6 +34,54 @@ async def _thread(db,thread_id: int,user_id: int):
     if not row:
         raise HTTPException(404,'Conversation not found')
     return dict(row)
+
+
+def _pack_assistant_payload(result: dict) -> str:
+    return json.dumps({
+        'citations': result.get('sources') or [],
+        'pending_actions': result.get('pending_actions') or [],
+        'navigations': result.get('navigations') or [],
+        'asks': result.get('asks') or [],
+        'lookups': result.get('lookups') or [],
+    })
+
+
+def _unpack_assistant_payload(raw: str) -> dict:
+    try:
+        data=json.loads(raw or '[]')
+    except json.JSONDecodeError:
+        data=[]
+    empty={'sources':[],'pending_actions':[],'navigations':[],'asks':[],'lookups':[]}
+    if isinstance(data,list):
+        return {**empty,'sources':data}
+    if not isinstance(data,dict):
+        return empty
+    citations=data.get('citations') if isinstance(data.get('citations'),list) else data.get('sources')
+    if not isinstance(citations,list):
+        citations=[]
+    return {
+        'sources':citations,
+        'pending_actions':sanitize_propose(data.get('pending_actions')),
+        'navigations':sanitize_open(data.get('navigations')),
+        'asks':sanitize_ask(data.get('asks')),
+        'lookups':data.get('lookups') if isinstance(data.get('lookups'),list) else [],
+    }
+
+
+async def _clear_thread_pending(db,thread_id: int) -> None:
+    rows=await (await db.execute(
+        "SELECT id,sources_json FROM assistant_messages WHERE thread_id=? AND role='assistant'",
+        (thread_id,),
+    )).fetchall()
+    for row in rows:
+        payload=_unpack_assistant_payload(row['sources_json'] or '[]')
+        if not payload.get('pending_actions'):
+            continue
+        payload['pending_actions']=[]
+        await db.execute(
+            'UPDATE assistant_messages SET sources_json=? WHERE id=?',
+            (_pack_assistant_payload(payload),row['id']),
+        )
 
 
 @router.get('/sources')
@@ -83,7 +131,8 @@ async def thread_messages(thread_id: int,user: dict=Depends(get_current_user)):
         result=[]
         for row in rows:
             item=dict(row)
-            item['sources']=json.loads(item.pop('sources_json') or '[]')
+            extras=_unpack_assistant_payload(item.pop('sources_json') or '[]')
+            item.update(extras)
             result.append(item)
         return result
     finally:
@@ -121,7 +170,7 @@ async def ask(payload: AskRequest,user: dict=Depends(get_current_user)):
             thread_id=cur.lastrowid
         await db.execute("INSERT INTO assistant_messages(thread_id,role,content,created_at) VALUES(?,'user',?,?)",(thread_id,question,now))
         await db.execute("INSERT INTO assistant_messages(thread_id,role,content,sources_json,created_at) VALUES(?,'assistant',?,?,?)",
-            (thread_id,result['answer'],json.dumps(result['sources']),now))
+            (thread_id,result['answer'],_pack_assistant_payload(result),now))
         await db.execute('UPDATE assistant_threads SET updated_at=? WHERE id=?',(now,thread_id))
         await db.commit()
     finally:
@@ -139,8 +188,15 @@ async def act(payload: ActRequest,user: dict=Depends(get_current_user)):
     try:
         if thread_id is not None:
             await _thread(db,thread_id,user['id'])
+            await _clear_thread_pending(db,thread_id)
             await db.execute("INSERT INTO assistant_messages(thread_id,role,content,sources_json,created_at) VALUES(?,'assistant',?,?,?)",
-                (thread_id,result['answer'],'[]',now))
+                (thread_id,result['answer'],_pack_assistant_payload({
+                    'sources':[],
+                    'pending_actions':[],
+                    'navigations':result.get('navigations') or [],
+                    'asks':[],
+                    'lookups':[],
+                }),now))
             await db.execute('UPDATE assistant_threads SET updated_at=? WHERE id=?',(now,thread_id))
             await db.commit()
         else:
