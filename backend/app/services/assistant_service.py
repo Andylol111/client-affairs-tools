@@ -231,7 +231,6 @@ _TITLE_WORDS = re.compile(
     re.I,
 )
 _DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
-_LINKEDIN = re.compile(r"https?://(?:www\.)?linkedin\.com/company/[^\s]+", re.I)
 
 
 def _named_company(question: str) -> str:
@@ -264,26 +263,20 @@ def _stated_domain(question: str) -> str:
     return host[:255]
 
 
-def _stated_linkedin(question: str) -> str:
-    match = _LINKEDIN.search(question or "")
-    return (match.group(0) if match else "")[:2048]
-
-
 def _find_people_company(question: str) -> str:
     if not _FIND_PEOPLE.search(question or ""):
         return ""
     return _named_company(question)
 
 
-def _find_people_path(company: str, titles: str = "", domain: str = "", linkedin: str = "") -> str:
+def _find_people_path(company: str, titles: str = "", domain: str = "") -> str:
     from urllib.parse import urlencode
     params = {"view": "company", "company": company}
     if titles:
         params["titles"] = titles
     if domain:
         params["domain"] = domain
-    if linkedin:
-        params["linkedin"] = linkedin
+
     return "/scraper?" + urlencode(params)
 
 
@@ -294,7 +287,6 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
         return None
     titles = _title_hints(question)
     domain = _stated_domain(question)
-    linkedin = _stated_linkedin(question)
     if offline:
         answer = (
             f"Find people is ready for {company} without the language model. "
@@ -304,11 +296,11 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
     else:
         answer = (
             f"I filled Find people for {company}. Confirm the boxes, then Start search. "
-            "That is the live company search (web + LinkedIn + inbox checks), not a warehouse lookup."
+            "That is the live company search (web + club roster + inbox checks), not a warehouse lookup."
         )
     asks = []
     for field_id, spec in ASK_FIELDS.items():
-        value = {"titles": titles, "company_domain": domain, "linkedin_company_url": linkedin}[field_id]
+        value = {"titles": titles, "company_domain": domain}[field_id]
         asks.append({
             "id": field_id,
             "label": spec["label"],
@@ -325,13 +317,12 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
             "args": {
                 "company_name": company,
                 "company_domain": domain or None,
-                "linkedin_company_url": linkedin or None,
                 "title_hints": titles or None,
                 "max_prospects": 250,
             },
             "summary": f"Find people at {company} (up to 250)",
         }],
-        "open": [{"path": _find_people_path(company, titles, domain, linkedin), "label": "Find people"}],
+        "open": [{"path": _find_people_path(company, titles, domain), "label": "Find people"}],
     }
 
 

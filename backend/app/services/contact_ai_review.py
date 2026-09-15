@@ -1,6 +1,5 @@
 """
-AI review of scraped contacts via Ollama — flag real vs junk names, assess provenance.
-Uses multi-agent thread pool (ollama_agent_pool) + batch_agents for parallel review.
+AI review of scraped contacts via Bedrock rank — flag real vs junk names, assess provenance.
 """
 from __future__ import annotations
 
@@ -9,21 +8,12 @@ import json
 import os
 from typing import Any
 
-import httpx
-
 from app.database import get_db
 from app.services.batch_agents import run_batch_agents
-from app.services.ollama_agent_pool import (
-    AI_REVIEW_WORKERS,
-    OLLAMA_MODEL,
-    OLLAMA_URL,
-    agent_pool_size,
-    ollama_json_async,
-)
 from app.services.contact_scraper import is_heuristic_junk_contact
 
 AI_REVIEW_BATCH = int(os.getenv("AI_REVIEW_BATCH", "5"))
-OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "90.0"))
+AI_REVIEW_WORKERS = int(os.getenv("AI_REVIEW_WORKERS", "6"))
 AI_REVIEW_ENABLED = os.getenv("AI_REVIEW_ENABLED", "true").lower() not in ("0", "false", "no")
 
 
@@ -77,26 +67,23 @@ def _normalize_reviews(data: dict[str, Any] | None) -> dict[str, dict[str, Any]]
 async def _review_batch(batch: list[dict], company_name: str | None) -> dict[str, dict[str, Any]]:
     if not batch:
         return {}
-    from app.services.llm import complete_json, llm_provider, rank_model_id
+    from app.services.llm import complete_json, rank_model_id
 
     prompt = _build_review_prompt(batch, company_name)
-    if llm_provider() == "bedrock":
-        # Bedrock process inference slots are fewer than the review agents; back
-        # off and retry rather than failing the whole discovery run. Exhausted
-        # retries degrade to "unreviewed", never a lost contact.
-        data: dict[str, Any] | None = None
-        delay = 0.5
-        for attempt in range(4):
-            try:
-                data = await asyncio.to_thread(complete_json, prompt, rank_model_id())
-                break
-            except Exception:
-                data = None
-                if attempt < 3:
-                    await asyncio.sleep(delay)
-                    delay *= 2
-    else:
-        data = await ollama_json_async(prompt)
+    # Bedrock process inference slots are fewer than the review agents; back off
+    # and retry rather than failing the whole discovery run. Exhausted retries
+    # degrade to "unreviewed", never a lost contact.
+    data: dict[str, Any] | None = None
+    delay = 0.5
+    for attempt in range(4):
+        try:
+            data = await asyncio.to_thread(complete_json, prompt, rank_model_id())
+            break
+        except Exception:
+            data = None
+            if attempt < 3:
+                await asyncio.sleep(delay)
+                delay *= 2
     result = _normalize_reviews(data)
 
     missing = [c for c in batch if (c.get("email") or "").strip().lower() not in result]
@@ -155,7 +142,7 @@ async def run_ai_review_agents(
     if not to_review or not AI_REVIEW_ENABLED:
         return reviews
 
-    ollama_reviews = await run_batch_agents(
+    ranked = await run_batch_agents(
         to_review,
         batch_size=AI_REVIEW_BATCH,
         agents=AI_REVIEW_WORKERS,
@@ -163,7 +150,7 @@ async def run_ai_review_agents(
         merge=_merge_review_maps,
         on_progress=on_progress,
     )
-    reviews.update(ollama_reviews)
+    reviews.update(ranked)
     return reviews
 
 
@@ -205,14 +192,14 @@ async def ai_review_contacts(
                     row,
                     verdict=verdict,
                     reason=row["ai_reason"],
-                    model=OLLAMA_MODEL,
+                    model=_review_model(),
                     source_note=row["ai_source_note"],
                 )
             )
         else:
             row["ai_verdict"] = "unreviewed"
-            row["ai_reason"] = "Ollama did not return a review for this email (timeout or parse error)"
-            log.append(_log_row(row, verdict="unreviewed", reason=row["ai_reason"], model=OLLAMA_MODEL))
+            row["ai_reason"] = "Review model did not return a result for this email"
+            log.append(_log_row(row, verdict="unreviewed", reason=row["ai_reason"], model=_review_model()))
         reviewed.append(row)
 
     return reviewed, log
@@ -292,25 +279,13 @@ async def get_discovery_log(scrape_run_id: str, limit: int = 500) -> list[dict[s
         await db.close()
 
 
+def _review_model() -> str:
+    from app.services.llm import rank_model_id
+
+    return rank_model_id()
+
+
 async def check_review_backend() -> tuple[bool, str]:
-    from app.services.llm import default_model_id, llm_provider, rank_model_id
+    from app.services.llm import default_model_id, rank_model_id
 
-    if llm_provider() == "bedrock":
-        return True, f"bedrock rank={rank_model_id()} draft={default_model_id()}"
-    return await check_ollama_available()
-
-
-async def check_ollama_available() -> tuple[bool, str]:
-    """Quick health check for scrape startup (laptop Ollama only)."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{OLLAMA_URL.rstrip('/')}/api/tags")
-            if r.status_code != 200:
-                return False, f"Ollama HTTP {r.status_code}"
-            names = [m.get("name", "") for m in r.json().get("models", [])]
-            if not any(OLLAMA_MODEL in n or n.startswith(OLLAMA_MODEL) for n in names):
-                return False, f"Model {OLLAMA_MODEL} not pulled (have: {', '.join(names[:3])})"
-            agents = agent_pool_size()
-            return True, f"{OLLAMA_MODEL} · {agents} agent thread(s)"
-    except Exception as e:
-        return False, str(e)
+    return True, f"bedrock rank={rank_model_id()} draft={default_model_id()}"

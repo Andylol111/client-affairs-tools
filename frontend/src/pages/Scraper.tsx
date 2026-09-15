@@ -22,8 +22,7 @@ type ScrapeProgressState = {
 const PHASE_TYPICAL: Record<string, string> = {
   init: 'Startup is usually a few seconds.',
   domain: 'Site crawl: often 30 seconds–2 minutes depending on pages and latency.',
-  web: 'Web search: Tavily scans LinkedIn, press, and directories (30–90 seconds).',
-  linkedin: 'LinkedIn step: Apify runs about 1–3 minutes; public page fallback is faster but yields fewer people.',
+  web: 'Web search: Tavily scans press, IR, and directories (30–90 seconds).',
   prepare: 'Inbox + AI agent pools run in parallel (6 threaded Bedrock agents by default).',
   save: 'Database save: quick unless you are upserting hundreds of rows.',
 };
@@ -115,7 +114,7 @@ function formatEtaSeconds(sec: number | null): string {
   return `~${m} min ${s} sec`;
 }
 
-/** `tick` bumps on an interval so elapsed/ETA refresh while backend progress is sparse (e.g. Apify). */
+/** `tick` bumps on an interval so elapsed/ETA refresh while backend progress is sparse (e.g. a slow crawl). */
 function elapsedSecondsSince(startedAt: number | null, tick: number): number {
   if (!startedAt) return 0;
   return Math.max(0, Math.round((tick - startedAt) / 1000));
@@ -195,7 +194,7 @@ function ScrapeProgressPanel({
               )}
               <p className="text-[11px] text-slate-500">
                 Elapsed {startedAt ? `${elapsedSecondsSince(startedAt, tick)} s` : '—'} · Estimates assume current pace;
-                LinkedIn/Apify steps can stall then finish quickly.
+                Web search can stall then finish quickly.
               </p>
             </div>
           </div>
@@ -275,15 +274,13 @@ export default function Scraper() {
   const discoveryKey = [
     params.get('company') || '',
     params.get('domain') || '',
-    params.get('linkedin') || '',
     params.get('titles') || '',
     params.get('max') || '',
     params.get('run') || '',
   ].join('|');
   const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
-  const [linkedinUrl, setLinkedinUrl] = useState('');
-  const [linkedinMaxEmployees, setLinkedinMaxEmployees] = useState(200);
+  const [maxPeople, setMaxPeople] = useState(200);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -426,7 +423,7 @@ export default function Scraper() {
       }, 6000);
       return;
     }
-    if (!window.confirm('Stop this scrape?\n\nThe request will disconnect. Any Apify actor run will be aborted when possible, and no further contacts will be saved. Rows already written stay in the database.')) {
+    if (!window.confirm('Stop this scrape?\n\nThe request will disconnect and no further contacts will be saved. Rows already written stay in the database.')) {
       disarmScrapeCancel();
       return;
     }
@@ -435,8 +432,8 @@ export default function Scraper() {
   };
 
   const handleScrape = async () => {
-    if (!companyName && !domain && !linkedinUrl) {
-      setError('Enter company name, domain, or LinkedIn URL');
+    if (!companyName && !domain) {
+      setError('Enter a company name or domain');
       return;
     }
     disarmScrapeCancel();
@@ -455,8 +452,7 @@ export default function Scraper() {
         {
           company_name: companyName || undefined,
           domain: domain || undefined,
-          linkedin_url: linkedinUrl || undefined,
-          linkedin_max_employees: linkedinUrl ? linkedinMaxEmployees : undefined,
+          max_people: maxPeople,
         },
         (ev) => {
           if (ev.type === 'progress') {
@@ -474,7 +470,7 @@ export default function Scraper() {
         setContacts(res.contacts || []);
         setDiscoveryLog(res.discovery_log || []);
         setScrapeRunId(res.scrape_run_id || null);
-        setInfoMessage((res.contacts?.length || 0) > 0 ? formatScrapeSummary(res) : 'Scrape stopped. Any in-flight Apify run was aborted when possible.');
+        setInfoMessage((res.contacts?.length || 0) > 0 ? formatScrapeSummary(res) : 'Scrape stopped. Rows already found stay in the database.');
         return;
       }
       setContacts(res.contacts || []);
@@ -659,14 +655,6 @@ export default function Scraper() {
             />
           </div>
           <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-            <input
-              type="url"
-              placeholder="LinkedIn company URL"
-              aria-label="LinkedIn company URL"
-              value={linkedinUrl}
-              onChange={(e) => setLinkedinUrl(e.target.value)}
-              className="flex-1 w-full px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50"
-            />
             <div className="flex items-center gap-2 shrink-0">
               <label htmlFor="max-employees" className="text-[15px] text-slate-blue whitespace-nowrap">Max people</label>
               <input
@@ -674,8 +662,8 @@ export default function Scraper() {
                 type="number"
                 min={25}
                 max={300}
-                value={linkedinMaxEmployees}
-                onChange={(e) => setLinkedinMaxEmployees(parseInt(e.target.value, 10) || 200)}
+                value={maxPeople}
+                onChange={(e) => setMaxPeople(parseInt(e.target.value, 10) || 200)}
                 className="w-20 px-3 py-2 rounded-lg bg-pale-sky/30 text-deep-navy text-[15px] text-right border border-pale-sky/50"
               />
             </div>
@@ -706,7 +694,7 @@ export default function Scraper() {
             </div>
           )}
           <div className="flex gap-2 w-full items-stretch">
-            <button type="button" onClick={handleScrape} disabled={loading || (!companyName && !domain && !linkedinUrl)} className="flex-1 min-w-0 py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40">
+            <button type="button" onClick={handleScrape} disabled={loading || (!companyName && !domain)} className="flex-1 min-w-0 py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40">
               {loading ? 'Scraping…' : 'Start scrape'}
             </button>
             <button type="button" onClick={handleScrapeCancelClick} disabled={!loading} className={`shrink-0 rounded-xl text-[14px] font-semibold border-2 ${loading ? 'px-4 py-3 border-red-300 bg-red-50 text-red-800' : 'max-w-0 opacity-0 px-0 overflow-hidden border-transparent'} ${scrapeCancelArmed ? 'ring-2 ring-amber-400' : ''}`}>

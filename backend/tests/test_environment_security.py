@@ -104,8 +104,15 @@ async def tests():
     with patch.dict(os.environ, {'LLM_PROVIDER': 'bedrock'}):
         with patch.dict(os.environ, {'BEDROCK_ALLOWED_MODEL_IDS': llm.rank_model_id()}):
             assert all(m['id'] == llm.rank_model_id() for m in llm.list_models()['groups'][0]['models'])
-    with patch.dict(os.environ, {'LLM_PROVIDER': 'ollama'}), patch('ollama.chat', return_value=SimpleNamespace(message=SimpleNamespace(content='local draft'))):
-        assert llm.complete_text('brief', 'ollama:local', system='system') == 'local draft'
+    with patch.dict(os.environ, {'LLM_PROVIDER': 'ollama'}), patch('boto3.client') as factory:
+        factory.return_value.converse.return_value = {'output': {'message': {'content': [{'text': 'hosted'}]}}}
+        assert llm.complete_text('brief') == 'hosted'
+        try:
+            llm.complete_text('brief', 'ollama:local')
+            raise AssertionError('Ollama remaining as an inference outlet')
+        except HTTPException as exc:
+            assert exc.status_code == 400
+        factory.return_value.converse.assert_called()
     with patch.dict(os.environ, {'LLM_PROVIDER': 'bedrock'}), patch('boto3.client') as factory:
         factory.return_value.converse.return_value = {'output': {'message': {'content': [{'text': 'draft'}]}}}
         assert llm._bedrock_text('brief', llm.default_model_id(), 'system') == 'draft'

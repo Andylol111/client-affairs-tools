@@ -26,8 +26,7 @@ class Contact(ContactCreate):
 class ScrapeRequest(BaseModel):
     company_name: Optional[str] = None
     domain: Optional[str] = None
-    linkedin_url: Optional[str] = None  # e.g. https://linkedin.com/company/acme
-    linkedin_max_employees: Optional[int] = 50  # max employees when using Apify
+    max_people: Optional[int] = 80  # cap on web-discovery people
     enable_web_discovery: Optional[bool] = True  # Tavily web search for named employees
 
 

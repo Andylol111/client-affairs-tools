@@ -260,6 +260,51 @@ async def drain_roster_emails() -> dict[str, Any]:
     return {"ok": True, "claimed": len(claimed), "touched": touched}
 
 
+async def apply_provider_verdict(db, email: str, verdict: str) -> None:
+    """A Verifalia hard Failure decays the learned pattern and tombstones the
+    address even before it is ever mailed. 'Success' deliberately does NOT
+    boost — only human replies move confidence up, so the loop stays honest."""
+    if verdict != "rejected" or not email:
+        return
+    cand = await (
+        await db.execute("SELECT id FROM email_candidates WHERE email=? COLLATE NOCASE", (email,))
+    ).fetchone()
+    if cand:
+        await apply_mailbox_proof(db, int(cand["id"]), "permanent_failure_observed")
+    else:
+        row = await (
+            await db.execute(
+                "SELECT id, full_name, inferred_email, email_status FROM company_roster_people WHERE inferred_email=? COLLATE NOCASE LIMIT 1",
+                (email,),
+            )
+        ).fetchone()
+        if row and row["email_status"] != "bounced":
+            from app.services.company_email_cache import pattern_for_email
+
+            key = pattern_for_email(email, row["full_name"])
+            dom = email.split("@")[-1].lower() if "@" in email else ""
+            if key and dom:
+                await db.execute(
+                    """UPDATE company_email_patterns
+                       SET confidence = MAX(0.05, confidence - 0.12),
+                           verified_samples = MAX(0, verified_samples - 1),
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE company_domain = ? AND pattern_key = ?""",
+                    (dom, key),
+                )
+            await db.execute(
+                "UPDATE company_roster_people SET email_status='bounced', email_checked_at=? WHERE id=?",
+                (_iso(), row["id"]),
+            )
+    # A provider-confirmed deadbox never gets mailed, wherever it lives.
+    await db.execute(
+        """INSERT INTO candidate_suppressions(email,state,observed_at)
+           VALUES(?, 'permanent_failure', ?) ON CONFLICT(email) DO NOTHING""",
+        (email, _iso()),
+    )
+
+
+
 async def apply_mailbox_proof(db, candidate_id: int, state: str) -> None:
     """Send-time truth loop: replies up-weight the learned pattern, permanent
     failures down-weight it and tombstone the roster person's email.

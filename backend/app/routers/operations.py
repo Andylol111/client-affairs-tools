@@ -1,5 +1,5 @@
 """
-Operations Intelligence API - admin-only. Usage analytics, heatmaps, YUCG resources, Ollama insights, Excel export.
+Operations Intelligence API - admin-only. Usage analytics, heatmaps, YUCG resources, Excel export.
 Private and internal only.
 """
 import io

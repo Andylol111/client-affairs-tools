@@ -32,7 +32,7 @@ from app.services.email_verifier import (
 
 RECONCILE_WORKERS = int(os.getenv("RECONCILE_WORKERS", "20"))
 # Scraped-from-page emails with aligned local part skip slow SMTP (MX still required).
-TRUSTED_SOURCES = frozenset({"domain_scrape", "linkedin_apify"})
+TRUSTED_SOURCES = frozenset({"domain_scrape"})
 
 
 def _pick_canonical_name(contact: dict, company_name: str | None) -> str | None:

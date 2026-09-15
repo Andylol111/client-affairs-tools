@@ -191,7 +191,7 @@ export function CompanySuggestions({
       const res = await api.yucg.aiRecommend({ n: 10 });
       const next = Array.isArray(res.recommendations) ? res.recommendations : [];
       if (next.length) setRecs(next);
-      if (res.ollama_error) setError(res.ollama_error);
+      if (res.error) setError(res.error);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'AI suggestions are unavailable right now.');
     } finally {
