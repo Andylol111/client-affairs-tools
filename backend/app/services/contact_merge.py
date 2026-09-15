@@ -1,12 +1,11 @@
 """Merge domain-crawl, roster, and web-discovery contacts (shared by Scraper + YUCG)."""
 from __future__ import annotations
 
+from app.services.company_email_cache import build_email_for_person_sync
 from app.services.contact_scraper import (
     _best_confidence,
     confidence_for_contact_dict,
-    infer_email_from_name,
     is_valid_person_contact,
-    looks_like_person_name,
     normalize_domain,
     person_name_key,
 )
@@ -47,14 +46,27 @@ def merge_contacts(
             return by_linkedin.get(li_key)
         return None
 
+    def _with_mail(raw: dict) -> dict:
+        row = dict(raw)
+        if (row.get("email") or "").strip():
+            return row
+        host = normalize_domain(row.get("company_domain") or domain or "")
+        person = (row.get("name") or "").strip()
+        if not host or not person:
+            return row
+        guessed = build_email_for_person_sync(person, host, custom_patterns=custom_patterns)
+        if guessed:
+            row["email"] = guessed
+        return row
+
     for c in domain_contacts:
-        if not is_valid_person_contact(c, company_name=company, domain=domain):
+        dc = _with_mail(c)
+        if not is_valid_person_contact(dc, company_name=company, domain=domain):
             continue
-        email = c.get("email")
+        email = dc.get("email")
         if not email or email in seen_emails:
             continue
         seen_emails.add(email)
-        dc = dict(c)
         dc.setdefault("contact_source", "domain_scrape")
         dc["confidence"] = _best_confidence(
             dc.get("confidence"),
@@ -64,12 +76,13 @@ def merge_contacts(
         _index(merged[-1])
 
     for c in web_contacts or []:
-        if not is_valid_person_contact(c, company_name=company, domain=domain):
+        wc = _with_mail(c)
+        if not is_valid_person_contact(wc, company_name=company, domain=domain):
             continue
-        email = c.get("email")
+        email = wc.get("email")
         if not email or email in seen_emails:
             continue
-        matched = _find_match(c.get("name"), c.get("linkedin_url"))
+        matched = _find_match(wc.get("name"), wc.get("linkedin_url"))
         if matched:
             matched["linkedin_url"] = c.get("linkedin_url") or matched.get("linkedin_url")
             matched["title"] = matched.get("title") or c.get("title")
@@ -82,7 +95,6 @@ def merge_contacts(
             )
             continue
         seen_emails.add(email)
-        wc = dict(c)
         wc.setdefault("contact_source", "web_discovery")
         wc["confidence"] = confidence_for_contact_dict(wc, company_name=company, domain=domain)
         merged.append(wc)

@@ -24,16 +24,27 @@ class ReconcileContext:
     custom_patterns: list[str] = field(default_factory=list)
     domain_patterns: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     mx_cache: dict[str, tuple[bool, list[str]]] = field(default_factory=dict)
+    mail_hosts: dict[str, list[str]] = field(default_factory=dict)
 
 
 async def load_reconcile_context(domains: set[str]) -> ReconcileContext:
+    from app.services.mail_domain_map import list_mail_hosts
+
     ctx = ReconcileContext()
     db = await get_db()
     try:
         cur = await db.execute("SELECT pattern FROM custom_email_formats ORDER BY priority DESC")
         ctx.custom_patterns = [r["pattern"] for r in await cur.fetchall() if r.get("pattern")]
+        wanted: set[str] = set()
         for raw in domains:
-            dom = normalize_domain(raw)
+            site = normalize_domain(raw)
+            if not site or site in ctx.mail_hosts:
+                continue
+            hosts = await list_mail_hosts(site, db=db)
+            ctx.mail_hosts[site] = hosts
+            wanted.update(hosts)
+            wanted.add(site)
+        for dom in wanted:
             if not dom or dom in ctx.domain_patterns:
                 continue
             cur = await db.execute(
@@ -57,31 +68,78 @@ async def load_reconcile_context(domains: set[str]) -> ReconcileContext:
     return ctx
 
 
+def _host_usable(host: str, ctx: ReconcileContext | None) -> bool:
+    if not ctx:
+        return True
+    mx = ctx.mx_cache.get(host)
+    if mx is None:
+        return True
+    return mx[0] is not False
+
+
+def build_email_candidates(
+    full_name: str,
+    domain: str,
+    ctx: ReconcileContext | None = None,
+    custom_patterns: list[str] | None = None,
+) -> list[str]:
+    """Ranked work-mail guesses: exception mailbox hosts first, then first.last."""
+    from app.services.mail_domain_map import preferred_mail_hosts_sync
+
+    site = normalize_domain(domain)
+    if not site or not full_name:
+        return []
+    first, last = _split_name(full_name)
+    if not last:
+        return []
+    hosts = list((ctx.mail_hosts.get(site) if ctx else None) or preferred_mail_hosts_sync(site) or [site])
+    if site not in hosts:
+        hosts.append(site)
+    custom = custom_patterns if custom_patterns is not None else (ctx.custom_patterns if ctx else [])
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _add(candidate: str) -> None:
+        email = (candidate or "").strip().lower()
+        if not email or email in seen:
+            return
+        if not strict_email_name_alignment(full_name, email):
+            return
+        seen.add(email)
+        out.append(email)
+
+    for host in hosts:
+        if not host or not _host_usable(host, ctx):
+            continue
+        for p in (ctx.domain_patterns.get(host) if ctx else None) or []:
+            tpl = p.get("pattern_template") or ""
+            if not tpl:
+                continue
+            local = _apply_custom_pattern(tpl, first.lower(), last.lower())
+            if local and "@" not in local:
+                _add(f"{local}@{host}")
+        for pattern in custom or []:
+            try:
+                local = _apply_custom_pattern(pattern, first.lower(), last.lower())
+            except Exception:
+                continue
+            if local and "@" not in local:
+                _add(f"{local}@{host}")
+        fallback = infer_email_from_name(full_name, host, None)
+        if fallback:
+            _add(fallback)
+    return out
+
+
 def build_email_for_person_sync(
     full_name: str,
     domain: str,
     ctx: ReconcileContext | None = None,
+    custom_patterns: list[str] | None = None,
 ) -> str | None:
     """Build email using cached company patterns (no I/O when ctx is provided)."""
-    dom = normalize_domain(domain)
-    if not dom or not full_name:
-        return None
-    first, last = _split_name(full_name)
-    if not last:
-        return None
-
-    patterns = (ctx.domain_patterns.get(dom) if ctx else None) or []
-    custom = ctx.custom_patterns if ctx else []
-
-    for p in patterns:
-        tpl = p.get("pattern_template") or ""
-        if tpl:
-            local = _apply_custom_pattern(tpl, first.lower(), last.lower())
-            candidate = f"{local}@{dom}"
-            if strict_email_name_alignment(full_name, candidate):
-                return candidate
-
-    return infer_email_from_name(full_name, dom, custom or None)
+    candidates = build_email_candidates(full_name, domain, ctx, custom_patterns=custom_patterns)
+    return candidates[0] if candidates else None
 
 
 async def build_email_for_person(
@@ -92,11 +150,10 @@ async def build_email_for_person(
     """Build email using cached company patterns, then global defaults."""
     if ctx is not None:
         return build_email_for_person_sync(full_name, domain, ctx)
-    dom = normalize_domain(domain)
-    if not dom:
-        return None
-    loaded = await load_reconcile_context({dom})
+    loaded = await load_reconcile_context({normalize_domain(domain)})
     return build_email_for_person_sync(full_name, domain, loaded)
+
+
 
 
 def _split_name(full_name: str) -> tuple[str, str]:
@@ -136,6 +193,57 @@ def infer_pattern_from_pair(email: str, first: str, last: str) -> tuple[str, str
     return None
 
 
+def _mail_host(email: str) -> str:
+    if not email or "@" not in email:
+        return ""
+    return normalize_domain(email.rsplit("@", 1)[-1])
+
+
+async def _upsert_pattern(
+    db,
+    *,
+    mail_host: str,
+    pattern_key: str,
+    template: str,
+    source: str,
+    company_name: str | None,
+    inferred: bool,
+) -> None:
+    cur = await db.execute(
+        "SELECT id, sample_count, verified_samples, sources_json FROM company_email_patterns WHERE company_domain = ? AND pattern_key = ?",
+        (mail_host, pattern_key),
+    )
+    row = await cur.fetchone()
+    sources: list[str] = []
+    if row:
+        try:
+            sources = json.loads(row["sources_json"] or "[]")
+        except Exception:
+            sources = []
+        if source not in sources:
+            sources.append(source)
+        sample_count = int(row["sample_count"] or 0) + 1
+        verified_samples = int(row["verified_samples"] or 0) + (0 if inferred else 1)
+        confidence = min(0.98, 0.35 + verified_samples * 0.12 + sample_count * 0.03)
+        await db.execute(
+            """UPDATE company_email_patterns SET
+               pattern_template = ?, sample_count = ?, verified_samples = ?,
+               confidence = ?, sources_json = ?, company_name = COALESCE(?, company_name),
+               updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (template, sample_count, verified_samples, confidence, json.dumps(sources[-20:]), company_name, row["id"]),
+        )
+    else:
+        sources = [source]
+        confidence = 0.45 if inferred else 0.62
+        await db.execute(
+            """INSERT INTO company_email_patterns
+               (company_domain, company_name, pattern_key, pattern_template, confidence, sample_count, verified_samples, sources_json)
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
+            (mail_host, company_name, pattern_key, template, confidence, 0 if inferred else 1, json.dumps(sources)),
+        )
+
+
 async def record_verified_sample(
     domain: str,
     email: str,
@@ -145,8 +253,9 @@ async def record_verified_sample(
     company_name: str | None = None,
     inferred: bool = False,
 ) -> None:
-    dom = normalize_domain(domain)
-    if not dom or not email or not full_name:
+    website = normalize_domain(domain)
+    mail = _mail_host(email)
+    if not mail or not email or not full_name:
         return
     first, last = _split_name(full_name)
     if not last or not strict_email_name_alignment(full_name, email):
@@ -157,39 +266,19 @@ async def record_verified_sample(
     pattern_key, template = pair
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT id, sample_count, verified_samples, sources_json FROM company_email_patterns WHERE company_domain = ? AND pattern_key = ?",
-            (dom, pattern_key),
+        await _upsert_pattern(
+            db,
+            mail_host=mail,
+            pattern_key=pattern_key,
+            template=template,
+            source=source,
+            company_name=company_name,
+            inferred=inferred,
         )
-        row = await cur.fetchone()
-        sources: list[str] = []
-        if row:
-            try:
-                sources = json.loads(row["sources_json"] or "[]")
-            except Exception:
-                sources = []
-            if source not in sources:
-                sources.append(source)
-            sample_count = int(row["sample_count"] or 0) + 1
-            verified_samples = int(row["verified_samples"] or 0) + (0 if inferred else 1)
-            confidence = min(0.98, 0.35 + verified_samples * 0.12 + sample_count * 0.03)
-            await db.execute(
-                """UPDATE company_email_patterns SET
-                   pattern_template = ?, sample_count = ?, verified_samples = ?,
-                   confidence = ?, sources_json = ?, company_name = COALESCE(?, company_name),
-                   updated_at = CURRENT_TIMESTAMP
-                   WHERE id = ?""",
-                (template, sample_count, verified_samples, confidence, json.dumps(sources[-20:]), company_name, row["id"]),
-            )
-        else:
-            sources = [source]
-            confidence = 0.45 if inferred else 0.62
-            await db.execute(
-                """INSERT INTO company_email_patterns
-                   (company_domain, company_name, pattern_key, pattern_template, confidence, sample_count, verified_samples, sources_json)
-                   VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
-                (dom, company_name, pattern_key, template, confidence, 0 if inferred else 1, json.dumps(sources)),
-            )
+        if website and website != mail:
+            from app.services.mail_domain_map import record_observed_alias
+
+            await record_observed_alias(website, mail, source=source, company_name=company_name, db=db)
         await db.commit()
     finally:
         await db.close()
@@ -199,17 +288,19 @@ async def batch_record_verified_samples(samples: list[dict[str, Any]]) -> None:
     """Persist learned patterns from a reconcile batch in one DB connection."""
     if not samples:
         return
+    from app.services.mail_domain_map import record_observed_alias
+
     db = await get_db()
     try:
         for sample in samples:
-            domain = sample.get("domain") or ""
+            website = normalize_domain(sample.get("domain") or "")
             email = sample.get("email") or ""
             full_name = sample.get("full_name") or ""
             source = sample.get("source") or "scrape"
             company_name = sample.get("company_name")
             inferred = bool(sample.get("inferred"))
-            dom = normalize_domain(domain)
-            if not dom or not email or not full_name:
+            mail = _mail_host(email)
+            if not mail or not full_name:
                 continue
             first, last = _split_name(full_name)
             if not last or not strict_email_name_alignment(full_name, email):
@@ -218,55 +309,38 @@ async def batch_record_verified_samples(samples: list[dict[str, Any]]) -> None:
             if not pair:
                 continue
             pattern_key, template = pair
-            cur = await db.execute(
-                "SELECT id, sample_count, verified_samples, sources_json FROM company_email_patterns WHERE company_domain = ? AND pattern_key = ?",
-                (dom, pattern_key),
+            await _upsert_pattern(
+                db,
+                mail_host=mail,
+                pattern_key=pattern_key,
+                template=template,
+                source=source,
+                company_name=company_name,
+                inferred=inferred,
             )
-            row = await cur.fetchone()
-            sources: list[str] = []
-            if row:
-                try:
-                    sources = json.loads(row["sources_json"] or "[]")
-                except Exception:
-                    sources = []
-                if source not in sources:
-                    sources.append(source)
-                sample_count = int(row["sample_count"] or 0) + 1
-                verified_samples = int(row["verified_samples"] or 0) + (0 if inferred else 1)
-                confidence = min(0.98, 0.35 + verified_samples * 0.12 + sample_count * 0.03)
-                await db.execute(
-                    """UPDATE company_email_patterns SET
-                       pattern_template = ?, sample_count = ?, verified_samples = ?,
-                       confidence = ?, sources_json = ?, company_name = COALESCE(?, company_name),
-                       updated_at = CURRENT_TIMESTAMP
-                       WHERE id = ?""",
-                    (template, sample_count, verified_samples, confidence, json.dumps(sources[-20:]), company_name, row["id"]),
-                )
-            else:
-                sources = [source]
-                confidence = 0.45 if inferred else 0.62
-                await db.execute(
-                    """INSERT INTO company_email_patterns
-                       (company_domain, company_name, pattern_key, pattern_template, confidence, sample_count, verified_samples, sources_json)
-                       VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
-                    (dom, company_name, pattern_key, template, confidence, 0 if inferred else 1, json.dumps(sources)),
-                )
+            if website and website != mail:
+                await record_observed_alias(website, mail, source=source, company_name=company_name, db=db)
         await db.commit()
     finally:
         await db.close()
 
 
 async def get_domain_patterns(domain: str) -> list[dict[str, Any]]:
+    from app.services.mail_domain_map import list_mail_hosts
+
     dom = normalize_domain(domain)
     if not dom:
         return []
+    hosts = list(dict.fromkeys((await list_mail_hosts(dom)) or [dom]))
+    placeholders = ",".join("?" * len(hosts))
     db = await get_db()
     try:
         cur = await db.execute(
-            """SELECT company_domain, company_name, pattern_key, pattern_template, confidence,
+            f"""SELECT company_domain, company_name, pattern_key, pattern_template, confidence,
                       sample_count, verified_samples, sources_json, updated_at
-               FROM company_email_patterns WHERE company_domain = ? ORDER BY confidence DESC, verified_samples DESC""",
-            (dom,),
+               FROM company_email_patterns WHERE company_domain IN ({placeholders})
+               ORDER BY confidence DESC, verified_samples DESC""",
+            hosts,
         )
         rows = await cur.fetchall()
         out = []

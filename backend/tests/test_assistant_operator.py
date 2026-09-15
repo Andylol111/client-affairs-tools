@@ -55,8 +55,15 @@ def test_payload_and_sanitizers():
     assert parse_operator_payload('{"answer": "  "}') is None
     wrapped = 'Here you go\n{"answer": "Ready", "reads": []}\n'
     assert parse_operator_payload(wrapped)['answer'] == 'Ready'
+    like = assistant_service._find_people_payload(
+        'help me find people at companies like Niantic'
+    )
+    assert like['propose'][0]['args']['company_name'] == 'Niantic'
+    assert 'offline' not in like['answer'].lower()
+    assert assistant_service._named_company('Find people at Garmin') == 'Garmin'
     prompt = assistant_operator.operator_system_prompt()
     assert 'in-app operator' in prompt
+    assert 'companies like' in prompt.lower()
     assert 'website harness' in prompt
     assert 'optional' in prompt.lower() or 'fill Find people' in prompt.lower() or 'ask fields' in prompt.lower()
     assert sanitize_ask([{'id': 'titles', 'value': 'VPs'}])[0]['value'] == 'VPs'
@@ -173,8 +180,11 @@ async def run():
         await db.commit()
         await db.close()
 
-        with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=AssertionError('Find people must not call Bedrock'))):
+        acme_plan = json.dumps(assistant_service._find_people_payload('Find people at Acme'))
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value=acme_plan)) as acme_llm:
             result = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Find people at Acme', page_path='/scraper')
+        acme_llm.assert_called_once()
+        assert 'Find people at Acme' in acme_llm.call_args.args[0]
         assert result['pending_actions'][0]['tool'] == 'start_find_people'
         assert result['lookups'][0]['data']['count'] == 1
         assert result['navigations'][0]['path'].startswith('/scraper?')
@@ -182,12 +192,13 @@ async def run():
         assert result['asks'][0]['id'] == 'titles'
         assert result['asks'][0]['required'] is True
         assert 'ada@acme.com' in json.dumps(result['lookups'])
-        assert result['model'] == 'site-tools'
+        assert 'haiku' in result['model']
 
-        garmin = await assistant_service.answer(
-            {'id': 1, 'role': 'standard'},
-            'help me find people at Garmin to reach out to, VPs, execs in project management',
-        )
+        garmin_q = 'help me find people at Garmin to reach out to, VPs, execs in project management'
+        garmin_plan = json.dumps(assistant_service._find_people_payload(garmin_q))
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value=garmin_plan)) as garmin_llm:
+            garmin = await assistant_service.answer({'id': 1, 'role': 'standard'}, garmin_q)
+        garmin_llm.assert_called_once()
         assert garmin['pending_actions'][0]['args']['company_name'] == 'Garmin'
         assert garmin['pending_actions'][0]['args'].get('title_hints')
         titles = next(item['value'] for item in garmin['asks'] if item['id'] == 'titles')
@@ -200,7 +211,12 @@ async def run():
         from fastapi import HTTPException as FastAPIHTTPException
         with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):
             offline = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'What should I do on Pipeline?')
-        assert 'offline' in offline['answer'].lower() or 'forms' in offline['answer'].lower()
+        assert 'couldn\'t complete' in offline['answer'].lower()
+        assert 'company' in offline['answer'].lower()
+        assert offline['model'] == 'site-tools'
+        with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):
+            fallback = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'help me find people at companies like Niantic')
+        assert fallback['pending_actions'][0]['args']['company_name'] == 'Niantic'
 
         runs_before = await execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
         assert runs_before[0]['data'][0]['id'] == 7

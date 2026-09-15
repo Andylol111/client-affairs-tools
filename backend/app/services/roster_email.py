@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.database import get_db
-from app.services.company_email_cache import build_email_for_person, get_domain_patterns
+from app.services.company_email_cache import build_email_for_person
 from app.services.contact_scraper import (
     is_employee_outreach_email,
     normalize_domain,
@@ -49,9 +49,9 @@ async def derive_roster_email(full_name: str, domain: str | None) -> str | None:
     return _row_email(full_name, dom, await _build_email(full_name, dom))
 
 
-async def _build_email(full_name: str, dom: str) -> str | None:
+async def _build_email(full_name: str, dom: str, ctx=None) -> str | None:
     try:
-        return sanitize_email(await build_email_for_person(full_name, dom) or "")
+        return sanitize_email(await build_email_for_person(full_name, dom, ctx) or "")
     except Exception:
         return None
 
@@ -103,6 +103,8 @@ async def cached_roster_contacts(company_name: str, domain: str | None, limit: i
                 if not full or not norm:
                     continue
                 derived = _row_email(full, roster_dom, person.get("inferred_email"))
+                if not derived and roster_dom and person.get("email_status") not in {"collision", "invalid_domain"}:
+                    derived = _row_email(full, roster_dom, await _build_email(full, roster_dom))
                 candidate = {
                     "name": full,
                     "email": derived or "",
@@ -123,6 +125,33 @@ async def cached_roster_contacts(company_name: str, domain: str | None, limit: i
         await db.close()
 
 
+async def roster_refresh_note(company_name: str, domain: str | None = None) -> str:
+    """One line for Find people empty/error copy: register status and last SEC error."""
+    name = (company_name or "").strip()
+    if not name:
+        return ""
+    key = company_key(name)
+    dom = normalize_domain(domain or "")
+    db = await get_db()
+    try:
+        row = await (
+            await db.execute(
+                """SELECT source_status, people_count, last_error FROM company_rosters
+                   WHERE company_key=? OR company_name=?
+                      OR (? != '' AND IFNULL(company_domain,'') = ?)
+                   ORDER BY (company_key=?) DESC LIMIT 1""",
+                (key, name, dom, dom, key),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+    if not row:
+        return "no club roster yet"
+    err = (row["last_error"] or "").strip()
+    line = f"{row['source_status'] or 'pending'} · {int(row['people_count'] or 0)} officers"
+    return f"{line} · {err[:180]}" if err else line
+
+
 def norm_key(name: str) -> str:
     from app.services.contact_scraper import person_name_key
 
@@ -130,18 +159,25 @@ def norm_key(name: str) -> str:
 
 
 async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bool | None, list[str]]] | None = None) -> int:
-    """Derive/repair work emails for one roster; MX-check the domain once. Returns touched count."""
+    """Derive/repair work emails for one roster; MX-check every mailbox host. Returns touched count."""
+    from app.services.company_email_cache import load_reconcile_context
+    from app.services.mail_domain_map import list_mail_hosts, store_mx_result
+
     dom = normalize_domain(roster.get("company_domain") or "")
     roster_id = int(roster["id"])
     if not dom or not roster_id:
         return 0
     mx_cache = mx_cache if mx_cache is not None else {}
-
-    if dom not in mx_cache:
-        mx_cache[dom] = await get_mx_cached(dom, None)
-    mx_ok, _ = mx_cache[dom]
-    if mx_ok is False:
-        # Domain takes no mail at all — do not mint addresses for it.
+    hosts = await list_mail_hosts(dom)
+    for host in hosts:
+        if host not in mx_cache:
+            mx_cache[host] = await get_mx_cached(host, None)
+        try:
+            await store_mx_result(host, mx_cache[host][0])
+        except Exception:
+            pass
+    usable = [h for h in hosts if mx_cache.get(h, (None, []))[0] is not False]
+    if not usable:
         db = await get_db()
         try:
             cur = await db.execute(
@@ -149,7 +185,6 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
                    WHERE roster_id=? AND IFNULL(email_status,'') NOT IN ('bounced','invalid_domain','mx_valid','previously_delivered','collision')""",
                 (_iso(), roster_id),
             )
-            # Domain dead today does not mean dead forever — but retry weekly, not per lease.
             await db.execute(
                 "UPDATE company_rosters SET next_email_check_at=? WHERE id=?",
                 (_iso(_now() + timedelta(days=7)), roster_id),
@@ -158,6 +193,8 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
             return cur.rowcount or 0
         finally:
             await db.close()
+    ctx = await load_reconcile_context({dom})
+    ctx.mx_cache = {h: (False if v[0] is False else True, v[1]) for h, v in mx_cache.items()}
 
     db = await get_db()
     touched = 0
@@ -173,6 +210,28 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
                 (roster_id,),
             )
         ).fetchall()
+        preferred = usable[0]
+        held = {int(r["id"]) for r in rows}
+        extras = await (
+            await db.execute(
+                """SELECT id, full_name, inferred_email, email_status FROM company_roster_people
+                   WHERE roster_id=? AND employment='current'
+                     AND IFNULL(inferred_email,'') != ''
+                     AND IFNULL(email_status,'') NOT IN ('bounced','previously_delivered','collision')""",
+                (roster_id,),
+            )
+        ).fetchall()
+        extra_rows = []
+        for row in extras:
+            pid = int(row["id"])
+            if pid in held:
+                continue
+            host = normalize_domain((row["inferred_email"] or "").rsplit("@", 1)[-1])
+            if host != preferred:
+                extra_rows.append(row)
+                held.add(pid)
+        if extra_rows:
+            rows = list(rows) + extra_rows
         # Collision guard: a derived address that fits two current people is not
         # evidence for either — leave both empty until a real pattern separates them.
         taken: dict[str, list[int]] = {}
@@ -186,12 +245,11 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
             taken.setdefault(other["email"].lower(), []).append(int(other["id"]))
         planned: list[tuple[int, str]] = []
         for row in rows:
-            planned.append((int(row["id"]), await _build_email(row["full_name"], dom) or ""))
+            planned.append((int(row["id"]), await _build_email(row["full_name"], dom, ctx) or ""))
         counts: dict[str, int] = {}
         for _pid, email in planned:
             if email:
                 counts[email.lower()] = counts.get(email.lower(), 0) + 1
-        status = "mx_valid" if mx_ok is True else "inconclusive"
         for pid, email in planned:
             if not email:
                 await db.execute(
@@ -208,6 +266,9 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
                     (_iso(), pid),
                 )
             else:
+                host = low.rsplit("@", 1)[-1]
+                host_mx = mx_cache.get(host, (None, []))[0]
+                status = "mx_valid" if host_mx is True else "inconclusive"
                 await db.execute(
                     "UPDATE company_roster_people SET inferred_email=?, email_status=?, email_checked_at=? WHERE id=?",
                     (email, status, _iso(), pid),
@@ -298,7 +359,7 @@ async def drain_roster_verification(limit: int | None = None) -> dict[str, Any]:
     run so the remaining credits are not burned retrying a closed door."""
     if (os.getenv("ROSTER_PROVIDER_VERIFY", "1") or "1").strip().lower() in {"0", "false", "no"}:
         return {"ok": True, "skipped": "disabled by env"}
-    cap = limit if limit is not None else max(1, min(int(os.getenv("ROSTER_PROVIDER_ATTEMPTS", "30") or 30), 60))
+    cap = limit if limit is not None else max(1, min(int(os.getenv("ROSTER_PROVIDER_ATTEMPTS", "25") or 25), 60))
     db = await get_db()
     try:
         due = await (
@@ -322,6 +383,7 @@ async def drain_roster_verification(limit: int | None = None) -> dict[str, Any]:
     from app.services.contact_intelligence import assess_address
 
     checked = confirmed = rejected = 0
+    unknown_streak = 0
     for row in due:
         try:
             result = await assess_address(row["inferred_email"], actor_id=0, external=True, manual=False)
@@ -332,17 +394,25 @@ async def drain_roster_verification(limit: int | None = None) -> dict[str, Any]:
         if provider in ("disabled", "exhausted"):
             break
         if provider == "unavailable" or state in ("inconclusive", "not_checked", ""):
+            unknown_streak += 1
+            if unknown_streak >= 5:
+                break
             continue
+        unknown_streak = 0
         db = await get_db()
         try:
-            if state == "provider_high_confidence":
+            if state in ("provider_high_confidence", "provider_medium_confidence"):
                 await db.execute(
                     "UPDATE company_roster_people SET email_status='provider_valid', email_provider_checked_at=? WHERE id=?",
                     (_iso(), row["id"]),
                 )
                 confirmed += 1
+            elif state == "accept_all_or_risky":
+                await db.execute(
+                    "UPDATE company_roster_people SET email_status='catch_all', email_provider_checked_at=? WHERE id=?",
+                    (_iso(), row["id"]),
+                )
             else:
-                # recipient_rejected was already tombstoned+suppressed by the provider hook.
                 await db.execute(
                     "UPDATE company_roster_people SET email_provider_checked_at=? WHERE id=?",
                     (_iso(), row["id"]),
@@ -392,6 +462,8 @@ async def apply_provider_verdict(db, email: str, verdict: str) -> None:
                 "UPDATE company_roster_people SET email_status='bounced', email_checked_at=? WHERE id=?",
                 (_iso(), row["id"]),
             )
+            from app.services.mail_domain_map import record_mailbox_outcome
+            await record_mailbox_outcome(email, kind="bounce", db=db)
     # A provider-confirmed deadbox never gets mailed, wherever it lives.
     await db.execute(
         """INSERT INTO candidate_suppressions(email,state,observed_at)
@@ -438,13 +510,29 @@ async def apply_mailbox_proof(db, candidate_id: int, state: str) -> None:
         delta, sample_delta, floor = 0.12, 1, 0.05
     else:
         delta, sample_delta, floor = 0.04, 0, 0.05
-    await db.execute(
-        """UPDATE company_email_patterns
-           SET confidence = MIN(0.98, MAX(?, confidence + ?)),
-               verified_samples = MAX(0, verified_samples + ?),
-               updated_at = CURRENT_TIMESTAMP
-           WHERE company_domain = ? AND pattern_key = ?""",
-        (floor, delta, sample_delta, cand["company_domain"], cand["pattern_key"]),
+    mail_host = (cand["email"] or "").rsplit("@", 1)[-1].lower() if cand["email"] else ""
+    hosts = [h for h in {mail_host, str(cand["company_domain"] or "").lower()} if h]
+    for host in hosts:
+        await db.execute(
+            """UPDATE company_email_patterns
+               SET confidence = MIN(0.98, MAX(?, confidence + ?)),
+                   verified_samples = MAX(0, verified_samples + ?),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE company_domain = ? AND pattern_key = ?""",
+            (floor, delta, sample_delta, host, cand["pattern_key"]),
+        )
+    from app.services.mail_domain_map import record_mailbox_outcome
+
+    kind = {
+        "permanent_failure_observed": "bounce",
+        "human_reply_observed": "reply",
+        "previously_delivered": "delivered",
+    }[state]
+    await record_mailbox_outcome(
+        cand["email"],
+        kind=kind,
+        website_domain=str(cand["company_domain"] or "") or None,
+        db=db,
     )
     if state == "permanent_failure_observed":
         await db.execute(

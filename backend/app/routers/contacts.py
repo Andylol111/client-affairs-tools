@@ -659,8 +659,11 @@ async def list_company_email_patterns(domain: str):
     dom = normalize_domain(domain or "")
     if not dom:
         raise HTTPException(400, "domain is required")
+    from app.services.mail_domain_map import list_mail_domain_rows
+
     patterns = await get_domain_patterns(dom)
-    return {"domain": dom, "patterns": patterns, "count": len(patterns)}
+    mail_hosts = await list_mail_domain_rows(dom)
+    return {"domain": dom, "patterns": patterns, "mail_hosts": mail_hosts, "count": len(patterns)}
 
 
 @router.post("/scrape")

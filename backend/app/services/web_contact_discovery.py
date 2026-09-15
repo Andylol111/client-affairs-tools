@@ -11,9 +11,9 @@ from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
+from app.services.company_email_cache import build_email_for_person_sync
 from app.services.contact_scraper import (
     extract_employee_emails_from_text,
-    infer_email_from_name,
     is_valid_person_contact,
     looks_like_person_name,
     normalize_domain,
@@ -233,7 +233,7 @@ async def discover_contacts_from_web(
         email = p.get("email") or ""
         email_verified = bool(email)
         if not email and dom:
-            email = infer_email_from_name(name, dom, custom_patterns) or ""
+            email = build_email_for_person_sync(name, dom, custom_patterns=custom_patterns) or ""
         if not email:
             continue
         row = {
