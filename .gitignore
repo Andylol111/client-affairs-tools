@@ -39,3 +39,6 @@ backend/coverage.xml
 
 # Local UI preview — do not ship
 studio-layout-preview.html
+
+# Sibling Firefox overlay (own git repo under this folder)
+/alumni-crawler/

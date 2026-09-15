@@ -69,6 +69,26 @@ def test_payload_and_sanitizers():
     assert sanitize_ask([{'id': 'titles', 'value': 'VPs'}])[0]['value'] == 'VPs'
     assert sanitize_ask([{'id': 'explode'}]) == []
 
+    prose = assistant_service._merge_operator_payload(
+        'Find people at Garmin', '', {'answer': 'Sure, I can help.'}
+    )
+    assert prose['propose'][0]['args']['company_name'] == 'Garmin'
+    assert any(item['id'] == 'titles' for item in prose['ask'])
+    last = assistant_service._merge_operator_payload(
+        'Import the last run into contacts', '/scraper?view=company&run=7', {'answer': 'Ok'}
+    )
+    assert last['propose'][0]['tool'] == 'import_run_to_contacts'
+    assert last['propose'][0]['args']['run_id'] == 7
+    listed = assistant_service._merge_operator_payload('Import the last run', '', {'answer': 'Ok'})
+    assert listed['propose'] == []
+    assert listed['reads'][0]['tool'] == 'list_discovery_runs'
+    opened = assistant_service._merge_operator_payload('take me to pipeline', '', {'answer': ''})
+    assert opened['open'][0]['path'] == '/outreach'
+    assert 'open that page' in opened['answer'].lower()
+    stay = assistant_service._merge_operator_payload('Send the campaign', '', {'answer': 'I will not send mail.', 'propose': [], 'open': []})
+    assert stay['propose'] == []
+    assert stay['open'] == []
+
     assert sanitize_reads(None) == []
     assert sanitize_reads('search_contacts') == []
     mixed_reads = [
@@ -207,6 +227,58 @@ async def run():
         assert 'not the live search' in garmin['answer']
         assert 'titles=' in garmin['navigations'][0]['path']
         assert garmin['asks'][0]['required'] is True
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='Sure, I can help with that.')):
+            prose = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Find people at Garmin')
+        assert prose['pending_actions'][0]['args']['company_name'] == 'Garmin'
+        assert prose['asks'][0]['id'] == 'titles'
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='I can import that after you confirm.')):
+            importing = await assistant_service.answer(
+                {'id': 1, 'role': 'standard'},
+                'Import run 7 into contacts',
+                page_path='/scraper?view=company&run=7',
+            )
+        assert importing['pending_actions'][0]['tool'] == 'import_run_to_contacts'
+        assert importing['pending_actions'][0]['args']['run_id'] == 7
+        assert importing['lookups'][0]['tool'] == 'get_discovery_run'
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='I can import the latest completed run.')):
+            latest = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Import the last run into contacts')
+        assert latest['pending_actions'][0]['args']['run_id'] == 7
+        assert latest['navigations'][0]['path'] == '/outreach'
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='Opening Pipeline.')):
+            jump = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'take me to pipeline')
+        assert jump['navigations'][0]['path'] == '/outreach'
+        assert jump['pending_actions'] == []
+
+        with patch.object(assistant, 'answer', AsyncMock(return_value={
+            'answer': 'Confirm Acme',
+            'sources': [],
+            'model': 'haiku',
+            'grounded': False,
+            'lookups': [],
+            'pending_actions': [{
+                'tool': 'start_find_people',
+                'args': {'company_name': 'Acme', 'max_prospects': 250},
+                'summary': 'Find people at Acme (up to 250)',
+            }],
+            'navigations': [{'path': '/scraper?view=company&company=Acme', 'label': 'Find people'}],
+            'asks': [{'id': 'titles', 'label': 'Titles', 'value': '', 'required': True, 'placeholder': 'VPs'}],
+        })):
+            asked = await assistant.ask(assistant.AskRequest(question='Find people at Acme'), {'id': 1, 'role': 'standard'})
+        stored = await assistant.thread_messages(asked['thread_id'], {'id': 1})
+        assert stored[1]['pending_actions'][0]['tool'] == 'start_find_people'
+        assert stored[1]['asks'][0]['id'] == 'titles'
+        with patch('app.routers.yucgoutreach.import_run_to_contacts', AsyncMock(return_value={'created': 0, 'updated': 0, 'skipped': 0})):
+            await assistant.act(
+                assistant.ActRequest(tool='import_run_to_contacts', args={'run_id': 7}, thread_id=asked['thread_id']),
+                {'id': 1, 'role': 'standard'},
+            )
+        after = await assistant.thread_messages(asked['thread_id'], {'id': 1})
+        assert after[1]['pending_actions'] == []
+        assert after[-1]['navigations'][0]['path'] == '/outreach'
 
         from fastapi import HTTPException as FastAPIHTTPException
         with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):

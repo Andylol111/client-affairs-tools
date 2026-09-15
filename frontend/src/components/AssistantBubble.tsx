@@ -20,6 +20,22 @@ type Message = {
 };
 type Thread = { id: number; title: string; updated_at: number };
 
+function lookupLine(item: Lookup) {
+  const data = item.data;
+  if (data && typeof data === 'object' && !Array.isArray(data) && 'error' in data) {
+    return `${item.tool}: ${String((data as { error: unknown }).error)}`;
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data) && 'count' in data) {
+    return `${item.tool}: ${String((data as { count: unknown }).count)} row(s)`;
+  }
+  if (Array.isArray(data)) return `${item.tool}: ${data.length} row(s)`;
+  if (data && typeof data === 'object' && 'company_name' in data) {
+    const row = data as { company_name?: string; status?: string; prospects_count?: number };
+    return `${item.tool}: ${row.company_name || 'run'} · ${row.status || ''} · ${row.prospects_count ?? 0} people`.replace(/\s+·\s+$/, '');
+  }
+  return item.tool;
+}
+
 function findPeoplePath(company: string, answers: Record<string, string>, runId?: number) {
   const params = new URLSearchParams({ view: 'company', company });
   if (answers.titles?.trim()) params.set('titles', answers.titles.trim());
@@ -227,6 +243,15 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
             {messages.map((message, index) => (
               <article key={message.id ?? index} className={message.role === 'user' ? 'ml-8 rounded-2xl bg-deep-navy px-3 py-2.5 text-sm leading-6 text-white' : 'mr-2 rounded-2xl border border-pale-sky bg-white px-3 py-2.5 text-sm leading-6 text-deep-navy'}>
                 <p className="whitespace-pre-wrap">{message.content}</p>
+                {!!message.lookups?.length && message.role === 'assistant' && (
+                  <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                    {message.lookups
+                      .filter((item) => !(item.tool === 'search_contacts' && message.pending_actions?.some((action) => action.tool === 'start_find_people')))
+                      .map((item, lookupIndex) => (
+                        <li key={`${item.tool}-${lookupIndex}`}>{lookupLine(item)}</li>
+                      ))}
+                  </ul>
+                )}
                 {!!message.asks?.length && message.role === 'assistant' && (
                   <div className="mt-3 space-y-2 rounded-xl border border-pale-sky bg-[#f5f7fa] p-3">
                     {message.asks.map((field) => (
@@ -278,7 +303,7 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
                     ))}
                   </div>
                 )}
-                {!!message.navigations?.length && !message.asks?.length && (
+                {!!message.navigations?.length && (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {message.navigations.map((item) => (
                       <button key={item.path} type="button" className="text-xs font-medium text-steel-blue underline" onClick={() => navigate(item.path)}>{item.label}</button>
@@ -351,7 +376,15 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
         aria-expanded={open}
         onClick={() => (open ? close() : setManualOpen(true))}
       >
-        AI
+        {open ? (
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-7 w-7" fill="currentColor" aria-hidden="true">
+            <path d="M20 3H4a2 2 0 00-2 2v11a2 2 0 002 2h3.2L12 22l4.8-4H20a2 2 0 002-2V5a2 2 0 00-2-2zm-4 10H8v-2h8v2zm2-4H6V7h12v2z" />
+          </svg>
+        )}
       </button>
     </div>
   );
