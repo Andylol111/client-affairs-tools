@@ -12,15 +12,17 @@ import re
 import uuid
 from contextvars import ContextVar
 from typing import Any
+import logging
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db, row_to_dict
 from app.services.contact_ai_review import _log_row
 from app.services.contact_merge import merge_contacts
 from app.services.contact_scraper import (
     extract_domain_from_company,
-    guess_linkedin_company_url,
     infer_email_from_name,
     is_employee_outreach_email,
     is_heuristic_junk_contact,
@@ -39,34 +41,14 @@ _active_lease: ContextVar[str | None] = ContextVar("yucgoutreach_lease", default
 
 class DiscoveryLeaseLost(RuntimeError):
     """This worker no longer owns the durable discovery run."""
-from app.services.linkedin_scraper import scrape_linkedin_company
-from app.services.discovery_policy import should_run_linkedin
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 YUCG_MAX_PROSPECTS = int(os.getenv("YUCG_MAX_PROSPECTS", "800"))
 
 
 async def _llm_json(prompt: str) -> dict[str, Any]:
-    from app.services.llm import complete_json, llm_provider, rank_model_id
+    from app.services.llm import complete_json, rank_model_id
 
-    if llm_provider() == "bedrock":
-        return await asyncio.to_thread(complete_json, prompt, rank_model_id()) or {}
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        r = await client.post(
-            f"{OLLAMA_URL.rstrip('/')}/api/chat",
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "format": "json",
-            },
-        )
-        if r.status_code != 200:
-            return {}
-        content = (r.json().get("message") or {}).get("content") or "{}"
-        data = json.loads(content)
-        return data if isinstance(data, dict) else {}
+    return await asyncio.to_thread(complete_json, prompt, rank_model_id()) or {}
 
 
 async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:
@@ -157,12 +139,24 @@ async def _load_custom_patterns() -> list[str]:
         await db.close()
 
 
-async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str]) -> list[dict]:
+def _title_hints_from_spec(spec: dict[str, Any]) -> str:
+    raw = spec.get("research_json") or ""
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    if isinstance(data, dict):
+        return str(data.get("title_hints") or "").strip()[:500]
+    return ""
+
+
+async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str], title_hints: str = "") -> list[dict]:
     """Supplement merged list with Tavily+LLM name extraction when Apify/web yield few rows."""
     if max_n <= 0 or not (os.getenv("TAVILY_API_KEY") or "").strip():
         return []
+    role = (title_hints or "employees OR leadership").strip()
     results = await _tavily_search(
-        f'{company_name} employees OR leadership site:linkedin.com/in',
+        f'{company_name} {role} site:linkedin.com/in',
         max_results=12,
     )
     if not results:
@@ -172,7 +166,7 @@ async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_
     )
     try:
         data = await _llm_json(
-            f"""Extract up to {max_n} people at "{company_name}". JSON only:
+            f"""Extract up to {max_n} people at "{company_name}"{f' prioritizing {title_hints}' if title_hints else ''}. JSON only:
 {{"people":[{{"full_name":"","title":"","linkedin_url":""}}]}}
 
 Results:
@@ -215,7 +209,7 @@ Results:
     return out
 
 
-def _quality_score(contact: dict) -> float:
+def _quality_score(contact: dict, title_hints: str = "") -> float:
     score = 40.0
     ev = contact.get("email_verification_status") or ""
     if ev == "valid":
@@ -232,7 +226,7 @@ def _quality_score(contact: dict) -> float:
     elif ai == "junk":
         score -= 40
     src = contact.get("contact_source") or ""
-    if src in ("domain_scrape", "linkedin_apify"):
+    if src in ("domain_scrape", "roster_sec", "roster_cache"):
         score += 12
     elif src == "web_discovery":
         score += 8
@@ -240,6 +234,11 @@ def _quality_score(contact: dict) -> float:
         score += 10
     if contact.get("confidence") == "high":
         score += 8
+    blob = f"{contact.get('title') or ''} {contact.get('name') or ''}".lower()
+    for token in re.split(r"[^a-z0-9]+", (title_hints or "").lower()):
+        if len(token) >= 2 and token in blob:
+            score += 10
+            break
     return max(0.0, min(100.0, score))
 
 
@@ -351,9 +350,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
 
     company = (spec.get("company_name") or "").strip()
     domain_in = (spec.get("company_domain") or "").strip()
-    user_linkedin = (spec.get("linkedin_company_url") or "").strip()
-    linkedin_url = user_linkedin
-    has_apify = bool((os.getenv("APIFY_API_TOKEN") or "").strip())
+    title_hints = _title_hints_from_spec(spec)
     max_prospects = max(1, min(int(spec.get("max_prospects") or 100), YUCG_MAX_PROSPECTS))
     domain = normalize_domain(domain_in) if domain_in else ""
 
@@ -361,7 +358,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         run_id,
         status="running",
         progress_pct=3.0,
-        progress_message="Website + web search first; LinkedIn only if URL given or crawl is thin…",
+        progress_message="Website, web search, and club roster first; then inbox checks…",
     )
 
     if not domain:
@@ -378,65 +375,58 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             if url == "queued":
                 await _run_update(
                     run_id,
-                    progress_message="Waiting for website crawl slot (LinkedIn/web search keep going)",
+                    progress_message="Waiting for website crawl slot (web search keeps going)",
                 )
 
         return await scrape_contacts_from_domain(
             domain=domain, company_name=company, on_page=on_page
         )
 
-    async def _linkedin() -> tuple[list[dict], str | None]:
-        if not linkedin_url:
-            return [], company
-        li = await scrape_linkedin_company(linkedin_url, max_employees=min(max_prospects, 100))
-        return li.get("contacts") or [], company or li.get("company_name")
-
     async def _web() -> list[dict]:
         cn = company or (domain.split(".")[0].title() if domain else "")
         if not cn or not (os.getenv("TAVILY_API_KEY") or "").strip():
             return []
-        return await discover_contacts_from_web(cn, domain or None, max_people=web_max)
+        return await discover_contacts_from_web(cn, domain or None, max_people=web_max, title_hints=title_hints)
 
     domain_contacts, web_contacts, meta = await asyncio.gather(
         _domain(),
         _web(),
         _company_meta(company, domain),
     )
-    run_li = should_run_linkedin(
-        user_url=user_linkedin,
-        has_token=has_apify,
-        domain_hits=len(domain_contacts),
-    )
-    if run_li:
-        if not linkedin_url and has_apify:
-            linkedin_url = guess_linkedin_company_url(company, domain) or ""
-        linkedin_contacts, company_from_li = await _linkedin()
-    else:
-        linkedin_contacts, company_from_li = [], company
-    company = company_from_li or company
     kw1 = meta.get("keywords") or ""
     kw2 = meta.get("keywords_2") or ""
+    roster_contacts: list[dict] = []
+    try:
+        from app.services.roster_email import cached_roster_contacts, refresh_roster_on_demand
+
+        roster_contacts = await cached_roster_contacts(company, domain)
+        if not roster_contacts:
+            # Cold club memory for this company: SEC-refresh it now instead of waiting on the drain.
+            roster_contacts = await refresh_roster_on_demand(company, domain)
+    except Exception:
+        logger.exception("roster cache-first lookup failed")
+    if roster_contacts:
+        domain_contacts = domain_contacts + roster_contacts
 
     await _run_update(
         run_id,
         progress_pct=22.0,
         progress_message=(
-            f"Sources: website {len(domain_contacts)} · LinkedIn {len(linkedin_contacts)} · "
+            f"Sources: website {len(domain_contacts) - len(roster_contacts)} · roster {len(roster_contacts)} · "
             f"web {len(web_contacts)} — merging…"
         ),
         research_json=json.dumps(
             {
-                "domain_contacts": len(domain_contacts),
-                "linkedin_contacts": len(linkedin_contacts),
+                "title_hints": title_hints or None,
+                "domain_contacts": len(domain_contacts) - len(roster_contacts),
+                "roster_contacts": len(roster_contacts),
                 "web_contacts": len(web_contacts),
-                "linkedin_url": linkedin_url or None,
             }
         ),
     )
 
     merged = merge_contacts(
         domain_contacts,
-        linkedin_contacts,
         company,
         domain,
         custom_patterns,
@@ -444,7 +434,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     )
 
     if len(merged) < max_prospects:
-        extra = await _tavily_name_seeds(company, domain, max_prospects - len(merged), custom_patterns)
+        extra = await _tavily_name_seeds(company, domain, max_prospects - len(merged), custom_patterns, title_hints)
         seen = {sanitize_email(c.get("email") or "").lower() for c in merged if c.get("email")}
         for row in extra:
             em = sanitize_email(row.get("email") or "").lower()
@@ -469,7 +459,10 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             run_id,
             status="completed",
             progress_pct=100.0,
-            progress_message="No contacts found. Add domain, LinkedIn URL, APIFY_API_TOKEN, or TAVILY_API_KEY.",
+            progress_message=(
+                "No contacts found. Website and the SEC/Companies House registers came up empty for this "
+                "company — a domain or title hints may help; otherwise no public source names these people."
+            ),
             prospects_count=0,
             completed=True,
         )
@@ -509,7 +502,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         )
 
     candidates = [c for c in verified if c.get("ai_verdict") != "junk"]
-    candidates.sort(key=_quality_score, reverse=True)
+    candidates.sort(key=lambda row: _quality_score(row, title_hints), reverse=True)
     candidates = candidates[:max_prospects]
 
     inserted = 0
@@ -530,7 +523,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             email = sanitize_email(c.get("email") or "")
             if not email or not is_employee_outreach_email(email):
                 continue
-            score = _quality_score(c)
+            score = _quality_score(c, title_hints)
             secondary = score - 3 if c.get("contact_source") == "linkedin_inferred" else score
             linkedin = c.get("linkedin_url") or ""
             evidence_obj = {
@@ -628,6 +621,12 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         ),
         completed=True,
     )
+    try:
+        from app.services.roster_watch import remember_discovery_people
+
+        await remember_discovery_people(company, domain, candidates)
+    except Exception:
+        logger.exception("roster remember after Find people failed")
 
 
 async def _yucgoutreach_run_guard(run_id: int, lease_token: str) -> None:

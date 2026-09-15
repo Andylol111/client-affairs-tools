@@ -3,6 +3,7 @@ YUCGoutreach company discovery: SQL-backed runs, parallel enrichment, Excel expo
 """
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,7 +25,7 @@ router = APIRouter()
 class YucgOutreachRunCreate(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=500)
     company_domain: str | None = Field(None, max_length=255)
-    linkedin_company_url: str | None = Field(None, max_length=2048)
+    title_hints: str | None = Field(None, max_length=500)
     max_prospects: int = Field(250, ge=1, le=800)
     worker_concurrency: int = Field(4, ge=1, le=16)
 
@@ -34,7 +35,6 @@ def _run_to_dict(row: dict) -> dict:
         "id": row["id"],
         "company_name": row.get("company_name"),
         "company_domain": row.get("company_domain"),
-        "linkedin_company_url": row.get("linkedin_company_url"),
         "max_prospects": row.get("max_prospects"),
         "worker_concurrency": row.get("worker_concurrency"),
         "status": row.get("status"),
@@ -81,18 +81,20 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
         )).fetchone()
         if int(club["n"] or 0) >= club_limit:
             raise HTTPException(429, "The club search queue is full; try again after a current search finishes")
+        hints = (body.title_hints or "").strip()[:500]
+        research = json.dumps({"title_hints": hints}) if hints else None
         cur = await db.execute(
             """INSERT INTO yucgoutreach_discovery_runs (
-                user_id, company_name, company_domain, linkedin_company_url,
-                max_prospects, worker_concurrency, status, progress_message
-            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 'Queued')""",
+                user_id, company_name, company_domain,
+                max_prospects, worker_concurrency, status, progress_message, research_json
+            ) VALUES (?, ?, ?, ?, ?, 'queued', 'Queued', ?)""",
             (
                 user["id"],
                 body.company_name.strip(),
                 (body.company_domain or "").strip() or None,
-                (body.linkedin_company_url or "").strip() or None,
                 cap,
                 body.worker_concurrency,
+                research,
             ),
         )
         await db.commit()

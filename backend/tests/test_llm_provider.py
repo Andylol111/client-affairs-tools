@@ -35,60 +35,52 @@ def test_assistant_stays_on_bedrock_when_provider_is_unset() -> None:
     os.environ.pop("BEDROCK_MODEL_ID", None)
     os.environ.pop("LLM_MODEL", None)
     os.environ["OLLAMA_MODEL"] = "llama3.2"
+    assert llm_provider() == "bedrock"
     assert "haiku" in rank_model_id().lower()
     assert "haiku" in default_model_id().lower()
 
 
+def test_ollama_provider_still_uses_bedrock_only() -> None:
+    os.environ["LLM_PROVIDER"] = "ollama"
+    os.environ.pop("BEDROCK_RANK_MODEL_ID", None)
+    os.environ.pop("BEDROCK_MODEL_ID", None)
+    os.environ.pop("LLM_MODEL", None)
+    with patch("boto3.client") as factory:
+        factory.return_value.converse.return_value = {
+            "output": {"message": {"content": [{"text": "hosted"}]}},
+            "usage": {},
+        }
+        assert complete_text("ping") == "hosted"
+        factory.assert_called()
+    try:
+        complete_text("ping", "ollama:local")
+        raise AssertionError("ollama:local must not be an inference outlet")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+
 def test_missing_bedrock_credentials_are_unavailable() -> None:
-    os.environ["LLM_PROVIDER"] = "bedrock"
+    from botocore.exceptions import NoCredentialsError
+
     os.environ.pop("BEDROCK_RANK_MODEL_ID", None)
     os.environ.pop("BEDROCK_MODEL_ID", None)
     os.environ.pop("LLM_MODEL", None)
     os.environ.pop("AWS_PROFILE", None)
-    import app.services.llm as llm_mod
-    llm_mod._cli_login_client = None
-    llm_mod._cli_login_until = 0.0
-    with patch("boto3.client", side_effect=RuntimeError("Unable to locate credentials")):
+    with patch("boto3.client") as factory, patch("subprocess.run") as run:
+        factory.return_value.converse.side_effect = NoCredentialsError()
         try:
             complete_text("ping", rank_model_id())
-            raise AssertionError("Missing credentials became a 500")
+            raise AssertionError("Missing instance credentials became a 500")
         except HTTPException as exc:
             assert exc.status_code == 503
             assert "unavailable" in str(exc.detail).lower()
-
-
-def test_aws_cli_login_session_is_used() -> None:
-    from types import SimpleNamespace
-    from botocore.exceptions import NoCredentialsError
-    import app.services.llm as llm_mod
-
-    os.environ["LLM_PROVIDER"] = "bedrock"
-    os.environ["AWS_PROFILE"] = "andreheidvscode"
-    os.environ.pop("BEDROCK_RANK_MODEL_ID", None)
-    os.environ.pop("BEDROCK_MODEL_ID", None)
-    os.environ.pop("LLM_MODEL", None)
-    llm_mod._cli_login_client = None
-    llm_mod._cli_login_until = 0.0
-    first = SimpleNamespace(converse=lambda **_k: (_ for _ in ()).throw(NoCredentialsError()))
-    second = SimpleNamespace(converse=lambda **_k: {"output": {"message": {"content": [{"text": "pong"}]}}, "usage": {}})
-    exported = "\n".join([
-        "export AWS_ACCESS_KEY_ID=AKIATEST",
-        "export AWS_SECRET_ACCESS_KEY=secret",
-        "export AWS_SESSION_TOKEN=token",
-    ])
-    with patch("boto3.client", side_effect=[first, second]) as factory, patch(
-        "subprocess.run",
-        return_value=SimpleNamespace(returncode=0, stdout=exported, stderr=""),
-    ):
-        assert complete_text("ping", rank_model_id()) == "pong"
-        assert factory.call_count == 2
-        assert factory.call_args.kwargs["aws_access_key_id"] == "AKIATEST"
+        run.assert_not_called()
 
 
 if __name__ == "__main__":
     test_bedrock_rank_is_haiku()
     test_explicit_rank_wins()
     test_assistant_stays_on_bedrock_when_provider_is_unset()
+    test_ollama_provider_still_uses_bedrock_only()
     test_missing_bedrock_credentials_are_unavailable()
-    test_aws_cli_login_session_is_used()
     print("ok")

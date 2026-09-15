@@ -2,10 +2,9 @@
 Sentiment Analyzer - Analyze email tone for industry optimization.
 Helps analysts refine email format/style for specific industries or parameters.
 """
-from ollama import chat
 from typing import Optional
-import json
-import re
+
+from app.services.llm import complete_json, rank_model_id
 
 
 def analyze_email_sentiment(
@@ -13,7 +12,7 @@ def analyze_email_sentiment(
     body: str,
     industry: Optional[str] = None,
     target_role: Optional[str] = None,
-    model: str = "llama3.2",
+    model: Optional[str] = None,
 ) -> dict:
     """
     Analyze sentiment and fit of an email for a given industry/audience.
@@ -42,23 +41,17 @@ Analyze this email and respond with ONLY valid JSON (no markdown, no explanation
   "suggested_improvements": "<2-4 bullet points on how to optimize for better reception>"
 }}"""
 
-    try:
-        response = chat(model=model, messages=[{"role": "user", "content": prompt}])
-        content = (response.message.content or "").strip()
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            data = json.loads(json_match.group())
-            return {
-                "sentiment_score": float(data.get("sentiment_score", 0)),
-                "sentiment_label": data.get("sentiment_label", "neutral"),
-                "industry_fit": data.get("industry_fit", ""),
-                "suggested_improvements": data.get("suggested_improvements", ""),
-            }
-    except Exception:
-        pass
+    data = complete_json(prompt, model_id=model or rank_model_id())
+    if data:
+        return {
+            "sentiment_score": float(data.get("sentiment_score", 0)),
+            "sentiment_label": data.get("sentiment_label", "neutral"),
+            "industry_fit": data.get("industry_fit", ""),
+            "suggested_improvements": data.get("suggested_improvements", ""),
+        }
     return {
         "sentiment_score": 0,
         "sentiment_label": "neutral",
         "industry_fit": "Analysis unavailable.",
-        "suggested_improvements": "Try running Ollama with: ollama run llama3.2",
+        "suggested_improvements": "",
     }

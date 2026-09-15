@@ -49,13 +49,13 @@ _JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
 
 def operator_system_prompt() -> str:
     return """You are the in-app operator for YUCG client tools.
-You are a website harness: walk the signed-in member through this app's pages and allowlisted tools. You are not a document chatbot and you are not a free-roaming researcher.
-Indexed documents are optional. An empty source block is normal and is not an error. Do not stall, apologize for missing files, or ask them to upload before using site tools.
-Prioritize knowledge the member already has. Grill them for missing facts only they would know (target titles, company domain, LinkedIn company URL, who they already spoke to) instead of inventing a plan, contacts, or emails.
-You cannot send mail, delete records, change campaign ownership, download models, or claim a write happened until they confirm.
+You are a website harness: fill this app's forms and allowlisted tools. You are not a document chatbot and you are not a free-roaming researcher.
+Indexed documents are optional. An empty source block is normal. Do not stall or ask them to upload before using site tools.
+When they want people at a company, fill Find people (company, titles, domain, LinkedIn URL) and ask only for facts they did not already give. Do not invent contacts, emails, domains, or LinkedIn URLs.
+You cannot send mail, delete records, change campaign ownership, or claim a write happened until they confirm.
 
 Site map:
-- /scraper Find contacts (start a people search)
+- /scraper Find contacts (Find people form)
 - /outreach Pipeline
 - /studio Drafts
 - /yucgoutreach Target lists
@@ -70,15 +70,16 @@ Reply with a single JSON object:
 {
   "answer": "plain language reply the member will read",
   "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|search_person", "args": {}}],
+  "ask": [{"id": "titles|company_domain", "label": "field label", "value": "prefill if they already said it", "required": true, "placeholder": "hint"}],
   "propose": [{"tool": "start_find_people|import_run_to_contacts", "args": {}, "summary": "short confirm label"}],
-  "open": [{"path": "/scraper|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/analytics|/", "label": "button label"}]
+  "open": [{"path": "/scraper?view=company&company=Name|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/analytics|/", "label": "button label"}]
 }
 Rules:
-- Use at most three reads. search_contacts args: q or company. get_discovery_run args: run_id. search_person args: name, optional company. start_find_people args: company_name, optional company_domain, linkedin_company_url, max_prospects (default 250, max 800).
-- Propose start_find_people when the member wants people at a named company. Do not run it yourself.
-- Ask at most two pointed questions about facts the member knows. Do not fill those gaps yourself.
+- Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, title_hints, max_prospects (default 250, max 800).
+- For Find people: always emit ask fields for titles (required) and company_domain. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain when known).
+- Propose start_find_people for a named company. Do not run it yourself.
 - Never emit send, delete, scrape-stream, or admin tools.
-- If documents do not help, still answer using site tools."""
+- If documents do not help, still operate site tools."""
 
 
 def parse_operator_payload(raw: str) -> dict[str, Any] | None:
@@ -108,6 +109,39 @@ def sanitize_reads(items: Any) -> list[dict[str, Any]]:
             continue
         args = item.get("args") if isinstance(item.get("args"), dict) else {}
         out.append({"tool": tool, "args": args})
+    return out
+
+
+ASK_FIELDS = {
+    "titles": {"label": "Titles to prioritize", "placeholder": "VPs, project managers", "required": True},
+    "company_domain": {"label": "Company domain", "placeholder": "garmin.com", "required": False},
+}
+
+
+def sanitize_ask(items: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(items, list):
+        return out
+    seen: set[str] = set()
+    for item in items[:6]:
+        if not isinstance(item, dict):
+            continue
+        field_id = str(item.get("id") or "").strip()
+        spec = ASK_FIELDS.get(field_id)
+        if not spec or field_id in seen:
+            continue
+        seen.add(field_id)
+        value = str(item.get("value") or "").strip()[:500]
+        label = str(item.get("label") or spec["label"]).strip()[:80] or spec["label"]
+        placeholder = str(item.get("placeholder") or spec["placeholder"]).strip()[:120] or spec["placeholder"]
+        required = spec["required"] if item.get("required") is None else bool(item.get("required"))
+        out.append({
+            "id": field_id,
+            "label": label,
+            "value": value,
+            "required": required,
+            "placeholder": placeholder,
+        })
     return out
 
 
@@ -179,15 +213,15 @@ def _clean_write_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         if not name:
             raise HTTPException(422, "Company name is required to find people")
         domain = str(args.get("company_domain") or "").strip()[:255] or None
-        linkedin = str(args.get("linkedin_company_url") or "").strip()[:2048] or None
         try:
             cap = int(args.get("max_prospects") or 250)
         except (TypeError, ValueError):
             cap = 250
+        titles = str(args.get("title_hints") or args.get("titles") or "").strip()[:500] or None
         return {
             "company_name": name,
             "company_domain": domain,
-            "linkedin_company_url": linkedin,
+            "title_hints": titles,
             "max_prospects": max(25, min(cap, 800)),
         }
     if tool == "import_run_to_contacts":
@@ -266,12 +300,24 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
     if tool == "start_find_people":
         from app.routers.yucgoutreach import YucgOutreachRunCreate, create_run
         created = await create_run(YucgOutreachRunCreate(**cleaned), user)
+        from urllib.parse import urlencode
+        params = {"view": "company", "company": cleaned["company_name"], "run": str(created["id"])}
+        if cleaned.get("company_domain"):
+            params["domain"] = cleaned["company_domain"]
+
+        if cleaned.get("title_hints"):
+            params["titles"] = cleaned["title_hints"]
+        dest = "/scraper?" + urlencode(params)
         return {
             "ok": True,
             "tool": tool,
             "result": created,
-            "answer": f"Started Find people run #{created['id']} for {cleaned['company_name']} (up to {created['max_prospects']} people). Watch progress on Find contacts.",
-            "navigations": [{"path": "/scraper", "label": "Open Find contacts"}],
+            "answer": (
+                f"Started Find people run #{created['id']} for {cleaned['company_name']} "
+                f"(up to {created['max_prospects']} people). This is the live company search — "
+                "website crawl, web search, club roster, then inbox checks — not Person lookup."
+            ),
+            "navigations": [{"path": dest, "label": "Open Find people"}],
         }
     if tool == "import_run_to_contacts":
         from app.routers.yucgoutreach import import_run_to_contacts

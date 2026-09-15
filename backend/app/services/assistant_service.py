@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import io
 import os
 import re
@@ -13,9 +14,11 @@ from fastapi import HTTPException
 from app.database import get_db
 from app.services.llm import complete_text, rank_model_id
 from app.services.assistant_operator import (
+    ASK_FIELDS,
     execute_reads,
     operator_system_prompt,
     parse_operator_payload,
+    sanitize_ask,
     sanitize_open,
     sanitize_propose,
     sanitize_reads,
@@ -217,6 +220,19 @@ async def retrieve_context(user_id: int, question: str, project_id: int | None, 
     return '\n'.join(selected),citations
 
 
+_FIND_PEOPLE = re.compile(
+    r"\b(find (people|contacts|prospects)|reach out|who (to contact|works at)|people at|prospects at)\b",
+    re.I,
+)
+_TITLE_WORDS = re.compile(
+    r"\b(vps?|vice presidents?|execs?|executives?|directors?|managers?|pms?|"
+    r"project managers?|project management|heads? of [a-z ]{2,30}|"
+    r"chief [a-z]+ officers?)\b",
+    re.I,
+)
+_DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
+
+
 def _named_company(question: str) -> str:
     match = re.search(
         r"\b(?:at|for)\s+([A-Z][A-Za-z0-9&.'-]{1,40}(?:\s+[A-Z][A-Za-z0-9&.'-]{1,40}){0,3})",
@@ -228,35 +244,106 @@ def _named_company(question: str) -> str:
     return name[:500]
 
 
+def _title_hints(question: str) -> str:
+    hits = []
+    for match in _TITLE_WORDS.finditer(question or ""):
+        token = re.sub(r"\s+", " ", match.group(0)).strip()
+        if token and token.lower() not in {item.lower() for item in hits}:
+            hits.append(token)
+    return ", ".join(hits)[:500]
+
+
+def _stated_domain(question: str) -> str:
+    match = _DOMAIN.search(question or "")
+    if not match:
+        return ""
+    host = match.group(0).lower().rstrip(".")
+    if host in {"linkedin.com", "www.linkedin.com", "yale.edu", "yucg.org"}:
+        return ""
+    return host[:255]
+
+
+def _find_people_company(question: str) -> str:
+    if not _FIND_PEOPLE.search(question or ""):
+        return ""
+    return _named_company(question)
+
+
+def _find_people_path(company: str, titles: str = "", domain: str = "") -> str:
+    from urllib.parse import urlencode
+    params = {"view": "company", "company": company}
+    if titles:
+        params["titles"] = titles
+    if domain:
+        params["domain"] = domain
+
+    return "/scraper?" + urlencode(params)
+
+
+def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, Any] | None:
+    """Fill Find people from the member prompt. No extra model call."""
+    company = _find_people_company(question)
+    if not company:
+        return None
+    titles = _title_hints(question)
+    domain = _stated_domain(question)
+    if offline:
+        answer = (
+            f"Find people is ready for {company} without the language model. "
+            "Fill titles, domain, and LinkedIn, then Start search. That runs the live company search "
+            "(web + LinkedIn + inbox checks). Person lookup is only for one named person."
+        )
+    else:
+        answer = (
+            f"I filled Find people for {company}. Confirm the boxes, then Start search. "
+            "That is the live company search (web + club roster + inbox checks), not a warehouse lookup."
+        )
+    asks = []
+    for field_id, spec in ASK_FIELDS.items():
+        value = {"titles": titles, "company_domain": domain}[field_id]
+        asks.append({
+            "id": field_id,
+            "label": spec["label"],
+            "value": value,
+            "required": spec["required"],
+            "placeholder": spec["placeholder"],
+        })
+    return {
+        "answer": answer,
+        "reads": [{"tool": "search_contacts", "args": {"q": company}}],
+        "ask": asks,
+        "propose": [{
+            "tool": "start_find_people",
+            "args": {
+                "company_name": company,
+                "company_domain": domain or None,
+                "title_hints": titles or None,
+                "max_prospects": 250,
+            },
+            "summary": f"Find people at {company} (up to 250)",
+        }],
+        "open": [{"path": _find_people_path(company, titles, domain), "label": "Find people"}],
+    }
+
+
 def _harness_fallback_payload(question: str) -> str:
     """Keep Find people usable when Bedrock is down. Documents are not required."""
     import json
-    company = _named_company(question)
-    if company:
-        payload = {
-            "answer": (
-                f"The language model is offline, but the site tools still work. I can start Find people for {company} after you confirm. "
-                "Which titles should we prioritize, and do you already have the company domain or LinkedIn company URL?"
-            ),
-            "reads": [{"tool": "search_contacts", "args": {"q": company}}],
-            "propose": [{
-                "tool": "start_find_people",
-                "args": {"company_name": company, "max_prospects": 250},
-                "summary": f"Find people at {company} (up to 250)",
-            }],
-            "open": [{"path": "/scraper", "label": "Find contacts"}],
-        }
-    else:
-        payload = {
-            "answer": (
-                "The language model is offline, but I can still run this app's tools. Which company should we search, "
-                "and what titles or people do you already know you want to reach?"
-            ),
-            "reads": [],
-            "propose": [],
-            "open": [{"path": "/scraper", "label": "Find contacts"}],
-        }
-    return json.dumps(payload)
+    payload = _find_people_payload(question, offline=True)
+    if payload:
+        return json.dumps(payload)
+    return json.dumps({
+        "answer": (
+            "The language model is offline, but I can still fill this app's forms. Which company should we search, "
+            "and what titles or people do you already know you want to reach?"
+        ),
+        "reads": [],
+        "ask": [
+            {"id": "titles", "label": ASK_FIELDS["titles"]["label"], "value": "", "required": True, "placeholder": ASK_FIELDS["titles"]["placeholder"]},
+        ],
+        "propose": [],
+        "open": [{"path": "/scraper?view=company", "label": "Find people"}],
+    })
 
 
 async def answer(
@@ -275,25 +362,33 @@ async def answer(
         f"CURRENT PAGE\n{page}\n\nSOURCE BLOCKS\n{sources_block}\n\n"
         f"RECENT CONVERSATION\n{prior or '(new conversation)'}\n\nMEMBER QUESTION\n{question}"
     )
-    try:
-        response = await asyncio.to_thread(
-            complete_text,prompt,rank_model_id(),operator_system_prompt(),
-            user_id=user['id'],purpose='assistant',max_tokens=900,
-        )
-    except HTTPException as exc:
-        if exc.status_code != 503:
-            raise
-        response = _harness_fallback_payload(question)
+    cheap = _find_people_payload(question)
+    if cheap:
+        response = json.dumps(cheap)
+    else:
+        try:
+            response = await asyncio.to_thread(
+                complete_text,prompt,rank_model_id(),operator_system_prompt(),
+                user_id=user['id'],purpose='assistant',max_tokens=900,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 503:
+                raise
+            response = _harness_fallback_payload(question)
     payload = parse_operator_payload(response)
     if payload:
         answer_text = str(payload.get('answer') or '').strip()
         lookups = await execute_reads(user, sanitize_reads(payload.get('reads')))
         pending = sanitize_propose(payload.get('propose'))
         navigations = sanitize_open(payload.get('open'))
+        asks = sanitize_ask(payload.get('ask'))
         if lookups:
             bits = []
+            pending_find = any(item.get('tool') == 'start_find_people' for item in pending)
             for item in lookups:
                 data = item.get('data')
+                if pending_find and item.get('tool') == 'search_contacts':
+                    continue
                 if isinstance(data, dict) and data.get('error'):
                     bits.append(f"{item['tool']}: {data['error']}")
                 elif isinstance(data, dict) and 'count' in data:
@@ -309,13 +404,29 @@ async def answer(
         lookups = []
         pending = []
         navigations = []
+        asks = []
     cited={match for match in re.findall(r'\[(D\d+-C\d+)\]',answer_text)}
+    saved = 0
+    lookup_data = (lookups[0].get('data') if lookups else None) or {}
+    if isinstance(lookup_data, dict):
+        try:
+            saved = int(lookup_data.get('count') or 0)
+        except (TypeError, ValueError):
+            saved = 0
+    if pending and any(item['tool'] == 'start_find_people' for item in pending):
+        company = str(pending[0]['args'].get('company_name') or 'this company')
+        warehouse = f"{saved} already saved in the warehouse" if saved else "none already saved in the warehouse"
+        answer_text = (
+            f"{answer_text}\n\n{warehouse} at {company}. That is not the live search. "
+            "Start search collects new people from the company website, web search, LinkedIn, then checks inboxes."
+        )
     return {
         'answer': answer_text,
         'sources': [source for source in citations if source['id'] in cited],
-        'model': rank_model_id(),
+        'model': 'site-tools' if cheap else rank_model_id(),
         'grounded': bool(context),
         'lookups': lookups,
         'pending_actions': pending,
         'navigations': navigations,
+        'asks': asks,
     }

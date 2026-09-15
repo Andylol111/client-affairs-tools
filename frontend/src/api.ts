@@ -212,10 +212,10 @@ export type YucgRecommendation = {
 };
 
 export type YucgRecommendResponse = {
-  mode: 'rules' | 'ollama' | 'ai';
+  mode: 'rules' | 'ai';
   count: number;
   recommendations: YucgRecommendation[];
-  ollama_error?: string | null;
+  error?: string | null;
   model?: string | null;
 };
 
@@ -364,12 +364,14 @@ export const api = {
         lookups?: Array<{ tool: string; data: unknown }>;
         pending_actions?: Array<{ tool: string; args: Record<string, unknown>; summary: string }>;
         navigations?: Array<{ path: string; label: string }>;
+        asks?: Array<{ id: string; label: string; value: string; required: boolean; placeholder?: string }>;
       }>('/api/assistant/ask', {
         method: 'POST', body: JSON.stringify(data),
       }),
     act: (data: { tool: string; args: Record<string, unknown>; thread_id?: number }) =>
       fetchApi<{
         ok: boolean; answer: string; thread_id?: number | null;
+        result?: { id?: number };
         navigations?: Array<{ path: string; label: string }>;
       }>('/api/assistant/act', {
         method: 'POST', body: JSON.stringify(data),
@@ -430,7 +432,7 @@ export const api = {
         return res.json();
       }) as Promise<{ contacts: Contact[]; count: number; duplicates_skipped?: number }>;
     },
-    scrape: (data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number }) =>
+    scrape: (data: { company_name?: string; domain?: string; max_people?: number }) =>
       fetchApi<{ contacts: Contact[]; count: number; duplicates_skipped?: number }>('/api/contacts/scrape', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -439,7 +441,7 @@ export const api = {
      * NDJSON stream: progress events, then complete | cancelled | error.
      */
     scrapeStream: async (
-      data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number },
+      data: { company_name?: string; domain?: string; max_people?: number },
       onEvent: (ev: Record<string, unknown>) => void,
       opts?: { signal?: AbortSignal }
     ): Promise<ScrapeResult> => {
@@ -1116,10 +1118,15 @@ export const api = {
     releaseInbox: (releaseId: number) => fetchApi<InboxItem[]>(`/api/yucg/releases/${releaseId}/inbox`),
   },
   yucgoutreach: {
+    listRosters: (q: string, limit = 10) =>
+      fetchApi<{ rosters: Record<string, unknown>[] }>(
+        `/api/yucg/rosters?q=${encodeURIComponent(q)}&limit=${limit}`
+      ),
+    rosterStats: () => fetchApi<{ sources: Record<string, unknown>[] }>('/api/yucg/rosters/stats'),
     createRun: (data: {
       company_name: string;
       company_domain?: string;
-      linkedin_company_url?: string;
+      title_hints?: string;
       max_prospects?: number;
       worker_concurrency?: number;
     }) =>

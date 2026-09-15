@@ -827,8 +827,10 @@ async def init_db():
         """)
         from app.services.contact_intelligence_schema import init_contact_intelligence_schema
         from app.services.research_schema import init_research_schema
+        from app.services.roster_schema import init_roster_schema
         await init_contact_intelligence_schema(db)
         await init_research_schema(db)
+        await init_roster_schema(db)
         await db.commit()
     finally:
         await db.close()

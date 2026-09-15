@@ -228,6 +228,10 @@ async def _external(email: str, *, actor_id: int, manual: bool, fallback: dict) 
                ON CONFLICT(address_hash,actor_id) DO UPDATE SET result_json=excluded.result_json,expires_at=excluded.expires_at""",
             (_hash(email), actor_id, json.dumps(provider), expires),
         )
+        if provider.get("mailbox") == Mailbox.RECIPIENT_REJECTED.value:
+            from app.services.roster_email import apply_provider_verdict
+
+            await apply_provider_verdict(db, email, "rejected")
         await db.commit()
     finally:
         await db.close()

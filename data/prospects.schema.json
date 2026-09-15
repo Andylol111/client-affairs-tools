@@ -142,6 +142,8 @@
   "related_tables": {
     "yucgoutreach_discovery_runs": "Per-company automated contact discovery jobs (user-triggered)",
     "yucgoutreach_prospects": "Individual people discovered during a run (person-level, not spreadsheet seed)",
-    "contacts": "CRM contacts; populated via import from discovery or manual entry"
+    "contacts": "CRM contacts; populated via import from discovery or manual entry",
+    "company_rosters": "Club-wide company metadata for weekly officer/director watch (SEC CIK/ticker)",
+    "company_roster_people": "Named officers/directors/IR people with employment still-there status"
   }
 }
