@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -83,8 +84,11 @@ def left_after_misses() -> int:
 
 
 def _company_tokens(name: str) -> list[str]:
+    # NFKD-fold accents BEFORE tokenizing: "Itaú" must yield 'itau', not 'ita'.
     cleaned = re.sub(r"\([^)]*\)", " ", name or "")
-    parts = re.findall(r"[a-z0-9]+", cleaned.lower())
+    cleaned = unicodedata.normalize("NFKD", cleaned.lower())
+    cleaned = "".join(ch for ch in cleaned if not unicodedata.combining(ch))
+    parts = re.findall(r"[a-z0-9]+", cleaned)
     return [p for p in parts if p not in LEGAL_DROP and len(p) > 1]
 
 
@@ -199,6 +203,7 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
     query_key = " ".join(tokens)
     token_hit: dict[str, str] | None = None
     prefix: dict[str, str] | None = None
+    head_hits: list[dict[str, str]] = []
     for row in tickers.values() if isinstance(tickers, dict) else []:
         if not isinstance(row, dict):
             continue
@@ -214,10 +219,14 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
             return hit
         if tokens[0] == title_tokens[0] and len(tokens[0]) >= 6:
             prefix = prefix or hit
+        if len(tokens[0]) >= 4 and tokens[0] == title_tokens[0]:
+            head_hits.append(hit)
         if len(tokens) >= 2 and all(t in title_tokens for t in tokens[:3]):
             token_hit = token_hit or hit
         elif len(title_tokens) >= 2 and all(t in tokens for t in title_tokens[:2]) and len(title_tokens[0]) >= 5:
             token_hit = token_hit or hit
+    if len(head_hits) == 1:
+        return head_hits[0]
     return token_hit or prefix
 
 
@@ -887,30 +896,59 @@ async def drain_roster_queue() -> dict[str, Any]:
     return {"ok": True, "enrolled": enrolled, "domains": domains, "claimed": len(due), "refreshed": refreshed}
 
 
-async def list_rosters(q: str = "", limit: int = 50) -> list[dict[str, Any]]:
+_ROSTER_LIST_SQL = """
+    SELECT r.*,
+           (SELECT COUNT(*) FROM company_roster_people p
+             WHERE p.roster_id = r.id AND IFNULL(p.inferred_email,'') != ''
+               AND IFNULL(p.email_status,'') != 'bounced') AS emails_ready,
+           (CASE WHEN r.people_count = 0 AND r.source_status = 'unmatched' THEN 1 ELSE 0 END) AS coverage_gap
+    FROM company_rosters r
+"""
+
+
+async def list_rosters(q: str = "", limit: int = 50, only_gaps: bool = False) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit), 200))
     db = await get_db()
     try:
-        if q.strip():
-            like = f"%{q.strip()}%"
-            rows = await (
-                await db.execute(
-                    """SELECT * FROM company_rosters
-                       WHERE company_name LIKE ? OR IFNULL(ticker,'') LIKE ? OR IFNULL(cik,'') LIKE ?
-                       ORDER BY current_count DESC, company_name
-                       LIMIT ?""",
-                    (like, like, like, limit),
-                )
-            ).fetchall()
-        else:
-            rows = await (
-                await db.execute(
-                    """SELECT * FROM company_rosters
-                       ORDER BY current_count DESC, company_name
-                       LIMIT ?""",
-                    (limit,),
-                )
-            ).fetchall()
+        where = "WHERE (r.company_name LIKE ? OR IFNULL(r.ticker,'') LIKE ? OR IFNULL(r.cik,'') LIKE ?)" if q.strip() else ""
+        params: list[Any] = [f"%{q.strip()}%", f"%{q.strip()}%", f"%{q.strip()}%"] if q.strip() else []
+        if only_gaps:
+            where += (" AND" if where else " WHERE") + " r.people_count = 0 AND r.source_status = 'unmatched'"
+        rows = await (
+            await db.execute(
+                _ROSTER_LIST_SQL + where + " ORDER BY current_count DESC, company_name LIMIT ?",
+                (*params, limit),
+            )
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def source_stats() -> list[dict[str, Any]]:
+    """Per-source yield of the accumulated graph — what actually became an
+    emailable, surviving, imported, or replied-to person. The boring stats the
+    router should order by; no model inventing 'new sources' here."""
+    db = await get_db()
+    try:
+        rows = await (
+            await db.execute(
+                """SELECT p.source,
+                          COUNT(*) AS produced,
+                          SUM(CASE WHEN p.employment='current' THEN 1 ELSE 0 END) AS current_now,
+                          SUM(CASE WHEN IFNULL(p.inferred_email,'') != '' AND IFNULL(p.email_status,'')='mx_valid' THEN 1 ELSE 0 END) AS mx_emails,
+                          SUM(CASE WHEN IFNULL(p.inferred_email,'') != '' AND EXISTS (
+                              SELECT 1 FROM contacts c WHERE c.email = p.inferred_email COLLATE NOCASE
+                          ) THEN 1 ELSE 0 END) AS imported,
+                          SUM(CASE WHEN IFNULL(p.inferred_email,'') != '' AND EXISTS (
+                              SELECT 1 FROM email_checks k JOIN email_candidates e ON e.id = k.candidate_id
+                              WHERE e.email = p.inferred_email COLLATE NOCASE AND k.result = 'human_reply_observed'
+                          ) THEN 1 ELSE 0 END) AS replied
+                   FROM company_roster_people p
+                   GROUP BY p.source
+                   ORDER BY replied DESC, imported DESC, mx_emails DESC, produced DESC"""
+            )
+        ).fetchall()
         return [dict(r) for r in rows]
     finally:
         await db.close()
@@ -925,7 +963,7 @@ async def roster_detail(roster_id: int) -> dict[str, Any] | None:
         people = await (
             await db.execute(
                 """SELECT full_name, title, role_type, source, inferred_email, employment,
-                          last_seen_at, missed_checks, source_url, email_status, email_checked_at
+                          last_seen_at, missed_checks, source_url, email_status, email_checked_at, verdict, verdict_reason
                    FROM company_roster_people WHERE roster_id=?
                    ORDER BY employment, title, full_name""",
                 (roster_id,),

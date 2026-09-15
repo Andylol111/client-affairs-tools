@@ -1,6 +1,6 @@
 """
-Ollama-backed YUCG outreach target recommendations using website corpus + prospect spreadsheet.
-Falls back to RAG-in-prompt when custom model `yucg-outreach` is not created.
+YUCG outreach target recommendations using website corpus + prospect spreadsheet.
+Inference is Bedrock rank (Haiku) via llm.py.
 """
 from __future__ import annotations
 
@@ -10,13 +10,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import httpx
-
-from app.services.ollama_agent_pool import (
-    OLLAMA_MODEL,
-    OLLAMA_TIMEOUT,
-    OLLAMA_URL,
-)
 from app.services.prospect_coordinator import (
     _prospect_api_row,
     score_prospect,
@@ -25,9 +18,6 @@ from app.services.prospect_coordinator import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CORPUS_PATH = _REPO_ROOT / "data" / "yucg_website_corpus.txt"
-YUCG_OUTREACH_MODEL = os.getenv("YUCG_OUTREACH_MODEL", "").strip() or os.getenv(
-    "OLLAMA_MODEL", "llama3.2"
-)
 YUCG_CORPUS_PATH = Path(
     os.getenv("YUCG_CORPUS_PATH", str(DEFAULT_CORPUS_PATH))
 )
@@ -38,10 +28,6 @@ _SECTION_RE = re.compile(
     r"^===\s*(.+?)\s*===\s*\nSource:\s*(https?://\S+)\s*\n-+\s*\n",
     re.MULTILINE,
 )
-
-
-def yucg_outreach_model() -> str:
-    return YUCG_OUTREACH_MODEL
 
 
 def corpus_path() -> Path:
@@ -97,34 +83,6 @@ def _find_corpus_citation(
         s = sections[0]
         return s["url"], (excerpt_hint or s["excerpt"])[:500]
     return "https://www.yaleconsulting.org/", (excerpt_hint or "")[:500]
-
-
-async def check_yucg_ollama_available() -> tuple[bool, str]:
-    model = yucg_outreach_model()
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{OLLAMA_URL.rstrip('/')}/api/tags")
-            if r.status_code != 200:
-                return False, (
-                    f"Ollama is not reachable at {OLLAMA_URL} (HTTP {r.status_code}). "
-                    "Start it with: ollama serve"
-                )
-            names = [m.get("name", "") for m in r.json().get("models", [])]
-            if not any(model in n or n.startswith(model.split(":")[0]) for n in names):
-                base = model.split(":")[0]
-                if not any(base in n for n in names):
-                    return False, (
-                        f"Model '{model}' is not pulled. Run: ollama pull {base} "
-                        f"(or ollama create yucg-outreach -f data/Modelfile.yucg-outreach)"
-                    )
-            return True, f"Ollama ready · model={model}"
-    except httpx.ConnectError:
-        return False, (
-            f"Cannot connect to Ollama at {OLLAMA_URL}. "
-            "Install from https://ollama.com and run: ollama serve"
-        )
-    except Exception as e:
-        return False, str(e)
 
 
 def _build_system_prompt(corpus: str) -> str:
@@ -201,20 +159,10 @@ async def ai_recommend_prospects(
     candidate_limit: int = 30,
     model_id: str | None = None,
 ) -> dict[str, Any]:
-    from app.services.llm import complete_json, is_bedrock_model
+    from app.services.llm import complete_json, is_bedrock_model, rank_model_id
 
-    model = (model_id or "").strip() or yucg_outreach_model()
-    use_bedrock = is_bedrock_model(model)
-    if not use_bedrock:
-        ok, detail = await check_yucg_ollama_available()
-        if not ok:
-            return {
-                "mode": "ai",
-                "count": 0,
-                "recommendations": [],
-                "model": model,
-                "ollama_error": detail,
-            }
+    explicit = (model_id or "").strip()
+    model = explicit if is_bedrock_model(explicit) else rank_model_id()
 
     try:
         corpus = load_website_corpus()
@@ -224,7 +172,7 @@ async def ai_recommend_prospects(
             "count": 0,
             "recommendations": [],
             "model": model,
-            "ollama_error": str(e),
+            "error": str(e),
         }
 
     sections = parse_corpus_sections(corpus)
@@ -240,24 +188,34 @@ async def ai_recommend_prospects(
             "count": 0,
             "recommendations": [],
             "model": model,
-            "ollama_error": "No prospects matched filters in spreadsheet.",
+            "error": "No prospects matched filters in spreadsheet.",
         }
 
     import asyncio
+    from fastapi import HTTPException
 
-    parsed = await asyncio.to_thread(
-        complete_json,
-        _build_user_prompt(candidates, sector=sector, contact_type=contact_type, n=n),
-        model,
-        _build_system_prompt(corpus),
-    )
+    try:
+        parsed = await asyncio.to_thread(
+            complete_json,
+            _build_user_prompt(candidates, sector=sector, contact_type=contact_type, n=n),
+            model,
+            _build_system_prompt(corpus),
+        )
+    except HTTPException as exc:
+        return {
+            "mode": "ai",
+            "count": 0,
+            "recommendations": [],
+            "model": model,
+            "error": str(exc.detail),
+        }
     if not parsed or "recommendations" not in parsed:
         return {
             "mode": "ai",
             "count": 0,
             "recommendations": [],
             "model": model,
-            "ollama_error": "Model returned no parseable JSON. Try another Claude size.",
+            "error": "Model returned no parseable JSON.",
         }
 
     by_row = _row_by_index(candidates)
@@ -319,5 +277,5 @@ async def ai_recommend_prospects(
         "count": len(recommendations),
         "recommendations": recommendations,
         "model": model,
-        "ollama_error": None if recommendations else "Model returned no valid row_index matches.",
+        "error": None if recommendations else "Model returned no valid row_index matches.",
     }

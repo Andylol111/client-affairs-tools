@@ -276,8 +276,8 @@ function CoordinatorPanel() {
           ? await api.yucg.recommend(opts)
           : await api.yucg.aiRecommend({ ...opts, model: modelId });
       setRecommendations(res.recommendations ?? []);
-      if (res.ollama_error) {
-        setRecommendInfo(res.ollama_error);
+      if (res.error) {
+        setRecommendInfo(res.error);
       } else {
         const via = res.mode === 'rules' ? 'rules' : 'AI';
         setRecommendInfo(`${res.count} target(s) via ${via}${res.model ? ` (${res.model})` : ''}.`);

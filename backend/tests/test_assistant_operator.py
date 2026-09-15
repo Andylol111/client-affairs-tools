@@ -104,10 +104,9 @@ def test_payload_and_sanitizers():
     capped = _clean_write_args('start_find_people', {
         'company_name': '  Acme  ',
         'max_prospects': 'nope',
-        'linkedin_company_url': 'https://linkedin.com/company/acme',
     })
     assert capped['max_prospects'] == 250
-    assert capped['linkedin_company_url'].startswith('https://')
+    assert 'linkedin_company_url' not in capped
     floor = _clean_write_args('start_find_people', {'company_name': 'Acme', 'max_prospects': 1})
     assert floor['max_prospects'] == 25
 

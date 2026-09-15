@@ -2,10 +2,9 @@
 Profile Analyzer - Analyze contacts for value proposition, role, online sentiment.
 Helps understand what each person adds, what they do, and what messaging they'd be receptive to.
 """
-from ollama import chat
 from typing import Optional
-import json
-import re
+
+from app.services.llm import complete_json, rank_model_id
 
 
 def analyze_contact_profile(
@@ -14,7 +13,7 @@ def analyze_contact_profile(
     company: str,
     linkedin_url: Optional[str] = None,
     department: Optional[str] = None,
-    model: str = "llama3.2",
+    model: Optional[str] = None,
 ) -> dict:
     """
     Analyze a contact's profile to infer:
@@ -47,21 +46,15 @@ Respond with ONLY valid JSON (no markdown, no explanation):
   "industry": "<inferred industry/sector if possible>"
 }}"""
 
-    try:
-        response = chat(model=model, messages=[{"role": "user", "content": prompt}])
-        content = (response.message.content or "").strip()
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            data = json.loads(json_match.group())
-            return {
-                "value_proposition": data.get("value_proposition", ""),
-                "role_summary": data.get("role_summary", ""),
-                "online_sentiment": data.get("online_sentiment", ""),
-                "receptiveness_notes": data.get("receptiveness_notes", ""),
-                "industry": data.get("industry", ""),
-            }
-    except Exception:
-        pass
+    data = complete_json(prompt, model_id=model or rank_model_id())
+    if data:
+        return {
+            "value_proposition": data.get("value_proposition", ""),
+            "role_summary": data.get("role_summary", ""),
+            "online_sentiment": data.get("online_sentiment", ""),
+            "receptiveness_notes": data.get("receptiveness_notes", ""),
+            "industry": data.get("industry", ""),
+        }
     return {
         "value_proposition": "",
         "role_summary": "",

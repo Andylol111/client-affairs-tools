@@ -24,7 +24,6 @@ function findPeoplePath(company: string, answers: Record<string, string>, runId?
   const params = new URLSearchParams({ view: 'company', company });
   if (answers.titles?.trim()) params.set('titles', answers.titles.trim());
   if (answers.company_domain?.trim()) params.set('domain', answers.company_domain.trim());
-  if (answers.linkedin_company_url?.trim()) params.set('linkedin', answers.linkedin_company_url.trim());
   if (runId) params.set('run', String(runId));
   return `/scraper?${params.toString()}`;
 }
@@ -166,7 +165,6 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
     const answers = answersFor(index, message);
     const args = { ...action.args };
     if (answers.company_domain?.trim()) args.company_domain = answers.company_domain.trim();
-    if (answers.linkedin_company_url?.trim()) args.linkedin_company_url = answers.linkedin_company_url.trim();
     if (answers.titles?.trim()) args.title_hints = answers.titles.trim();
     try {
       const result = await api.assistant.act({ tool: action.tool, args, thread_id: threadId });

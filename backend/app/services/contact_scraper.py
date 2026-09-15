@@ -878,26 +878,8 @@ def extract_domain_from_company(company_name: str) -> Optional[str]:
     base = "".join(w[:3] for w in words[:2]) if len(words) > 1 else words[0][:6]
     return f"{base.lower()}.com"
 
-
-def guess_linkedin_company_url(company_name: str | None, domain: str | None) -> Optional[str]:
-    """Best-effort LinkedIn company URL when user did not provide one."""
-    if domain:
-        dom = normalize_domain(domain)
-        slug = dom.split(".")[0].lower()
-        slug = re.sub(r"[^a-z0-9-]", "", slug)
-        if slug and len(slug) >= 2:
-            return f"https://www.linkedin.com/company/{slug}/"
-    if company_name:
-        clean = re.sub(r"\b(inc|corp|llc|ltd|co|company|group|holdings)\b", "", company_name, flags=re.I)
-        slug = re.sub(r"[^a-z0-9]+", "-", clean.lower().strip())
-        slug = re.sub(r"-+", "-", slug).strip("-")
-        if slug and len(slug) >= 2:
-            return f"https://www.linkedin.com/company/{slug}/"
-    return None
-
-
 def is_heuristic_junk_contact(contact: dict, company_name: str | None = None) -> tuple[bool, str]:
-    """Fast local junk gate — skips Ollama for obvious nav/product/role rows."""
+    """Fast local junk gate — skips Bedrock for obvious nav/product/role rows."""
     name = (contact.get("name") or "").strip()
     if not name:
         return True, "missing name"
@@ -986,10 +968,6 @@ def compute_contact_confidence(
     src = (contact_source or "").lower()
     if src == "domain_scrape":
         score += 20 if (found_with_name or email_verified) else 12
-    elif src == "linkedin_apify":
-        score += 30 if email_verified else 22
-    elif src == "linkedin_inferred":
-        score += 18
     elif src == "web_discovery":
         score += 22 if email_verified else 14
     elif src.startswith("roster_"):
@@ -1070,7 +1048,7 @@ def confidence_for_contact_dict(
     verified = email_verified
     if verified is None:
         src = (contact.get("contact_source") or "").lower()
-        verified = src in ("domain_scrape", "linkedin_apify", "web_discovery") and not src.endswith("inferred")
+        verified = src in ("domain_scrape", "web_discovery") and not src.endswith("inferred")
         if src == "linkedin_inferred" or src == "inferred":
             verified = False
         if src == "web_discovery" and contact.get("email"):

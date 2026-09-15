@@ -70,13 +70,13 @@ Reply with a single JSON object:
 {
   "answer": "plain language reply the member will read",
   "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|search_person", "args": {}}],
-  "ask": [{"id": "titles|company_domain|linkedin_company_url", "label": "field label", "value": "prefill if they already said it", "required": true, "placeholder": "hint"}],
+  "ask": [{"id": "titles|company_domain", "label": "field label", "value": "prefill if they already said it", "required": true, "placeholder": "hint"}],
   "propose": [{"tool": "start_find_people|import_run_to_contacts", "args": {}, "summary": "short confirm label"}],
   "open": [{"path": "/scraper?view=company&company=Name|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/analytics|/", "label": "button label"}]
 }
 Rules:
-- Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, linkedin_company_url, title_hints, max_prospects (default 250, max 800).
-- For Find people: always emit ask fields for titles (required), company_domain, and linkedin_company_url. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain/linkedin when known).
+- Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, title_hints, max_prospects (default 250, max 800).
+- For Find people: always emit ask fields for titles (required) and company_domain. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain when known).
 - Propose start_find_people for a named company. Do not run it yourself.
 - Never emit send, delete, scrape-stream, or admin tools.
 - If documents do not help, still operate site tools."""
@@ -115,7 +115,6 @@ def sanitize_reads(items: Any) -> list[dict[str, Any]]:
 ASK_FIELDS = {
     "titles": {"label": "Titles to prioritize", "placeholder": "VPs, project managers", "required": True},
     "company_domain": {"label": "Company domain", "placeholder": "garmin.com", "required": False},
-    "linkedin_company_url": {"label": "LinkedIn company URL", "placeholder": "https://www.linkedin.com/company/garmin", "required": False},
 }
 
 
@@ -214,7 +213,6 @@ def _clean_write_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         if not name:
             raise HTTPException(422, "Company name is required to find people")
         domain = str(args.get("company_domain") or "").strip()[:255] or None
-        linkedin = str(args.get("linkedin_company_url") or "").strip()[:2048] or None
         try:
             cap = int(args.get("max_prospects") or 250)
         except (TypeError, ValueError):
@@ -223,7 +221,6 @@ def _clean_write_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         return {
             "company_name": name,
             "company_domain": domain,
-            "linkedin_company_url": linkedin,
             "title_hints": titles,
             "max_prospects": max(25, min(cap, 800)),
         }
@@ -307,8 +304,7 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
         params = {"view": "company", "company": cleaned["company_name"], "run": str(created["id"])}
         if cleaned.get("company_domain"):
             params["domain"] = cleaned["company_domain"]
-        if cleaned.get("linkedin_company_url"):
-            params["linkedin"] = cleaned["linkedin_company_url"]
+
         if cleaned.get("title_hints"):
             params["titles"] = cleaned["title_hints"]
         dest = "/scraper?" + urlencode(params)
@@ -319,7 +315,7 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
             "answer": (
                 f"Started Find people run #{created['id']} for {cleaned['company_name']} "
                 f"(up to {created['max_prospects']} people). This is the live company search — "
-                "website crawl, web search, LinkedIn, then inbox checks — not Person lookup."
+                "website crawl, web search, club roster, then inbox checks — not Person lookup."
             ),
             "navigations": [{"path": dest, "label": "Open Find people"}],
         }

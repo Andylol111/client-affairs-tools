@@ -534,7 +534,7 @@ def top_prospects_for_ai(
     contact_type: str | None = None,
     min_incentive_score: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Top spreadsheet rows by incentive for Ollama prompt context."""
+    """Top spreadsheet rows by incentive for rank-model prompt context."""
     rows = filter_prospects(
         sector=sector,
         contact_type=contact_type,

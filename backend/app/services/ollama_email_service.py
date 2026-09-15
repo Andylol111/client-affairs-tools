@@ -72,8 +72,7 @@ def generate_email(
     evidence: Optional[dict] = None,
 ) -> tuple[str, str]:
     """
-    Generate a unique, personalized email. Bedrock Anthropic when the model id is Claude;
-    Ollama on the laptop otherwise.
+    Generate a unique, personalized email via Bedrock (llm.py).
     Returns (subject, body) tuple.
     """
     tone_inst = TONE_INSTRUCTIONS.get(tone, TONE_INSTRUCTIONS["professional"])
