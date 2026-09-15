@@ -22,7 +22,6 @@ from app.services.contact_merge import merge_contacts
 from app.services.contact_scraper import (
     scrape_contacts_from_domain,
     extract_domain_from_company,
-    guess_linkedin_company_url,
     infer_email_from_name,
     normalize_domain,
     sanitize_email,
@@ -32,7 +31,6 @@ from app.services.contact_scraper import (
     looks_like_person_name,
     confidence_for_contact_dict,
 )
-from app.services.linkedin_scraper import scrape_linkedin_company
 from app.services.web_contact_discovery import discover_contacts_from_web
 from app.services.contact_verify_pipeline import run_contact_verify_pipeline
 from app.services.contact_identity import reconcile_contacts
@@ -44,7 +42,6 @@ from app.services.contact_ai_review import (
     AI_REVIEW_ENABLED,
     _log_row,
 )
-from app.services.discovery_policy import should_run_linkedin
 
 router = APIRouter()
 
@@ -89,24 +86,20 @@ async def _execute_scrape(
     domain = req.domain
     if not domain and req.company_name:
         domain = extract_domain_from_company(req.company_name)
-    if not domain and not req.linkedin_url:
-        raise HTTPException(400, "Provide domain, company_name, or linkedin_url")
+    if not domain:
+        raise HTTPException(400, "Provide a company domain or company name")
 
     scrape_domain = bool(domain and normalize_domain(domain))
     company_name = req.company_name
-    user_linkedin = (req.linkedin_url or "").strip()
-    has_apify = bool((os.getenv("APIFY_API_TOKEN") or "").strip())
-    linkedin_url = user_linkedin
-    has_li = False
     web_on = req.enable_web_discovery is not False and bool((os.getenv("TAVILY_API_KEY") or "").strip())
-    web_max = min(req.linkedin_max_employees or 50, int(os.getenv("SCRAPE_WEB_MAX_PEOPLE", "80")))
+    web_max = min(req.max_people or 50, int(os.getenv("SCRAPE_WEB_MAX_PEOPLE", "80")))
     par_lo, par_hi = 5.0, 82.0
 
     await emit(
         "init",
         2.0,
         "Starting scrape",
-        "Website and web search first; LinkedIn only if you pasted a URL or the crawl is thin",
+        "Website, web search, and the club roster first; then inbox checks",
     )
     await _check_cancel()
 
@@ -122,7 +115,7 @@ async def _execute_scrape(
                     "domain",
                     par_lo,
                     "Waiting for website crawl slot",
-                    "HTML crawl is serialized on this box; Tavily/Apify/Bedrock keep running",
+                    "HTML crawl is serialized on this box; web search keeps running",
                 )
                 return
             frac = (i - 1) / max(n, 1)
@@ -135,27 +128,13 @@ async def _execute_scrape(
             cancel_event=cancel_event,
         )
 
-    async def _fetch_linkedin() -> tuple[list[dict], str | None]:
-        if not has_li:
-            return [], company_name
-        await emit("linkedin", par_lo + 8, "LinkedIn employee fetch", linkedin_url)
-        li_data = await scrape_linkedin_company(
-            linkedin_url,
-            max_employees=min(req.linkedin_max_employees or 50, 100),
-            cancel_event=cancel_event,
-        )
-        if li_data.get("aborted") or (li_data.get("error") or "") == "Cancelled":
-            raise ScrapeCancelled()
-        cn = company_name or li_data.get("company_name")
-        return li_data.get("contacts") or [], cn
-
     async def _fetch_web() -> list[dict]:
         cn = (company_name or "").strip() or (
             (domain or "").split(".")[0].replace("-", " ").title() if domain else ""
         )
         if not web_on or not cn:
             return []
-        await emit("web", par_lo + 12, "Web + LinkedIn name search", "Parallel Tavily queries")
+        await emit("web", par_lo + 12, "Web name search", "Parallel Tavily queries")
 
         async def on_web(msg: str, _pct: float) -> None:
             await emit("web", par_lo + 12 + _pct * 0.2, msg, None)
@@ -169,32 +148,11 @@ async def _execute_scrape(
         )
 
     domain_contacts, web_contacts = await asyncio.gather(_fetch_domain(), _fetch_web())
-    run_li = should_run_linkedin(
-        user_url=user_linkedin,
-        has_token=has_apify,
-        domain_hits=len(domain_contacts),
-    )
-    if run_li:
-        if not linkedin_url and has_apify:
-            linkedin_url = guess_linkedin_company_url(company_name, domain) or ""
-        has_li = bool(linkedin_url)
-    if has_li:
-        linkedin_contacts, li_company = await _fetch_linkedin()
-    else:
-        linkedin_contacts, li_company = [], company_name
-        if has_apify and not user_linkedin:
-            await emit(
-                "linkedin",
-                par_lo + 8,
-                "Skipping guessed LinkedIn — website already has enough people",
-                None,
-            )
-    company_name = li_company or company_name
     await emit(
         "domain",
         par_hi,
         "Source fetch complete",
-        f"Website {len(domain_contacts)} · LinkedIn {len(linkedin_contacts)} · Web {len(web_contacts)}",
+        f"Website {len(domain_contacts)} · Web {len(web_contacts)}",
     )
     await _check_cancel()
 
@@ -225,7 +183,6 @@ async def _execute_scrape(
 
     contacts_data = merge_contacts(
         domain_contacts,
-        linkedin_contacts,
         company_name or "",
         domain or "",
         custom_patterns,

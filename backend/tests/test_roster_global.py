@@ -197,6 +197,41 @@ async def _core() -> None:
     with patch.object(WCD, "_tavily_search", side_effect=AssertionError("tavily re-hit within 30 days")):
         assert await R.resolve_missing_domains(limit=10) == 0
 
+    # List enrichment + stats view the accumulated graph honestly.
+    monzo_row = (await R.list_rosters(q="Monzo", limit=5))[0]
+    assert monzo_row["emails_ready"] == 2, monzo_row  # Ada (CH) + Newcomer (SEC sticky test)
+    assert "coverage_gap" in monzo_row
+    stats = await R.source_stats()
+    ch = next(s for s in stats if s["source"] == "companies_house")
+    assert ch["produced"] >= 2 and ch["current_now"] >= 1 and ch["mx_emails"] >= 1, stats
+    zeph_row = (await R.list_rosters(q="Zephyr", limit=5))[0]
+    assert zeph_row["emails_ready"] == 1
+
+    # Provider hard-Failure on a roster-only derived address: tombstone +
+    # suppression, idempotent on re-check.
+    db = await get_db()
+    try:
+        await RE.apply_provider_verdict(db, "ada.runner@zephyraero.com", "rejected")
+        await db.commit()
+    finally:
+        await db.close()
+    detail = await R.roster_detail(int(zeph["id"]))
+    ada = next(x for x in detail["people"] if x["full_name"] == "Ada Runner")
+    assert ada["email_status"] == "bounced"
+    db = await get_db()
+    try:
+        sup = await (await db.execute(
+            "SELECT 1 FROM candidate_suppressions WHERE email='ada.runner@zephyraero.com'")).fetchone()
+        assert sup
+        before = (await (await db.execute(
+            "SELECT confidence FROM company_email_patterns WHERE company_domain='zephyraero.com'")).fetchone())
+        await RE.apply_provider_verdict(db, "ada.runner@zephyraero.com", "rejected")
+        await db.commit()
+    finally:
+        await db.close()
+    warm = await RE.cached_roster_contacts("Zephyr Aero", None)
+    assert "Ada Runner" not in {row["name"] for row in warm}
+
 
 def test_roster_global_core() -> None:
     test_ch_mapping()

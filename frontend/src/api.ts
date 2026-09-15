@@ -432,7 +432,7 @@ export const api = {
         return res.json();
       }) as Promise<{ contacts: Contact[]; count: number; duplicates_skipped?: number }>;
     },
-    scrape: (data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number }) =>
+    scrape: (data: { company_name?: string; domain?: string; max_people?: number }) =>
       fetchApi<{ contacts: Contact[]; count: number; duplicates_skipped?: number }>('/api/contacts/scrape', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -441,7 +441,7 @@ export const api = {
      * NDJSON stream: progress events, then complete | cancelled | error.
      */
     scrapeStream: async (
-      data: { company_name?: string; domain?: string; linkedin_url?: string; linkedin_max_employees?: number },
+      data: { company_name?: string; domain?: string; max_people?: number },
       onEvent: (ev: Record<string, unknown>) => void,
       opts?: { signal?: AbortSignal }
     ): Promise<ScrapeResult> => {
@@ -1118,10 +1118,14 @@ export const api = {
     releaseInbox: (releaseId: number) => fetchApi<InboxItem[]>(`/api/yucg/releases/${releaseId}/inbox`),
   },
   yucgoutreach: {
+    listRosters: (q: string, limit = 10) =>
+      fetchApi<{ rosters: Record<string, unknown>[] }>(
+        `/api/yucg/rosters?q=${encodeURIComponent(q)}&limit=${limit}`
+      ),
+    rosterStats: () => fetchApi<{ sources: Record<string, unknown>[] }>('/api/yucg/rosters/stats'),
     createRun: (data: {
       company_name: string;
       company_domain?: string;
-      linkedin_company_url?: string;
       title_hints?: string;
       max_prospects?: number;
       worker_concurrency?: number;

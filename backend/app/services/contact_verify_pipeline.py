@@ -35,7 +35,7 @@ from app.services.email_verifier import (
     verify_emails_parallel,
 )
 
-TRUSTED_SOURCES = frozenset({"domain_scrape", "linkedin_apify"})
+TRUSTED_SOURCES = frozenset({"domain_scrape"})
 VERIFY_AGENTS = int(os.getenv("VERIFY_AGENTS", os.getenv("RECONCILE_WORKERS", "20")))
 
 PipelineProgress = Callable[[str, int, int, str], Awaitable[None] | None]
