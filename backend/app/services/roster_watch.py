@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -83,8 +84,11 @@ def left_after_misses() -> int:
 
 
 def _company_tokens(name: str) -> list[str]:
+    # NFKD-fold accents BEFORE tokenizing: "Itaú" must yield 'itau', not 'ita'.
     cleaned = re.sub(r"\([^)]*\)", " ", name or "")
-    parts = re.findall(r"[a-z0-9]+", cleaned.lower())
+    cleaned = unicodedata.normalize("NFKD", cleaned.lower())
+    cleaned = "".join(ch for ch in cleaned if not unicodedata.combining(ch))
+    parts = re.findall(r"[a-z0-9]+", cleaned)
     return [p for p in parts if p not in LEGAL_DROP and len(p) > 1]
 
 
@@ -199,6 +203,7 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
     query_key = " ".join(tokens)
     token_hit: dict[str, str] | None = None
     prefix: dict[str, str] | None = None
+    head_hits: list[dict[str, str]] = []
     for row in tickers.values() if isinstance(tickers, dict) else []:
         if not isinstance(row, dict):
             continue
@@ -214,10 +219,14 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
             return hit
         if tokens[0] == title_tokens[0] and len(tokens[0]) >= 6:
             prefix = prefix or hit
+        if len(tokens[0]) >= 4 and tokens[0] == title_tokens[0]:
+            head_hits.append(hit)
         if len(tokens) >= 2 and all(t in title_tokens for t in tokens[:3]):
             token_hit = token_hit or hit
         elif len(title_tokens) >= 2 and all(t in tokens for t in title_tokens[:2]) and len(title_tokens[0]) >= 5:
             token_hit = token_hit or hit
+    if len(head_hits) == 1:
+        return head_hits[0]
     return token_hit or prefix
 
 
