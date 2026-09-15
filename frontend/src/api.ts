@@ -356,6 +356,10 @@ export const api = {
     messages: (threadId: number) => fetchApi<Array<{
       id: number; role: 'user' | 'assistant'; content: string; created_at: number;
       sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }>;
+      lookups?: Array<{ tool: string; data: unknown }>;
+      pending_actions?: Array<{ tool: string; args: Record<string, unknown>; summary: string }>;
+      navigations?: Array<{ path: string; label: string }>;
+      asks?: Array<{ id: string; label: string; value: string; required: boolean; placeholder?: string }>;
     }>>(`/api/assistant/threads/${threadId}`),
     ask: (data: { question: string; thread_id?: number; project_id?: number; document_ids?: number[]; page_path?: string }) =>
       fetchApi<{
