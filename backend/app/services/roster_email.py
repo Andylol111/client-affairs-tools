@@ -146,7 +146,7 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
         try:
             cur = await db.execute(
                 """UPDATE company_roster_people SET email_status='invalid_domain', email_checked_at=?
-                   WHERE roster_id=? AND IFNULL(email_status,'') NOT IN ('bounced','invalid_domain','mx_valid','previously_delivered')""",
+                   WHERE roster_id=? AND IFNULL(email_status,'') NOT IN ('bounced','invalid_domain','mx_valid','previously_delivered','collision')""",
                 (_iso(), roster_id),
             )
             # Domain dead today does not mean dead forever — but retry weekly, not per lease.
@@ -168,18 +168,50 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
                    WHERE roster_id=? AND employment='current'
                      AND (
                          inferred_email IS NULL OR inferred_email=''
-                         OR IFNULL(email_status,'') IN ('', 'inconclusive', 'invalid_domain')
+                         OR IFNULL(email_status,'') IN ('', 'inconclusive', 'invalid_domain', 'collision')
                      )""",
                 (roster_id,),
             )
         ).fetchall()
-        status = "mx_valid" if mx_ok is True else "inconclusive"
-        for row in rows:
-            email = await _build_email(row["full_name"], dom)
+        # Collision guard: a derived address that fits two current people is not
+        # evidence for either — leave both empty until a real pattern separates them.
+        taken: dict[str, list[int]] = {}
+        for other in await (
             await db.execute(
-                "UPDATE company_roster_people SET inferred_email=?, email_status=?, email_checked_at=? WHERE id=?",
-                (email, status, _iso(), row["id"]),
+                """SELECT id, IFNULL(inferred_email,'') AS email FROM company_roster_people
+                   WHERE roster_id=? AND employment='current' AND IFNULL(inferred_email,'') != ''""",
+                (roster_id,),
             )
+        ).fetchall():
+            taken.setdefault(other["email"].lower(), []).append(int(other["id"]))
+        planned: list[tuple[int, str]] = []
+        for row in rows:
+            planned.append((int(row["id"]), await _build_email(row["full_name"], dom) or ""))
+        counts: dict[str, int] = {}
+        for _pid, email in planned:
+            if email:
+                counts[email.lower()] = counts.get(email.lower(), 0) + 1
+        status = "mx_valid" if mx_ok is True else "inconclusive"
+        for pid, email in planned:
+            if not email:
+                await db.execute(
+                    "UPDATE company_roster_people SET inferred_email=NULL, email_status='inconclusive', email_checked_at=? WHERE id=?",
+                    (_iso(), pid),
+                )
+                touched += 1
+                continue
+            low = email.lower()
+            others = [i for i in taken.get(low, []) if i != pid]
+            if counts.get(low, 0) > 1 or others:
+                await db.execute(
+                    "UPDATE company_roster_people SET inferred_email=NULL, email_status='collision', email_checked_at=? WHERE id=?",
+                    (_iso(), pid),
+                )
+            else:
+                await db.execute(
+                    "UPDATE company_roster_people SET inferred_email=?, email_status=?, email_checked_at=? WHERE id=?",
+                    (email, status, _iso(), pid),
+                )
             touched += 1
         await db.execute(
             "UPDATE company_rosters SET next_email_check_at=? WHERE id=?",
@@ -258,6 +290,70 @@ async def drain_roster_emails() -> dict[str, Any]:
         except Exception:
             continue
     return {"ok": True, "claimed": len(claimed), "touched": touched}
+
+
+async def drain_roster_verification(limit: int | None = None) -> dict[str, Any]:
+    """Spend the free provider credits on the best roster guesses: adjudicated-real
+    people first, then rank. A decisive verdict sticks; exhausted/disabled stops the
+    run so the remaining credits are not burned retrying a closed door."""
+    if (os.getenv("ROSTER_PROVIDER_VERIFY", "1") or "1").strip().lower() in {"0", "false", "no"}:
+        return {"ok": True, "skipped": "disabled by env"}
+    cap = limit if limit is not None else max(1, min(int(os.getenv("ROSTER_PROVIDER_ATTEMPTS", "30") or 30), 60))
+    db = await get_db()
+    try:
+        due = await (
+            await db.execute(
+                """SELECT p.id, p.full_name, p.inferred_email
+                   FROM company_roster_people p JOIN company_rosters r ON r.id = p.roster_id
+                   WHERE p.employment='current' AND IFNULL(p.inferred_email,'') != ''
+                     AND p.email_status = 'mx_valid'
+                     AND IFNULL(p.email_provider_checked_at,'') = ''
+                   ORDER BY (CASE WHEN IFNULL(p.verdict,'')='real' THEN 0 ELSE 1 END),
+                            r.current_count DESC, p.id
+                   LIMIT ?""",
+                (cap,),
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+    if not due:
+        return {"ok": True, "checked": 0, "confirmed": 0, "rejected": 0}
+
+    from app.services.contact_intelligence import assess_address
+
+    checked = confirmed = rejected = 0
+    for row in due:
+        try:
+            result = await assess_address(row["inferred_email"], actor_id=0, external=True, manual=False)
+        except Exception:
+            continue
+        state = str((result or {}).get("mailbox") or "")
+        provider = str((result or {}).get("provider_state") or "")
+        if provider in ("disabled", "exhausted"):
+            break
+        if provider == "unavailable" or state in ("inconclusive", "not_checked", ""):
+            continue
+        db = await get_db()
+        try:
+            if state == "provider_high_confidence":
+                await db.execute(
+                    "UPDATE company_roster_people SET email_status='provider_valid', email_provider_checked_at=? WHERE id=?",
+                    (_iso(), row["id"]),
+                )
+                confirmed += 1
+            else:
+                # recipient_rejected was already tombstoned+suppressed by the provider hook.
+                await db.execute(
+                    "UPDATE company_roster_people SET email_provider_checked_at=? WHERE id=?",
+                    (_iso(), row["id"]),
+                )
+                if state == "recipient_rejected":
+                    rejected += 1
+            await db.commit()
+        finally:
+            await db.close()
+        checked += 1
+    return {"ok": True, "checked": checked, "confirmed": confirmed, "rejected": rejected}
 
 
 async def apply_provider_verdict(db, email: str, verdict: str) -> None:
