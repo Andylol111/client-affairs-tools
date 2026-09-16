@@ -16,6 +16,8 @@ class SettingsUpdate(BaseModel):
     signature: Optional[str] = None
     signature_image_url: Optional[str] = None
     attachments_enabled: Optional[bool] = None
+    daily_send_limit: Optional[int] = None
+    daily_send_warn_at: Optional[int] = None
 
 
 class CustomFormatCreate(BaseModel):
@@ -27,9 +29,13 @@ class CustomFormatCreate(BaseModel):
 @router.get("")
 async def get_settings(user: dict = Depends(get_current_user)):
     """Get all settings. Any authenticated user can read."""
+    from app.services.settings_service import member_daily_send_limit
+
     result = await get_all_settings()
     for key in ("signature", "signature_image_url"):
         result[key] = await get_member_setting(user["id"], key) or ""
+    result["daily_send_limit"] = await member_daily_send_limit(user["id"])
+    result["daily_send_warn_at"] = await get_member_setting(user["id"], "daily_send_warn_at") or ""
     return result
 
 
@@ -47,6 +53,16 @@ async def update_settings(payload: SettingsUpdate, admin: dict = Depends(get_cur
     if payload.attachments_enabled is not None:
         await set_setting("attachments_enabled", "1" if payload.attachments_enabled else "0")
         await log_audit(admin["id"], "settings_update", "settings", "attachments_enabled", f"Set to {payload.attachments_enabled}")
+    if payload.daily_send_limit is not None:
+        if payload.daily_send_limit < 1:
+            raise HTTPException(400, "Daily send limit must be at least 1")
+        await set_member_setting(admin["id"], "daily_send_limit", str(payload.daily_send_limit))
+        await log_audit(admin["id"], "settings_update", "settings", "daily_send_limit", f"Set to {payload.daily_send_limit}")
+    if payload.daily_send_warn_at is not None:
+        if payload.daily_send_warn_at < 0:
+            raise HTTPException(400, "Warning threshold cannot be negative")
+        await set_member_setting(admin["id"], "daily_send_warn_at", str(payload.daily_send_warn_at))
+        await log_audit(admin["id"], "settings_update", "settings", "daily_send_warn_at", f"Set to {payload.daily_send_warn_at}")
     return {"ok": True}
 
 

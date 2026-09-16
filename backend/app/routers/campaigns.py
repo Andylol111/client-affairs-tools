@@ -403,7 +403,8 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
             )
             await db.commit()
             return []
-        daily_limit = max(1, int(os.getenv("CAMPAIGN_DAILY_SEND_LIMIT", "100") or 100))
+        from app.services.settings_service import member_daily_send_limit
+        daily_limit = await member_daily_send_limit(sender)
         reserved_today = await (await db.execute(
             """SELECT COUNT(*) AS n FROM outreach_dispatches
                WHERE sender_user_id=? AND claimed_at IS NOT NULL

@@ -21,8 +21,10 @@ READ_TOOLS = {
     "get_discovery_run",
     "recommend_companies",
     "search_person",
+    "get_company_pattern",
+    "predict_email",
 }
-WRITE_TOOLS = {"start_find_people", "import_run_to_contacts"}
+WRITE_TOOLS = {"start_find_people", "import_run_to_contacts", "set_company_pattern"}
 FORBIDDEN_TOOLS = {
     "send_mail",
     "send_email",
@@ -73,15 +75,18 @@ Cite document claims with [source-id] only when sources were supplied.
 Reply with a single JSON object:
 {
   "answer": "plain language reply the member will read",
-  "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|search_person", "args": {}}],
+  "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|search_person|get_company_pattern|predict_email", "args": {}}],
   "ask": [{"id": "titles|company_domain", "label": "field label", "value": "prefill if they already said it", "required": true, "placeholder": "hint"}],
-  "propose": [{"tool": "start_find_people|import_run_to_contacts", "args": {}, "summary": "short confirm label"}],
+  "propose": [{"tool": "start_find_people|import_run_to_contacts|set_company_pattern", "args": {}, "summary": "short confirm label"}],
   "open": [{"path": "/scraper?view=company&company=Name|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/projects|/analytics|/profile|/", "label": "button label"}]
 }
 Rules:
 - Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, title_hints, max_prospects (default 250, max 800).
 - For Find people: always emit ask fields for titles (required) and company_domain. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain when known).
 - Propose start_find_people for a named company. Do not run it yourself. "Companies like X" / "similar to X" means Find people at X.
+- "What format/pattern does X use" is get_company_pattern (args: domain). With no domain it lists known companies.
+- "What is <person>'s email at X" is predict_email (args: name, domain). Guesses are derived from learned patterns, never proof of a mailbox.
+- When the member states a company's format ("Bain uses first.last"), propose set_company_pattern (args: domain, pattern_template like {first}.{last}, optional company_name). Do not save it yourself.
 - Never emit send, delete, scrape-stream, or admin tools.
 - If documents do not help, still operate site tools."""
 
@@ -208,6 +213,8 @@ def _default_summary(tool: str, args: dict[str, Any]) -> str:
         return f"Find people at {company} (up to {n})"
     if tool == "import_run_to_contacts":
         return f"Import run #{args.get('run_id')} into Contacts"
+    if tool == "set_company_pattern":
+        return f"Save {args.get('domain')} email format {args.get('pattern_template')}"
     return tool
 
 
@@ -236,6 +243,18 @@ def _clean_write_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         if run_id < 1:
             raise HTTPException(422, "A discovery run id is required")
         return {"run_id": run_id}
+    if tool == "set_company_pattern":
+        domain = str(args.get("domain") or args.get("company_domain") or "").strip()[:255]
+        template = str(args.get("pattern_template") or args.get("pattern") or "").strip()[:120]
+        if not domain:
+            raise HTTPException(422, "A company domain is required")
+        if not template:
+            raise HTTPException(422, "An email format such as {first}.{last} is required")
+        return {
+            "domain": domain,
+            "pattern_template": template,
+            "company_name": str(args.get("company_name") or "").strip()[:255] or None,
+        }
     raise HTTPException(422, "That action is not available")
 
 
@@ -281,6 +300,28 @@ async def execute_read(user: dict, tool: str, args: dict[str, Any]) -> Any:
         if not name:
             return {"error": "name required"}
         return await search_person(SearchPersonRequest(name=name, company=str(args.get("company") or "").strip() or None))
+    if tool == "get_company_pattern":
+        from app.services.company_email_cache import get_domain_patterns, list_all_domain_patterns
+        from app.services.contact_scraper import normalize_domain
+        dom = normalize_domain(str(args.get("domain") or args.get("company") or "").strip())
+        if not dom:
+            return await list_all_domain_patterns(q=str(args.get("q") or "").strip() or None, limit=20)
+        return {"domain": dom, "patterns": await get_domain_patterns(dom)}
+    if tool == "predict_email":
+        from app.services.company_email_cache import build_email_candidates, load_reconcile_context
+        from app.services.contact_scraper import normalize_domain
+        person = str(args.get("name") or "").strip()
+        dom = normalize_domain(str(args.get("domain") or args.get("company") or "").strip())
+        if not person or not dom:
+            return {"error": "name and domain required"}
+        ctx = await load_reconcile_context({dom})
+        candidates = build_email_candidates(person, dom, ctx)
+        return {
+            "name": person,
+            "domain": dom,
+            "candidates": candidates[:5],
+            "best": candidates[0] if candidates else None,
+        }
     raise HTTPException(422, "That lookup is not available")
 
 
@@ -332,6 +373,28 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
             "result": imported,
             "answer": f"Imported into Contacts: {imported.get('created', 0)} new, {imported.get('updated', 0)} updated, {imported.get('skipped', 0)} skipped.",
             "navigations": [{"path": "/outreach", "label": "Open Pipeline"}],
+        }
+    if tool == "set_company_pattern":
+        from app.services.company_email_cache import set_member_asserted_pattern
+        try:
+            saved = await set_member_asserted_pattern(
+                cleaned["domain"],
+                cleaned["pattern_template"],
+                member_id=user["id"],
+                company_name=cleaned.get("company_name"),
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {
+            "ok": True,
+            "tool": tool,
+            "result": saved,
+            "answer": (
+                f"Saved {saved['company_domain']} as {saved['pattern_template']}. "
+                "Address guesses for that company now use it. Observed samples still "
+                "outrank a stated format if they disagree."
+            ),
+            "navigations": [{"path": "/scraper?view=company", "label": "Find people"}],
         }
     raise HTTPException(422, "That action is not available")
 

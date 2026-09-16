@@ -653,17 +653,89 @@ async def list_discovery_log(scrape_run_id: str, limit: int = 500, user: dict = 
     return {"scrape_run_id": scrape_run_id, "entries": rows, "count": len(rows)}
 
 
+class CompanyPatternAssert(BaseModel):
+    domain: str
+    pattern_template: str
+    company_name: str | None = None
+
+
 @router.get("/email-patterns")
-async def list_company_email_patterns(domain: str):
-    """Explore verified / inferred email layout patterns learned per company domain."""
-    dom = normalize_domain(domain or "")
-    if not dom:
-        raise HTTPException(400, "domain is required")
+async def list_company_email_patterns(
+    domain: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    user: dict = Depends(get_current_user),
+):
+    """Company email layouts. Without a domain this browses the whole registry."""
+    from app.services.company_email_cache import list_all_domain_patterns
     from app.services.mail_domain_map import list_mail_domain_rows
 
+    if not (domain or "").strip():
+        return await list_all_domain_patterns(q=q, limit=limit, offset=offset)
+    dom = normalize_domain(domain or "")
+    if not dom:
+        raise HTTPException(400, "domain is not a usable company domain")
     patterns = await get_domain_patterns(dom)
     mail_hosts = await list_mail_domain_rows(dom)
     return {"domain": dom, "patterns": patterns, "mail_hosts": mail_hosts, "count": len(patterns)}
+
+
+@router.post("/email-patterns")
+async def assert_company_email_pattern(
+    payload: CompanyPatternAssert, user: dict = Depends(get_current_user)
+):
+    """Record a company's mail format a member knows first-hand.
+
+    Members contribute here rather than through the admin-only global format
+    list, which had no company column and applied every template everywhere.
+    """
+    from app.services.company_email_cache import set_member_asserted_pattern
+
+    try:
+        saved = await set_member_asserted_pattern(
+            payload.domain,
+            payload.pattern_template,
+            member_id=user["id"],
+            company_name=(payload.company_name or "").strip() or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **saved}
+
+
+@router.get("/predict-email")
+async def predict_email(
+    name: str,
+    domain: str | None = None,
+    company: str | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """Ranked mailbox guesses for a person, with the evidence behind them."""
+    from app.services.company_email_cache import (
+        build_email_candidates,
+        load_reconcile_context,
+    )
+
+    person = (name or "").strip()
+    dom = normalize_domain(domain or company or "")
+    if not person:
+        raise HTTPException(400, "name is required")
+    if not dom:
+        raise HTTPException(400, "domain or company is required")
+    ctx = await load_reconcile_context({dom})
+    candidates = build_email_candidates(person, dom, ctx)
+    patterns = await get_domain_patterns(dom)
+    best = patterns[0] if patterns else None
+    return {
+        "name": person,
+        "domain": dom,
+        "candidates": candidates,
+        "best": candidates[0] if candidates else None,
+        "basis": "learned_pattern" if best else "generic_fallback",
+        "pattern": best,
+        "patterns_known": len(patterns),
+    }
 
 
 @router.post("/scrape")
