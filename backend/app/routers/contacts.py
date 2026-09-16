@@ -715,14 +715,27 @@ async def predict_email(
     from app.services.company_email_cache import (
         build_email_candidates,
         load_reconcile_context,
+        resolve_company_domain,
     )
 
     person = (name or "").strip()
-    dom = normalize_domain(domain or company or "")
     if not person:
         raise HTTPException(400, "name is required")
-    if not dom:
+    if not (domain or company or "").strip():
         raise HTTPException(400, "domain or company is required")
+    # A bare company name ("Bain") is not a mail domain. Resolve it against
+    # what we already know rather than minting jane.doe@bain.
+    dom = await resolve_company_domain(domain or company or "")
+    if not dom:
+        return {
+            "name": person,
+            "domain": normalize_domain(domain or company or ""),
+            "candidates": [],
+            "best": None,
+            "basis": "unknown_domain",
+            "pattern": None,
+            "patterns_known": 0,
+        }
     ctx = await load_reconcile_context({dom})
     candidates = build_email_candidates(person, dom, ctx)
     patterns = await get_domain_patterns(dom)

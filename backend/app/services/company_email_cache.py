@@ -399,6 +399,50 @@ async def get_domain_patterns(domain: str) -> list[dict[str, Any]]:
     finally:
         await db.close()
 
+
+async def resolve_company_domain(text: str) -> str:
+    """Best-effort mail domain for a free-text company reference.
+
+    normalize_domain only strips URL syntax, so "Bain" survives as "bain" and
+    silently produces addresses like jane.doe@bain. Anything without a dot is
+    treated as a company *name* and matched against domains already on record.
+    Returns "" when the domain is genuinely unknown, so callers can decline to
+    guess instead of inventing a hostname.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    dom = normalize_domain(raw)
+    if "." in dom:
+        return dom
+    name = raw.lower()
+    like = f"%{name}%"
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT company_domain FROM company_email_patterns
+               WHERE LOWER(company_name) = ? OR LOWER(company_domain) LIKE ?
+               ORDER BY verified_samples DESC LIMIT 1""",
+            (name, f"{name}.%"),
+        )
+        row = await cur.fetchone()
+        if row and row["company_domain"]:
+            return str(row["company_domain"])
+        cur = await db.execute(
+            """SELECT company_domain, COUNT(*) AS n FROM contacts
+               WHERE company_domain IS NOT NULL AND company_domain != ''
+                 AND (LOWER(company) = ? OR LOWER(company) LIKE ?)
+               GROUP BY company_domain ORDER BY n DESC LIMIT 1""",
+            (name, like),
+        )
+        row = await cur.fetchone()
+        if row and row["company_domain"]:
+            return str(row["company_domain"])
+    finally:
+        await db.close()
+    return ""
+
+
 MEMBER_ASSERTED_CONFIDENCE = 0.80
 
 
@@ -457,9 +501,17 @@ async def set_member_asserted_pattern(
     alone and confidence sits below a corroborated pattern. Learned evidence
     therefore still outranks a human guess that turns out to be wrong.
     """
-    dom = normalize_domain(domain or "")
+    dom = await resolve_company_domain(domain or "")
     if not dom:
-        raise ValueError("A company domain is required")
+        raw = (domain or "").strip()
+        if not raw:
+            raise ValueError("A company domain is required")
+        # Writing a format against "bain" would key the shared registry to a
+        # hostname that can never receive mail.
+        raise ValueError(
+            f"'{raw}' is not a mail domain and no domain is on record for it. "
+            "Give the domain itself, e.g. bain.com"
+        )
     pattern_key, tpl = canonical_pattern(template)
     source = f"member:{int(member_id)}"
     db = await get_db()

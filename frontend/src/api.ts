@@ -242,6 +242,24 @@ export type EmailPatternRow = {
   updated_at?: string;
 };
 
+export type EmailPatternRegistry = {
+  items: (EmailPatternRow & { member_asserted?: boolean })[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type EmailPrediction = {
+  name: string;
+  domain: string;
+  candidates: string[];
+  best: string | null;
+  /** learned_pattern = a stored company format produced it; unknown_domain = we declined to guess. */
+  basis: 'learned_pattern' | 'generic_fallback' | 'unknown_domain';
+  pattern: EmailPatternRow | null;
+  patterns_known: number;
+};
+
 // Empty = same origin. Local Vite proxies /api → :8000. Hosted box serves SPA + API together.
 export const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -560,6 +578,26 @@ export const api = {
     emailPatterns: (domain: string) =>
       fetchApi<{ domain: string; patterns: EmailPatternRow[]; count: number }>(
         `/api/contacts/email-patterns?domain=${encodeURIComponent(domain)}`
+      ),
+    /** Browse every company format on record. Omit a domain to list them all. */
+    emailPatternRegistry: (params: { q?: string; limit?: number; offset?: number } = {}) => {
+      const query = new URLSearchParams();
+      if (params.q) query.set('q', params.q);
+      if (params.limit != null) query.set('limit', String(params.limit));
+      if (params.offset != null) query.set('offset', String(params.offset));
+      const suffix = query.toString() ? `?${query}` : '';
+      return fetchApi<EmailPatternRegistry>(`/api/contacts/email-patterns${suffix}`);
+    },
+    predictEmail: (params: { name: string; domain?: string; company?: string }) => {
+      const query = new URLSearchParams({ name: params.name });
+      if (params.domain) query.set('domain', params.domain);
+      if (params.company) query.set('company', params.company);
+      return fetchApi<EmailPrediction>(`/api/contacts/predict-email?${query}`);
+    },
+    assertEmailPattern: (data: { domain: string; pattern_template: string; company_name?: string }) =>
+      fetchApi<{ ok: boolean; company_domain: string; pattern_key: string; pattern_template: string }>(
+        '/api/contacts/email-patterns',
+        { method: 'POST', body: JSON.stringify(data) }
       ),
     reconcileIdentity: (domain?: string) =>
       fetchApi<{ fixed: number; removed: number; unchanged: number }>(

@@ -25,6 +25,27 @@ function lookupLine(item: Lookup) {
   if (data && typeof data === 'object' && !Array.isArray(data) && 'error' in data) {
     return `${item.tool}: ${String((data as { error: unknown }).error)}`;
   }
+  if (item.tool === 'predict_email' && data && typeof data === 'object') {
+    const row = data as { best?: string | null; domain?: string; candidates?: string[] };
+    if (row.best) {
+      const extra = (row.candidates?.length || 0) - 1;
+      return `predict_email: ${row.best}${extra > 0 ? ` (+${extra} other form${extra > 1 ? 's' : ''})` : ''}`;
+    }
+    return `predict_email: no address derived for ${row.domain || 'that domain'}`;
+  }
+  if (item.tool === 'get_company_pattern' && data && typeof data === 'object') {
+    const row = data as {
+      domain?: string;
+      patterns?: { pattern_template?: string; verified_samples?: number }[];
+      total?: number;
+    };
+    if (Array.isArray(row.patterns)) {
+      const best = row.patterns[0];
+      if (!best) return `get_company_pattern: no format on record for ${row.domain || 'that domain'}`;
+      return `get_company_pattern: ${row.domain || ''} uses ${best.pattern_template} (${best.verified_samples ?? 0} verified)`.trim();
+    }
+    if (typeof row.total === 'number') return `get_company_pattern: ${row.total} company format(s) on record`;
+  }
   if (data && typeof data === 'object' && !Array.isArray(data) && 'count' in data) {
     return `${item.tool}: ${String((data as { count: unknown }).count)} row(s)`;
   }

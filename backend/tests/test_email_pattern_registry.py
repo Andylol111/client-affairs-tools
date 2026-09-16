@@ -103,6 +103,28 @@ def tests() -> None:
             'domain': 'x.com', 'pattern_template': 'no-placeholders'}).status_code == 400
         assert client.get('/api/contacts/predict-email', params={'name': 'Jane Doe'}).status_code == 400
 
+        # A company NAME is not a mail domain. "Learned" must resolve through
+        # what is on record instead of producing jane.doe@learned.
+        by_name = client.get('/api/contacts/predict-email',
+                             params={'name': 'Jane Doe', 'company': 'Learned'}).json()
+        assert by_name['domain'] == 'learned.com', by_name
+        assert by_name['best'] == 'jane.doe@learned.com', by_name
+
+        # An unresolvable company yields no guess at all, never an address
+        # against a hostname that cannot receive mail.
+        unknown = client.get('/api/contacts/predict-email',
+                             params={'name': 'Jane Doe', 'company': 'Nowhere Partners'}).json()
+        assert unknown['basis'] == 'unknown_domain', unknown
+        assert unknown['best'] is None, unknown
+        assert unknown['candidates'] == [], unknown
+
+        # The same rule guards writes, so the shared registry cannot be keyed
+        # to an unmailable hostname.
+        rejected = client.post('/api/contacts/email-patterns', json={
+            'domain': 'Nowhere Partners', 'pattern_template': '{first}.{last}'})
+        assert rejected.status_code == 400, rejected.text[:200]
+        assert 'not a mail domain' in rejected.text
+
         # Send limit is member-adjustable and cannot exceed the club default.
         from app.services.settings_service import member_daily_send_limit
         os.environ['CAMPAIGN_DAILY_SEND_LIMIT'] = '100'

@@ -301,19 +301,28 @@ async def execute_read(user: dict, tool: str, args: dict[str, Any]) -> Any:
             return {"error": "name required"}
         return await search_person(SearchPersonRequest(name=name, company=str(args.get("company") or "").strip() or None))
     if tool == "get_company_pattern":
-        from app.services.company_email_cache import get_domain_patterns, list_all_domain_patterns
-        from app.services.contact_scraper import normalize_domain
-        dom = normalize_domain(str(args.get("domain") or args.get("company") or "").strip())
+        from app.services.company_email_cache import (
+            get_domain_patterns,
+            list_all_domain_patterns,
+            resolve_company_domain,
+        )
+        dom = await resolve_company_domain(str(args.get("domain") or args.get("company") or "").strip())
         if not dom:
             return await list_all_domain_patterns(q=str(args.get("q") or "").strip() or None, limit=20)
         return {"domain": dom, "patterns": await get_domain_patterns(dom)}
     if tool == "predict_email":
-        from app.services.company_email_cache import build_email_candidates, load_reconcile_context
-        from app.services.contact_scraper import normalize_domain
+        from app.services.company_email_cache import (
+            build_email_candidates,
+            load_reconcile_context,
+            resolve_company_domain,
+        )
         person = str(args.get("name") or "").strip()
-        dom = normalize_domain(str(args.get("domain") or args.get("company") or "").strip())
-        if not person or not dom:
+        raw = str(args.get("domain") or args.get("company") or "").strip()
+        if not person or not raw:
             return {"error": "name and domain required"}
+        dom = await resolve_company_domain(raw)
+        if not dom:
+            return {"error": f"no mail domain on record for {raw}; ask the member for the domain"}
         ctx = await load_reconcile_context({dom})
         candidates = build_email_candidates(person, dom, ctx)
         return {
@@ -394,7 +403,8 @@ async def execute_write(user: dict, tool: str, args: dict[str, Any]) -> dict[str
                 "Address guesses for that company now use it. Observed samples still "
                 "outrank a stated format if they disagree."
             ),
-            "navigations": [{"path": "/scraper?view=company", "label": "Find people"}],
+            # No navigation: saving a format updates a fact in place. Returning a
+            # path here makes the UI yank the member to an unrelated tab.
         }
     raise HTTPException(422, "That action is not available")
 
