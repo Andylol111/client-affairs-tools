@@ -736,6 +736,7 @@ export default function Scraper() {
                     <span className="font-mono font-medium text-deep-navy">{p.pattern_template}</span>
                     <span className="text-slate-500">
                       {Math.round((p.confidence || 0) * 100)}% · {p.verified_samples} verified
+                      {p.failed_samples ? ` · ${p.failed_samples} bounced` : ''}
                       {p.member_asserted ? ' · set by a member' : ''}
                     </span>
                   </li>

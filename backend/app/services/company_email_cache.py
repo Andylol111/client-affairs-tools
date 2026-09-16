@@ -381,7 +381,7 @@ async def get_domain_patterns(domain: str) -> list[dict[str, Any]]:
     try:
         cur = await db.execute(
             f"""SELECT company_domain, company_name, pattern_key, pattern_template, confidence,
-                      sample_count, verified_samples, sources_json, updated_at
+                      sample_count, verified_samples, failed_samples, sources_json, updated_at
                FROM company_email_patterns WHERE company_domain IN ({placeholders})
                ORDER BY confidence DESC, verified_samples DESC""",
             hosts,
@@ -468,7 +468,7 @@ async def list_all_domain_patterns(
         )).fetchone())["n"]
         rows = await (await db.execute(
             f"""SELECT company_domain, company_name, pattern_key, pattern_template, confidence,
-                       sample_count, verified_samples, sources_json, updated_at
+                       sample_count, verified_samples, failed_samples, sources_json, updated_at
                 FROM company_email_patterns {where}
                 ORDER BY verified_samples DESC, confidence DESC, company_domain
                 LIMIT ? OFFSET ?""",
@@ -548,6 +548,68 @@ async def set_member_asserted_pattern(
     finally:
         await db.close()
     return {"company_domain": dom, "pattern_key": pattern_key, "pattern_template": tpl}
+
+
+async def record_send_outcome(
+    db,
+    *,
+    email: str,
+    full_name: str,
+    delivered: bool,
+    source: str,
+) -> bool:
+    """Feed a real send outcome back into the format it was derived from.
+
+    A reply proves the mailbox exists, which is stronger than any crawl, so it
+    counts as a verified sample. A permanent failure is evidence against the
+    format, but only weak evidence: the person may simply have left. It is
+    therefore recorded as a failure that discounts confidence rather than
+    deleting a pattern that many other addresses still match.
+
+    Returns False when the address does not match a known format for the
+    domain, since an outcome then says nothing about any stored pattern.
+    """
+    mail = _mail_host(email)
+    if not mail or not full_name:
+        return False
+    key = pattern_for_email(email, full_name)
+    if not key:
+        return False
+    row = await (await db.execute(
+        """SELECT id, sample_count, verified_samples, failed_samples, sources_json
+           FROM company_email_patterns WHERE company_domain=? AND pattern_key=?""",
+        (mail, key),
+    )).fetchone()
+    if not row:
+        return False
+    try:
+        sources = json.loads(row["sources_json"] or "[]")
+    except Exception:
+        sources = []
+    if source not in sources:
+        sources.append(source)
+    verified = int(row["verified_samples"] or 0) + (1 if delivered else 0)
+    failed = int(row["failed_samples"] or 0) + (0 if delivered else 1)
+    samples = int(row["sample_count"] or 0)
+    # The learned curve alone would demote a member-asserted format on a
+    # successful reply, since a stated format carries no observed samples. Take
+    # the stronger of the two bases, then discount per observed failure. Derived
+    # from stored counts, so the result is idempotent rather than drifting.
+    asserted_floor = (
+        MEMBER_ASSERTED_CONFIDENCE
+        if any(str(s).startswith("member:") for s in sources)
+        else 0.0
+    )
+    base = max(0.35 + verified * 0.12 + samples * 0.03, asserted_floor)
+    confidence = min(0.98, base) - failed * 0.15
+    await db.execute(
+        """UPDATE company_email_patterns
+           SET verified_samples=?, failed_samples=?, confidence=?, sources_json=?,
+               updated_at=CURRENT_TIMESTAMP
+           WHERE id=?""",
+        (verified, failed, max(0.05, confidence), json.dumps(sources[-20:]), row["id"]),
+    )
+    return True
 
 
 def pattern_for_email(email: str, full_name: str) -> str | None:

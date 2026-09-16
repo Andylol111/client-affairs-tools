@@ -135,6 +135,72 @@ def tests() -> None:
         assert client.put('/api/settings', json={'daily_send_limit': 0}).status_code == 400
         assert client.get('/api/settings').json()['daily_send_limit'] == 100
 
+        # A real send outcome corrects the format it was derived from. Crawling
+        # can only ever show an address exists somewhere; a bounce is the first
+        # evidence that a derived layout is wrong.
+        from app.services.company_email_cache import record_send_outcome
+
+        async def outcome(email: str, name: str, delivered: bool) -> bool:
+            db = await get_db()
+            try:
+                matched = await record_send_outcome(
+                    db, email=email, full_name=name, delivered=delivered, source='test')
+                await db.commit()
+                return matched
+            finally:
+                await db.close()
+
+        before = asyncio.run(list_all_domain_patterns(q='learned.com'))['items'][0]
+        assert asyncio.run(outcome('jane.doe@learned.com', 'Jane Doe', False))
+        after = asyncio.run(list_all_domain_patterns(q='learned.com'))['items'][0]
+        assert after['failed_samples'] == 1, after
+        assert after['confidence'] < before['confidence'], 'a bounce must cost confidence'
+
+        # A reply proves the mailbox existed, which no crawl can establish. The
+        # learned pattern above is already at the confidence cap, so the gain is
+        # only observable on one that still has headroom.
+        assert asyncio.run(outcome('john.roe@learned.com', 'John Roe', True))
+        replied = asyncio.run(list_all_domain_patterns(q='learned.com'))['items'][0]
+        assert replied['verified_samples'] == before['verified_samples'] + 1
+
+        async def seed_fresh() -> None:
+            db = await get_db()
+            try:
+                await db.execute(
+                    """INSERT INTO company_email_patterns
+                       (company_domain,company_name,pattern_key,pattern_template,confidence,
+                        sample_count,verified_samples,sources_json)
+                       VALUES ('fresh.com','Fresh','first.last','{first}.{last}',0.50,1,1,
+                               '["web_discovery"]')"""
+                )
+                await db.commit()
+            finally:
+                await db.close()
+
+        asyncio.run(seed_fresh())
+        assert asyncio.run(outcome('jane.doe@fresh.com', 'Jane Doe', True))
+        grown = asyncio.run(list_all_domain_patterns(q='fresh.com'))['items'][0]
+        assert grown['confidence'] > 0.50, 'a reply must raise an unsaturated format'
+
+        # A stated format carries no observed samples, so the learned curve alone
+        # would demote it on a success. Confirming it must never cost confidence.
+        assert asyncio.run(outcome('jdoe@asserted.com', 'Jane Doe', True))
+        confirmed = asyncio.run(list_all_domain_patterns(q='asserted.com'))['items'][0]
+        assert confirmed['confidence'] >= MEMBER_ASSERTED_CONFIDENCE, confirmed
+
+        # An address that matches no stored format says nothing about one.
+        assert not asyncio.run(outcome('contact@learned.com', 'Jane Doe', False))
+        assert not asyncio.run(outcome('jane.doe@unknown-co.com', 'Jane Doe', False))
+
+        # Enough failures must demote a format below an unproblematic rival.
+        for _ in range(6):
+            asyncio.run(outcome('jane.doe@learned.com', 'Jane Doe', False))
+        asyncio.run(set_member_asserted_pattern('learned.com', '{first_initial}{last}', member_id=1))
+        ranked = asyncio.run(list_all_domain_patterns(q='learned.com'))['items']
+        bounced = next(p for p in ranked if p['pattern_key'] == 'first.last')
+        assert bounced['confidence'] < MEMBER_ASSERTED_CONFIDENCE, \
+            'a repeatedly bouncing format must not outrank an untested stated one'
+
 
 if __name__ == '__main__':
     tests()

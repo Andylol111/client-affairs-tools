@@ -592,7 +592,28 @@ async def release_campaign(campaign_id: int, user: dict = Depends(get_current_us
             (user["id"], campaign_id),
         )
         await db.commit()
-        return {"ok": True, "status": "releasing", "counts": readiness["counts"]}
+        # The drain claims at most the member's daily cap, so a release larger
+        # than the cap is paced over days. Saying so here is the only chance the
+        # member gets: the send loop runs unattended.
+        from app.services.settings_service import (
+            member_daily_send_limit,
+            member_send_warn_threshold,
+        )
+        daily_limit = await member_daily_send_limit(user["id"])
+        warn_at = await member_send_warn_threshold(user["id"])
+        queued = int(readiness["counts"].get("pending", 0) or 0)
+        allowance = {
+            "daily_limit": daily_limit,
+            "queued": queued,
+            "days_to_drain": max(1, -(-queued // daily_limit)) if queued else 0,
+            "warn_at": warn_at,
+        }
+        if warn_at is not None and queued > warn_at:
+            allowance["warning"] = (
+                f"This release queues {queued} first sends, above your warning "
+                f"threshold of {warn_at}."
+            )
+        return {"ok": True, "status": "releasing", "counts": readiness["counts"], "allowance": allowance}
     finally:
         await db.close()
 

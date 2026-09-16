@@ -15,7 +15,8 @@ const TEMPLATES = [
  * behind the guess and a way to correct the company's format.
  *
  * A guess is never mailbox proof: a learned pattern only means other addresses
- * at that domain matched the same layout.
+ * at that domain matched the same layout. Replies and bounces observed later
+ * adjust that format's confidence.
  */
 export default function EmailPrediction({
   name,
@@ -108,7 +109,10 @@ export default function EmailPrediction({
         {prediction && !unknownDomain && (
           <span className="text-[12px] text-slate-500">
             {prediction.basis === 'learned_pattern'
-              ? `${prediction.pattern?.verified_samples ?? 0} verified sample(s) at ${prediction.domain}`
+              ? `${prediction.pattern?.verified_samples ?? 0} verified sample(s) at ${prediction.domain}` +
+                (prediction.pattern?.failed_samples
+                  ? ` · ${prediction.pattern.failed_samples} bounced`
+                  : '')
               : `No stored format for ${prediction.domain}`}
           </span>
         )}
@@ -208,8 +212,8 @@ export default function EmailPrediction({
 
       {!unknownDomain && (
         <p className="text-[11px] text-slate-500 mt-2">
-          A derived address is a guess, not mailbox proof. Delivery, a reply, or a bounce is the
-          evidence.
+          A derived address is a guess, not mailbox proof. A reply or a bounce is the evidence, and
+          both feed back into this company's format.
         </p>
       )}
     </div>

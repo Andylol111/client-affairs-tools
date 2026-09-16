@@ -78,6 +78,34 @@ def is_bedrock_model(model_id: str | None) -> bool:
     return len(parts) >= 2 and parts[0] in _BEDROCK_PROVIDERS
 
 
+# Quota units one call consumes, relative to the Haiku-class member-facing tier
+# at 1.0, derived from blended $/1M token pricing. A flat call count charges a
+# Nova Micro triage call (~$0.035/1M in) the same as a Studio draft (~$1/1M in),
+# so a cheap bulk fanout could exhaust the hour that Studio needs. Floors are
+# deliberately above true cost ratio so throughput stays bounded too.
+_MODEL_QUOTA_WEIGHTS: tuple[tuple[str, float], ...] = (
+    ("nova-micro", 0.05),
+    ("nova-lite", 0.10),
+    ("nova-pro", 0.75),
+    ("claude-haiku", 1.0),
+    ("claude-sonnet", 3.0),
+    ("claude-opus", 15.0),
+)
+
+
+def model_quota_weight(model_id: str | None) -> float:
+    """Quota cost of one call to this model.
+
+    An unrecognised model is charged the member-facing rate rather than being
+    treated as free, so adding a model cannot silently bypass the club budget.
+    """
+    mid = (model_id or "").strip().lower()
+    for token, weight in _MODEL_QUOTA_WEIGHTS:
+        if token in mid:
+            return weight
+    return 1.0
+
+
 def list_models() -> dict[str, Any]:
     return {
         "provider": llm_provider(),

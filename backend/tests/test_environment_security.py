@@ -168,6 +168,45 @@ async def tests():
         attempts=await asyncio.gather(*(asyncio.to_thread(reserve_bedrock_invocation,llm.rank_model_id()) for _ in range(8)),return_exceptions=True)
         assert sum(isinstance(item,int) for item in attempts)==1
         assert all(isinstance(item,int) or isinstance(item,HTTPException) and item.status_code==429 for item in attempts)
+    # The budget is spend, not calls: a cheap triage fanout must not consume the
+    # hour that member-facing generation needs. Flat counting blocked the third
+    # call here regardless of which model made it.
+    await reset_paid()
+    with patch.dict(os.environ,{'BEDROCK_CALLS_PER_CLUB_PER_HOUR':'2'}):
+        cheap=[reserve_bedrock_invocation('us.amazon.nova-micro-v1:0') for _ in range(15)]
+        assert all(isinstance(item,int) for item in cheap),'cheap triage exhausted the club budget'
+        assert isinstance(reserve_bedrock_invocation(llm.default_model_id()),int),\
+            'Studio was starved by cheap calls worth a fraction of its cost'
+        try:
+            reserve_bedrock_invocation(llm.default_model_id())
+            raise AssertionError('Weighted budget did not stop the expensive tier')
+        except HTTPException as exc:
+            assert exc.status_code==429
+    # An unrecognised model is charged the member-facing rate, never treated as
+    # free, so enabling a model cannot silently bypass the budget.
+    await reset_paid()
+    with patch.dict(os.environ,{'BEDROCK_CALLS_PER_CLUB_PER_HOUR':'1'}):
+        assert isinstance(reserve_bedrock_invocation('some-unpriced-model'),int)
+        try:
+            reserve_bedrock_invocation('some-unpriced-model')
+            raise AssertionError('Unpriced model billed as free')
+        except HTTPException as exc:
+            assert exc.status_code==429
+    # Raw volume stays bounded even when every call is nearly free.
+    await reset_paid()
+    with patch.dict(os.environ,{'BEDROCK_CALLS_PER_CLUB_PER_HOUR':'1'}):
+        reserved=0
+        blocked=0
+        for _ in range(14):
+            try:
+                reserve_bedrock_invocation('us.amazon.nova-micro-v1:0')
+                reserved+=1
+            except HTTPException as exc:
+                assert exc.status_code==429
+                blocked+=1
+        # 1 unit / 0.05 per call would allow 20, so the ceiling is what bites.
+        assert reserved==10,f'call ceiling did not bound cheap volume: {reserved}'
+        assert blocked==4
     # Independent interpreters contend against the same durable SQLite record.
     await reset_paid()
     worker="""
