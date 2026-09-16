@@ -291,6 +291,9 @@ export default function Scraper() {
 
   const [findName, setFindName] = useState('');
   const [findCompany, setFindCompany] = useState('');
+  // Carried when the company is picked from the known list; the domain there
+  // is authoritative, unlike resolving a typed display name.
+  const [findCompanyDomain, setFindCompanyDomain] = useState('');
   const [findLoading, setFindLoading] = useState(false);
   const [findResult, setFindResult] = useState<{
     query: string;
@@ -597,12 +600,16 @@ export default function Scraper() {
               label="Company (optional)"
               value={findCompany}
               placeholder="Company (optional)"
-              onChange={(name) => setFindCompany(name)}
+              onChange={(name, option) => {
+                setFindCompany(name);
+                setFindCompanyDomain(option?.domain || '');
+              }}
             />
           </div>
           <EmailPrediction
             name={findName}
             company={findCompany}
+            companyDomain={findCompanyDomain}
             onUse={async (email, predictedDomain) => {
               setError('');
               setInfoMessage('');

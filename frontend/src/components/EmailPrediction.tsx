@@ -20,10 +20,13 @@ const TEMPLATES = [
 export default function EmailPrediction({
   name,
   company,
+  companyDomain,
   onUse,
 }: {
   name: string;
   company: string;
+  /** Authoritative domain when the company was picked from a known list. */
+  companyDomain?: string;
   /** Receives the address and the resolved mail domain behind it. */
   onUse?: (email: string, domain: string) => void;
 }) {
@@ -39,7 +42,9 @@ export default function EmailPrediction({
   const person = name.trim();
   const target = company.trim();
   const domainValue = manualDomain.company === target ? manualDomain.value : '';
-  const domain = domainValue.trim();
+  // A domain the member typed wins, then one carried by a picked company,
+  // then resolving the company name server-side.
+  const domain = domainValue.trim() || (companyDomain || '').trim();
   const correcting = !!target && correctingFor === target;
   const lookup = domain || target;
 
