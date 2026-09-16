@@ -1,7 +1,10 @@
 """Grounded first-draft generation for member-owned outreach."""
 import json
+import logging
 import re
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 
 TONE_INSTRUCTIONS = {
@@ -48,6 +51,8 @@ Writing rules:
 - Make one modest call to action that is easy to decline.
 - Avoid hype, flattery, rhetorical questions, jargon, and stock openings.
 - Do not include a sender name or signature; the application appends the member's saved signature.
+- End with the final sentence of your message. Never add a closing salutation such as "Best", "Best regards", "Kind regards", "Warm regards", "Regards", "Sincerely", or "Thanks" on its own line.
+- Do not state a specific meeting length, price, percentage, or other figure unless the brief supplies that exact number.
 - Do not mention AI, prompts, the brief, or these rules.
 
 Organization facts you may use:
@@ -109,6 +114,9 @@ def generate_email(
         raise
     except Exception as error:
         # Never present a fabricated template as a successful AI generation.
+        # Record why it was rejected: without this the failure is undiagnosable
+        # in production, and a systematic rule mismatch looks like flakiness.
+        _log.warning("draft rejected: %s", error)
         raise HTTPException(502, 'Draft generation failed. Your existing draft is unchanged; please retry.') from error
 
 
@@ -153,11 +161,21 @@ def validate_draft(data: dict, brief: dict, length: str) -> tuple[str, str]:
         brief.get("message", {}).get("relevant_capability_or_proof", ""),
         *[s.get("excerpt", "") for s in sources if str(s.get("id")) in {str(i) for i in citations}],
     ])
-    # Numeric performance claims and familiarity must have explicit support;
-    # the model's own prose cannot serve as a source.
-    for metric in re.findall(r"\b\d+(?:[.,]\d+)?(?:%|\s*(?:percent|million|billion))?", text):
-        if metric not in supplied:
-            raise ValueError("Unsupported numeric claim")
+    # Performance-style figures need explicit support; the model's own prose
+    # cannot serve as a source. A bare number (a meeting length, a year, an
+    # ordinary count) is not a claim -- matching those rejected legitimate
+    # drafts such as "would you have 15 minutes".
+    def _squash(value: str) -> str:
+        return re.sub(r"\s+", "", value).casefold()
+
+    supplied_squashed = _squash(supplied)
+    claim_pattern = (
+        r"\$\s*\d+(?:[.,]\d+)?"
+        r"|\b\d+(?:[.,]\d+)?\s*(?:%|percent|million|billion|bn|k\b|x\b)"
+    )
+    for metric in re.findall(claim_pattern, text, re.I):
+        if _squash(metric) not in supplied_squashed:
+            raise ValueError(f"Unsupported numeric claim: {metric.strip()!r}")
     for phrase in re.findall(
         r"\b(?:we (?:met|worked together)|(?:I|we) (?:have long admired|noticed|saw|followed)|"
         r"(?:your|our) (?:award|client|referral|recent announcement))\b", text, re.I,

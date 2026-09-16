@@ -51,7 +51,47 @@ def tests():
         except Exception as exc:
             assert getattr(exc, 'status_code', None) == 502
 
+def benign_numbers_are_not_claims():
+    """A meeting length is not a performance claim.
+
+    The numeric rule used to match any bare digit, so an ordinary
+    "would you have 15 minutes" draft was rejected as an unsupported claim
+    and the member only saw "please retry".
+    """
+    body = VALID_BODY.replace('twenty minutes', '15 minutes')
+    with patch('app.services.llm.complete_json', return_value={
+        'subject': 'A market research question', 'body': body, 'source_ids': [],
+    }):
+        subject, out = generate_email('Maya', 'Lead', 'Example Co', 'example.com')
+    assert '15 minutes' in out
+
+    # An actual performance claim with no supporting evidence still fails.
+    claim = VALID_BODY.replace('twenty minutes', 'a 40% revenue increase')
+    with patch('app.services.llm.complete_json', return_value={
+        'subject': 'A market research question', 'body': claim, 'source_ids': [],
+    }):
+        try:
+            generate_email('Maya', 'Lead', 'Example Co', 'example.com')
+            raise AssertionError('Unsupported 40% claim accepted')
+        except Exception as exc:
+            assert getattr(exc, 'status_code', None) == 502
+
+
+def prompt_forbids_the_closing_the_validator_rejects():
+    """The validator bans closing salutations, so the prompt must say so.
+
+    The prompt only mentioned "sender name or signature"; the model read that
+    as a contact block and still wrote "Best regards", which the validator
+    rejected on nearly every generation.
+    """
+    lowered = EMAIL_SYSTEM_PROMPT.lower()
+    assert 'closing salutation' in lowered
+    for closing in ('best regards', 'sincerely', 'regards'):
+        assert closing in lowered, f'prompt never names {closing!r} as forbidden'
+
 
 if __name__ == '__main__':
     tests()
+    benign_numbers_are_not_claims()
+    prompt_forbids_the_closing_the_validator_rejects()
     print('email generation contract: ok')

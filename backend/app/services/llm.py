@@ -59,9 +59,23 @@ def rank_model_id() -> str:
     return _HAIKU
 
 
+_BEDROCK_PROVIDERS = frozenset(
+    {"anthropic", "amazon", "meta", "mistral", "cohere", "ai21", "deepseek"}
+)
+_BEDROCK_REGION_PREFIXES = frozenset({"us", "eu", "apac", "global"})
+
+
 def is_bedrock_model(model_id: str | None) -> bool:
-    mid = (model_id or "").strip()
-    return mid.startswith("us.anthropic.") or mid.startswith("anthropic.") or mid.startswith("global.anthropic.")
+    """True for a Bedrock model id, with or without a cross-region prefix.
+
+    Restricting this to Anthropic silently rejected ids such as
+    `us.amazon.nova-micro-v1:0`, which blocked using a cheap model for the
+    bulk ranking tier.
+    """
+    parts = (model_id or "").strip().lower().split(".")
+    if parts and parts[0] in _BEDROCK_REGION_PREFIXES:
+        parts = parts[1:]
+    return len(parts) >= 2 and parts[0] in _BEDROCK_PROVIDERS
 
 
 def list_models() -> dict[str, Any]:

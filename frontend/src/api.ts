@@ -641,8 +641,12 @@ export const api = {
     retryFailed: (id: number) =>
       fetchApi<{ ok: boolean; status: string; retried: number }>(`/api/campaigns/${id}/retry-failed`, { method: 'POST' }),
     updateContactEmail: (campaignId: number, ccId: number, subject?: string, body?: string) =>
-      fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
+      fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}`, {
         method: 'PATCH',
+        body: JSON.stringify({
+          ...(subject != null && { subject }),
+          ...(body != null && { body }),
+        }),
       }),
     removeContact: (campaignId: number, ccId: number) =>
       fetchApi<{ ok: boolean }>(`/api/campaigns/${campaignId}/contact/${ccId}`, { method: 'DELETE' }),

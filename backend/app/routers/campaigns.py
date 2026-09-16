@@ -26,6 +26,16 @@ class OwnershipConfirmation(BaseModel):
 class DispatchRecoveryRequest(BaseModel):
     dispatch_key: str
 
+
+class CampaignContactEmailUpdate(BaseModel):
+    """Subject/body arrive as a JSON body. They used to be query parameters,
+    which put whole HTML emails in the URL -- that exceeds CloudFront's 8 KB
+    request-line limit in production and logs message content in access logs."""
+
+    subject: str | None = None
+    body: str | None = None
+
+
 router = APIRouter()
 
 
@@ -774,10 +784,22 @@ async def update_campaign(
 
 @router.patch("/{campaign_id}/contact/{cc_id}")
 async def update_campaign_contact_email(
-    campaign_id: int, cc_id: int, subject: str | None = None, body: str | None = None,
+    campaign_id: int,
+    cc_id: int,
+    payload: CampaignContactEmailUpdate | None = None,
+    subject: str | None = None,
+    body: str | None = None,
     user: dict = Depends(get_current_user),
 ):
-    """Update email subject/body for a campaign contact."""
+    """Update email subject/body for a campaign contact.
+
+    The JSON body is the supported contract. Bare query parameters remain
+    accepted so an older client keeps working, but a full HTML body must not
+    travel in the URL.
+    """
+    if payload is not None:
+        subject = payload.subject if payload.subject is not None else subject
+        body = payload.body if payload.body is not None else body
     db = await get_db()
     try:
         from app.services.dispatch_service import begin_write
