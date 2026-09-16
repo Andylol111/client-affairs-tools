@@ -51,6 +51,8 @@ export default function Profile() {
   const [signature, setSignature] = useState('');
   const [signatureImageUrl, setSignatureImageUrl] = useState('');
   const [attachmentsEnabled, setAttachmentsEnabled] = useState(false);
+  const [dailySendLimit, setDailySendLimit] = useState('');
+  const [dailySendWarnAt, setDailySendWarnAt] = useState('');
   const [customFormats, setCustomFormats] = useState<CustomFormat[]>([]);
   const [loginLog, setLoginLog] = useState<LogEntry[]>([]);
   const [notifPrefs, setNotifPrefs] = useState({ admin_digest: true, campaign_summary: false });
@@ -84,6 +86,8 @@ export default function Profile() {
       setSignature(s.signature || '');
       setSignatureImageUrl(s.signature_image_url || '');
       setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
+      setDailySendLimit(s.daily_send_limit != null ? String(s.daily_send_limit) : '');
+      setDailySendWarnAt(s.daily_send_warn_at ? String(s.daily_send_warn_at) : '');
     }).catch(() => {});
     api.auth.notificationPrefs.get().then(setNotifPrefs).catch(() => {});
     if (isAdmin) {
@@ -119,7 +123,19 @@ export default function Profile() {
   const saveSettings = async () => {
     setError('');
     try {
-      await api.settings.update({ signature, signature_image_url: signatureImageUrl, ...(isAdmin ? { attachments_enabled: attachmentsEnabled } : {}) });
+      const limit = parseInt(dailySendLimit, 10);
+      const warnAt = parseInt(dailySendWarnAt, 10);
+      await api.settings.update({
+        signature,
+        signature_image_url: signatureImageUrl,
+        ...(isAdmin ? { attachments_enabled: attachmentsEnabled } : {}),
+        ...(Number.isFinite(limit) ? { daily_send_limit: limit } : {}),
+        ...(Number.isFinite(warnAt) ? { daily_send_warn_at: warnAt } : {}),
+      });
+      // The server clamps the limit to the club ceiling, so reflect what stuck.
+      const saved = await api.settings.get();
+      setDailySendLimit(saved.daily_send_limit != null ? String(saved.daily_send_limit) : '');
+      setDailySendWarnAt(saved.daily_send_warn_at ? String(saved.daily_send_warn_at) : '');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -373,7 +389,49 @@ export default function Profile() {
                 <input type="url" value={signatureImageUrl} onChange={(e) => setSignatureImageUrl(e.target.value)} placeholder="https://example.com/logo.png" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800" />
                 {signatureImageUrl && <img src={signatureImageUrl} alt="Signature" className="mt-2 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />}
               </div>
-          <button onClick={saveSettings} className="ui-button">{saved ? "Saved" : "Save signature"}</button>
+              <div className="surface-card shadow-sm rounded-xl p-6">
+                <h2 className="font-semibold text-deep-navy mb-1">Send pacing</h2>
+                <p className="text-sm text-slate-600 mb-3">
+                  The send loop claims at most this many first sends per day from your account. A
+                  larger release is paced over several days rather than refused.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1" htmlFor="daily-send-limit">
+                      Daily send limit
+                    </label>
+                    <input
+                      id="daily-send-limit"
+                      type="number"
+                      min={1}
+                      value={dailySendLimit}
+                      onChange={(e) => setDailySendLimit(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      You can lower this but not raise it above the club ceiling.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1" htmlFor="daily-send-warn">
+                      Warn me above
+                    </label>
+                    <input
+                      id="daily-send-warn"
+                      type="number"
+                      min={0}
+                      value={dailySendWarnAt}
+                      onChange={(e) => setDailySendWarnAt(e.target.value)}
+                      placeholder="No warning"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Releasing more first sends than this shows a warning.
+                    </p>
+                  </div>
+                </div>
+              </div>
+          <button onClick={saveSettings} className="ui-button">{saved ? "Saved" : "Save settings"}</button>
           {isAdmin && (
             <>
               <div className="surface-card shadow-sm rounded-xl p-6">

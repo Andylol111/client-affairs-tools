@@ -49,13 +49,42 @@ async def get_all_settings() -> dict[str, str]:
         await db.close()
 
 
+MEMBER_SETTING_KEYS = frozenset(
+    {"signature", "signature_image_url", "daily_send_limit", "daily_send_warn_at"}
+)
+
+
 async def get_member_setting(user_id: int, key: str) -> str | None:
-    if key not in {"signature", "signature_image_url"}:
+    if key not in MEMBER_SETTING_KEYS:
         raise ValueError("Unsupported member setting")
     return await get_setting(f"member:{user_id}:{key}")
 
 
 async def set_member_setting(user_id: int, key: str, value: str | None) -> None:
-    if key not in {"signature", "signature_image_url"}:
+    if key not in MEMBER_SETTING_KEYS:
         raise ValueError("Unsupported member setting")
     await set_setting(f"member:{user_id}:{key}", value)
+
+
+async def member_daily_send_limit(user_id: int) -> int:
+    """Per-member ceiling on initial sends, falling back to the club default."""
+    import os
+
+    default = int(os.getenv("CAMPAIGN_DAILY_SEND_LIMIT", "100") or 100)
+    raw = await get_member_setting(user_id, "daily_send_limit")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return max(1, default)
+    # A member may lower the ceiling but not raise it past the club default.
+    return max(1, min(value, max(1, default)))
+
+
+async def member_send_warn_threshold(user_id: int) -> int | None:
+    """Warn the member once a run passes this many sends in a day."""
+    raw = await get_member_setting(user_id, "daily_send_warn_at")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None

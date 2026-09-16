@@ -26,6 +26,16 @@ class OwnershipConfirmation(BaseModel):
 class DispatchRecoveryRequest(BaseModel):
     dispatch_key: str
 
+
+class CampaignContactEmailUpdate(BaseModel):
+    """Subject/body arrive as a JSON body. They used to be query parameters,
+    which put whole HTML emails in the URL -- that exceeds CloudFront's 8 KB
+    request-line limit in production and logs message content in access logs."""
+
+    subject: str | None = None
+    body: str | None = None
+
+
 router = APIRouter()
 
 
@@ -393,7 +403,8 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
             )
             await db.commit()
             return []
-        daily_limit = max(1, int(os.getenv("CAMPAIGN_DAILY_SEND_LIMIT", "100") or 100))
+        from app.services.settings_service import member_daily_send_limit
+        daily_limit = await member_daily_send_limit(sender)
         reserved_today = await (await db.execute(
             """SELECT COUNT(*) AS n FROM outreach_dispatches
                WHERE sender_user_id=? AND claimed_at IS NOT NULL
@@ -581,7 +592,28 @@ async def release_campaign(campaign_id: int, user: dict = Depends(get_current_us
             (user["id"], campaign_id),
         )
         await db.commit()
-        return {"ok": True, "status": "releasing", "counts": readiness["counts"]}
+        # The drain claims at most the member's daily cap, so a release larger
+        # than the cap is paced over days. Saying so here is the only chance the
+        # member gets: the send loop runs unattended.
+        from app.services.settings_service import (
+            member_daily_send_limit,
+            member_send_warn_threshold,
+        )
+        daily_limit = await member_daily_send_limit(user["id"])
+        warn_at = await member_send_warn_threshold(user["id"])
+        queued = int(readiness["counts"].get("pending", 0) or 0)
+        allowance = {
+            "daily_limit": daily_limit,
+            "queued": queued,
+            "days_to_drain": max(1, -(-queued // daily_limit)) if queued else 0,
+            "warn_at": warn_at,
+        }
+        if warn_at is not None and queued > warn_at:
+            allowance["warning"] = (
+                f"This release queues {queued} first sends, above your warning "
+                f"threshold of {warn_at}."
+            )
+        return {"ok": True, "status": "releasing", "counts": readiness["counts"], "allowance": allowance}
     finally:
         await db.close()
 
@@ -774,10 +806,22 @@ async def update_campaign(
 
 @router.patch("/{campaign_id}/contact/{cc_id}")
 async def update_campaign_contact_email(
-    campaign_id: int, cc_id: int, subject: str | None = None, body: str | None = None,
+    campaign_id: int,
+    cc_id: int,
+    payload: CampaignContactEmailUpdate | None = None,
+    subject: str | None = None,
+    body: str | None = None,
     user: dict = Depends(get_current_user),
 ):
-    """Update email subject/body for a campaign contact."""
+    """Update email subject/body for a campaign contact.
+
+    The JSON body is the supported contract. Bare query parameters remain
+    accepted so an older client keeps working, but a full HTML body must not
+    travel in the URL.
+    """
+    if payload is not None:
+        subject = payload.subject if payload.subject is not None else subject
+        body = payload.body if payload.body is not None else body
     db = await get_db()
     try:
         from app.services.dispatch_service import begin_write
