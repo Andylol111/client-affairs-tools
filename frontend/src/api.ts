@@ -16,7 +16,22 @@ export type LogEntry = { user_id?: number; name?: string; id: number; created_at
 export type ApiKey = { key_prefix?: string; id: number; name: string; scopes?: string; created_at?: string; last_used_at?: string };
 export type StoredObject = { byte_size?: number; source?: string; id: number; kind: string; s3_key: string; bytes?: number; created_at?: string };
 export type CustomFormat = { id: number; name: string; pattern: string; priority?: number };
-export type Settings = { signature?: string; signature_image_url?: string; attachments_enabled?: string | boolean };
+export type Settings = {
+  signature?: string;
+  signature_image_url?: string;
+  attachments_enabled?: string | boolean;
+  daily_send_limit?: number;
+  daily_send_warn_at?: number | string;
+};
+
+/** Pacing for a release: the drain claims at most daily_limit per day. */
+export type SendAllowance = {
+  daily_limit: number;
+  queued: number;
+  days_to_drain: number;
+  warn_at?: number | null;
+  warning?: string;
+};
 export type PipelineMetrics = { by_status: { pipeline_status: string; count: number }[] };
 export type OneDriveItem = { id: string; name: string; folder?: object; size?: number };
 
@@ -238,8 +253,27 @@ export type EmailPatternRow = {
   confidence: number;
   sample_count: number;
   verified_samples: number;
+  failed_samples?: number;
   sources?: string[];
   updated_at?: string;
+};
+
+export type EmailPatternRegistry = {
+  items: (EmailPatternRow & { member_asserted?: boolean })[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type EmailPrediction = {
+  name: string;
+  domain: string;
+  candidates: string[];
+  best: string | null;
+  /** learned_pattern = a stored company format produced it; unknown_domain = we declined to guess. */
+  basis: 'learned_pattern' | 'generic_fallback' | 'unknown_domain';
+  pattern: EmailPatternRow | null;
+  patterns_known: number;
 };
 
 // Empty = same origin. Local Vite proxies /api → :8000. Hosted box serves SPA + API together.
@@ -561,6 +595,26 @@ export const api = {
       fetchApi<{ domain: string; patterns: EmailPatternRow[]; count: number }>(
         `/api/contacts/email-patterns?domain=${encodeURIComponent(domain)}`
       ),
+    /** Browse every company format on record. Omit a domain to list them all. */
+    emailPatternRegistry: (params: { q?: string; limit?: number; offset?: number } = {}) => {
+      const query = new URLSearchParams();
+      if (params.q) query.set('q', params.q);
+      if (params.limit != null) query.set('limit', String(params.limit));
+      if (params.offset != null) query.set('offset', String(params.offset));
+      const suffix = query.toString() ? `?${query}` : '';
+      return fetchApi<EmailPatternRegistry>(`/api/contacts/email-patterns${suffix}`);
+    },
+    predictEmail: (params: { name: string; domain?: string; company?: string }) => {
+      const query = new URLSearchParams({ name: params.name });
+      if (params.domain) query.set('domain', params.domain);
+      if (params.company) query.set('company', params.company);
+      return fetchApi<EmailPrediction>(`/api/contacts/predict-email?${query}`);
+    },
+    assertEmailPattern: (data: { domain: string; pattern_template: string; company_name?: string }) =>
+      fetchApi<{ ok: boolean; company_domain: string; pattern_key: string; pattern_template: string }>(
+        '/api/contacts/email-patterns',
+        { method: 'POST', body: JSON.stringify(data) }
+      ),
     reconcileIdentity: (domain?: string) =>
       fetchApi<{ fixed: number; removed: number; unchanged: number }>(
         `/api/contacts/reconcile-identity${domain ? '?domain=' + encodeURIComponent(domain) : ''}`,
@@ -633,7 +687,10 @@ export const api = {
     send: (id: number) =>
       fetchApi<{ ok: boolean; sent: number; failed: number; pending_left: number; status: string }>(`/api/campaigns/${id}/send`, { method: 'POST' }),
     release: (id: number) =>
-      fetchApi<{ ok: boolean; status: string; counts: Record<string, number> }>(`/api/campaigns/${id}/release`, { method: 'POST' }),
+      fetchApi<{ ok: boolean; status: string; counts: Record<string, number>; allowance?: SendAllowance }>(
+        `/api/campaigns/${id}/release`,
+        { method: 'POST' }
+      ),
     pause: (id: number) =>
       fetchApi<{ ok: boolean; status: string }>(`/api/campaigns/${id}/pause`, { method: 'POST' }),
     resume: (id: number) =>
@@ -641,8 +698,12 @@ export const api = {
     retryFailed: (id: number) =>
       fetchApi<{ ok: boolean; status: string; retried: number }>(`/api/campaigns/${id}/retry-failed`, { method: 'POST' }),
     updateContactEmail: (campaignId: number, ccId: number, subject?: string, body?: string) =>
-      fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}?${new URLSearchParams({ ...(subject != null && { subject }), ...(body != null && { body }) })}`, {
+      fetchApi<unknown>(`/api/campaigns/${campaignId}/contact/${ccId}`, {
         method: 'PATCH',
+        body: JSON.stringify({
+          ...(subject != null && { subject }),
+          ...(body != null && { body }),
+        }),
       }),
     removeContact: (campaignId: number, ccId: number) =>
       fetchApi<{ ok: boolean }>(`/api/campaigns/${campaignId}/contact/${ccId}`, { method: 'DELETE' }),
@@ -1177,7 +1238,13 @@ export const api = {
   },
   settings: {
     get: () => fetchApi<Settings>('/api/settings'),
-    update: (data: { signature?: string; signature_image_url?: string; attachments_enabled?: boolean }) =>
+    update: (data: {
+      signature?: string;
+      signature_image_url?: string;
+      attachments_enabled?: boolean;
+      daily_send_limit?: number;
+      daily_send_warn_at?: number;
+    }) =>
       fetchApi<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
     customFormats: {
       list: () => fetchApi<CustomFormat[]>('/api/settings/custom-formats'),

@@ -5,6 +5,7 @@ import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import CompanyDiscovery from '../components/discovery/CompanyDiscovery';
 import CompanyAutocomplete from '../components/CompanyAutocomplete';
+import EmailPrediction from '../components/EmailPrediction';
 import { Notice } from '../components/ui/Primitives';
 import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
 import { useProjects } from '../lib/useProjects';
@@ -290,6 +291,9 @@ export default function Scraper() {
 
   const [findName, setFindName] = useState('');
   const [findCompany, setFindCompany] = useState('');
+  // Carried when the company is picked from the known list; the domain there
+  // is authoritative, unlike resolving a typed display name.
+  const [findCompanyDomain, setFindCompanyDomain] = useState('');
   const [findLoading, setFindLoading] = useState(false);
   const [findResult, setFindResult] = useState<{
     query: string;
@@ -303,7 +307,8 @@ export default function Scraper() {
   const scrapeAbortRef = useRef<AbortController | null>(null);
   const [scrapeCancelArmed, setScrapeCancelArmed] = useState(false);
   const scrapeCancelArmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [emailPatterns, setEmailPatterns] = useState<EmailPatternRow[]>([]);
+  const [emailPatterns, setEmailPatterns] = useState<(EmailPatternRow & { member_asserted?: boolean })[]>([]);
+  const [patternsTotal, setPatternsTotal] = useState(0);
   const [patternsLoading, setPatternsLoading] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const [purging, setPurging] = useState(false);
@@ -326,14 +331,23 @@ export default function Scraper() {
 
   useEffect(() => {
     const raw = domain.trim();
-    if (!raw) return;
     const t = window.setTimeout(async () => {
       setPatternsLoading(true);
       try {
-        const res = await api.contacts.emailPatterns(raw);
-        setEmailPatterns(res.patterns || []);
+        if (raw) {
+          const res = await api.contacts.emailPatterns(raw);
+          setEmailPatterns(res.patterns || []);
+          setPatternsTotal(res.patterns?.length || 0);
+        } else {
+          // No domain yet: show the club's whole format registry rather than
+          // a dead end. The data was only reachable by naming a domain first.
+          const res = await api.contacts.emailPatternRegistry({ limit: 25 });
+          setEmailPatterns(res.items || []);
+          setPatternsTotal(res.total || 0);
+        }
       } catch {
         setEmailPatterns([]);
+        setPatternsTotal(0);
       } finally {
         setPatternsLoading(false);
       }
@@ -580,16 +594,40 @@ export default function Scraper() {
               aria-label="Full name"
               value={findName}
               onChange={(e) => setFindName(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50 focus:ring-2 focus:ring-steel-blue/40 focus:border-steel-blue"
             />
             <CompanyAutocomplete
               id="find-company"
               label="Company (optional)"
               value={findCompany}
               placeholder="Company (optional)"
-              onChange={(name) => setFindCompany(name)}
+              onChange={(name, option) => {
+                setFindCompany(name);
+                setFindCompanyDomain(option?.domain || '');
+              }}
             />
           </div>
+          <EmailPrediction
+            name={findName}
+            company={findCompany}
+            companyDomain={findCompanyDomain}
+            onUse={async (email, predictedDomain) => {
+              setError('');
+              setInfoMessage('');
+              try {
+                await api.contacts.create({
+                  email,
+                  name: findName.trim() || undefined,
+                  company: findCompany.trim() || undefined,
+                  // The resolved domain is what later pattern learning keys on.
+                  company_domain: predictedDomain || undefined,
+                  confidence: 'low',
+                });
+                setInfoMessage(`Saved ${email} to Contacts. It stays a derived guess until a send proves it.`);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Could not save that contact');
+              }
+            }}
+          />
           <button
             type="button"
             onClick={handleFindContact}
@@ -668,31 +706,44 @@ export default function Scraper() {
               />
             </div>
           </div>
-          {(domain.trim() || patternsLoading) && (
-            <div className="rounded-xl border border-pale-sky/80 bg-pale-sky/20 px-4 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <p className="text-[13px] font-medium text-deep-navy">Email layout cache {domain.trim() ? `· ${domain.trim()}` : ''}</p>
-                <div className="flex flex-wrap gap-3">
-                  <button type="button" onClick={handleReconcileIdentity} disabled={reconciling} className="text-[12px] font-semibold text-steel-blue hover:text-deep-navy disabled:opacity-50">{reconciling ? 'Reconciling…' : 'Fix identity mismatches'}</button>
-                  <button type="button" onClick={handlePurgeJunk} disabled={purging} className="text-[12px] font-semibold text-red-700 hover:text-red-900 disabled:opacity-50">{purging ? 'Purging…' : 'Remove nav junk contacts'}</button>
-                </div>
+          <div className="rounded-xl border border-pale-sky/80 bg-pale-sky/20 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <p className="text-[13px] font-medium text-deep-navy">
+                {domain.trim()
+                  ? `Email layout cache · ${domain.trim()}`
+                  : `Known company formats${patternsTotal ? ` · ${patternsTotal}` : ''}`}
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button type="button" onClick={handleReconcileIdentity} disabled={reconciling} className="text-[12px] font-semibold text-steel-blue hover:text-deep-navy disabled:opacity-50">{reconciling ? 'Reconciling…' : 'Fix identity mismatches'}</button>
+                <button type="button" onClick={handlePurgeJunk} disabled={purging} className="text-[12px] font-semibold text-red-700 hover:text-red-900 disabled:opacity-50">{purging ? 'Purging…' : 'Remove nav junk contacts'}</button>
               </div>
-              {patternsLoading ? (
-                <p className="text-[12px] text-slate-500">Loading patterns…</p>
-              ) : !domain.trim() || emailPatterns.length === 0 ? (
-                <p className="text-[12px] text-slate-500">No learned patterns yet for this domain.</p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {emailPatterns.map((p) => (
-                    <li key={p.pattern_key} className="text-[12px] text-slate-700 flex flex-wrap gap-x-2">
-                      <span className="font-mono font-medium text-deep-navy">{p.pattern_template}</span>
-                      <span className="text-slate-500">{Math.round((p.confidence || 0) * 100)}% · {p.verified_samples} verified</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
-          )}
+            {patternsLoading ? (
+              <p className="text-[12px] text-slate-500">Loading patterns…</p>
+            ) : emailPatterns.length === 0 ? (
+              <p className="text-[12px] text-slate-500">
+                {domain.trim()
+                  ? 'No learned patterns yet for this domain.'
+                  : 'No company formats recorded yet. They are learned from verified addresses, or set from Person lookup.'}
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {emailPatterns.map((p) => (
+                  <li key={`${p.company_domain}:${p.pattern_key}`} className="text-[12px] text-slate-700 flex flex-wrap gap-x-2">
+                    {!domain.trim() && (
+                      <span className="font-medium text-deep-navy">{p.company_name || p.company_domain}</span>
+                    )}
+                    <span className="font-mono font-medium text-deep-navy">{p.pattern_template}</span>
+                    <span className="text-slate-500">
+                      {Math.round((p.confidence || 0) * 100)}% · {p.verified_samples} verified
+                      {p.failed_samples ? ` · ${p.failed_samples} bounced` : ''}
+                      {p.member_asserted ? ' · set by a member' : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <div className="flex gap-2 w-full items-stretch">
             <button type="button" onClick={handleScrape} disabled={loading || (!companyName && !domain)} className="flex-1 min-w-0 py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40">
               {loading ? 'Scraping…' : 'Start scrape'}

@@ -30,6 +30,8 @@ export default function CampaignDetail() {
   const [addContactSearch, setAddContactSearch] = useState('');
   const [sequences, setSequences] = useState<FollowUpSequence[]>([]);
   const [error, setError] = useState('');
+  const [sendLimit, setSendLimit] = useState<number | null>(null);
+  const [sendWarnAt, setSendWarnAt] = useState<number | null>(null);
   const [contactOffset, setContactOffset] = useState(0);
   const [contactTotal, setContactTotal] = useState(0);
   const [contactLoading, setContactLoading] = useState(false);
@@ -61,6 +63,19 @@ export default function CampaignDetail() {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [campaign?.status, refresh]);
+
+  // Pacing is a property of the sender, so it is known before release and the
+  // member can be told what a large release will actually do.
+  useEffect(() => {
+    api.settings
+      .get()
+      .then((s) => {
+        setSendLimit(typeof s.daily_send_limit === 'number' ? s.daily_send_limit : null);
+        const warn = Number(s.daily_send_warn_at);
+        setSendWarnAt(Number.isFinite(warn) && warn > 0 ? warn : null);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -114,6 +129,22 @@ export default function CampaignDetail() {
   const contactsToAdd = contacts.filter((contact) => !existingIds.has(contact.id));
   const readiness = campaign.readiness || { ready: false, issues: ['Loading readiness…'] };
   const counts = campaign.counts || {};
+  const queued = counts.pending || 0;
+  const daysToDrain = sendLimit && queued ? Math.ceil(queued / sendLimit) : 0;
+  const releaseBody = [
+    `${queued} recipient${queued === 1 ? '' : 's'} will enter the paced send queue.`,
+    sendLimit
+      ? daysToDrain > 1
+        ? `Your limit is ${sendLimit} first sends a day, so this drains over about ${daysToDrain} days.`
+        : `Your limit is ${sendLimit} first sends a day, so this drains in one day.`
+      : '',
+    sendWarnAt != null && queued > sendWarnAt
+      ? `This is above your warning threshold of ${sendWarnAt}.`
+      : '',
+    'You can pause future batches from this page.',
+  ]
+    .filter(Boolean)
+    .join(' ');
   const canManage = canManageCampaign(campaign, user.id);
   const canEdit = canManage && campaign.status === 'draft';
 
@@ -247,7 +278,7 @@ export default function CampaignDetail() {
       <ConfirmDialog
         open={confirmRelease}
         title="Release this campaign?"
-        body={`${counts.pending || 0} recipients will enter the paced send queue. You can pause future batches from this page.`}
+        body={releaseBody}
         confirmLabel="Release campaign"
         busy={busy}
         onClose={() => setConfirmRelease(false)}

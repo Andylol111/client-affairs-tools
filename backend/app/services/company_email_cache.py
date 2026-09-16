@@ -193,6 +193,50 @@ def infer_pattern_from_pair(email: str, first: str, last: str) -> tuple[str, str
     return None
 
 
+# The learner emits these keys from observed pairs. A member-stated format has
+# to canonicalise to the same key, or the identical layout is stored twice and
+# neither row accumulates evidence.
+_CANONICAL_TEMPLATES: dict[str, str] = {
+    "{first}.{last}": "first.last",
+    "{first}{last}": "firstlast",
+    "{first_initial}{last}": "flast",
+    "{first}_{last}": "first_last",
+    "{last}.{first}": "last.first",
+    "{first}": "first",
+}
+
+
+def canonical_pattern(template: str) -> tuple[str, str]:
+    """Normalise a stated format to (pattern_key, template).
+
+    Accepts the placeholder form "{first}.{last}" and the shorthand
+    "first.last" that the admin format list already uses.
+    """
+    tpl = (template or "").strip()
+    if not tpl:
+        raise ValueError("An email format is required")
+    if "{" not in tpl:
+        shorthand = {key: canonical for canonical, key in _CANONICAL_TEMPLATES.items()}
+        match = shorthand.get(tpl.lower())
+        if not match:
+            raise ValueError("Use a format such as {first}.{last} or first.last")
+        tpl = match
+    known = _CANONICAL_TEMPLATES.get(tpl)
+    if known:
+        return known, tpl
+    if not any(token in tpl for token in ("{first}", "{last}", "{first_initial}")):
+        raise ValueError("Use a format such as {first}.{last} or {first_initial}{last}")
+    probe = _apply_custom_pattern(tpl, "jane", "doe")
+    if not probe or "@" in probe or len(probe) > 64:
+        raise ValueError("That format does not produce a usable mailbox name")
+    derived = (
+        tpl.replace("{first_initial}", "fi")
+        .replace("{first}", "first")
+        .replace("{last}", "last")
+    )
+    return derived[:60], tpl
+
+
 def _mail_host(email: str) -> str:
     if not email or "@" not in email:
         return ""
@@ -337,7 +381,7 @@ async def get_domain_patterns(domain: str) -> list[dict[str, Any]]:
     try:
         cur = await db.execute(
             f"""SELECT company_domain, company_name, pattern_key, pattern_template, confidence,
-                      sample_count, verified_samples, sources_json, updated_at
+                      sample_count, verified_samples, failed_samples, sources_json, updated_at
                FROM company_email_patterns WHERE company_domain IN ({placeholders})
                ORDER BY confidence DESC, verified_samples DESC""",
             hosts,
@@ -354,6 +398,218 @@ async def get_domain_patterns(domain: str) -> list[dict[str, Any]]:
         return out
     finally:
         await db.close()
+
+
+async def resolve_company_domain(text: str) -> str:
+    """Best-effort mail domain for a free-text company reference.
+
+    normalize_domain only strips URL syntax, so "Bain" survives as "bain" and
+    silently produces addresses like jane.doe@bain. Anything without a dot is
+    treated as a company *name* and matched against domains already on record.
+    Returns "" when the domain is genuinely unknown, so callers can decline to
+    guess instead of inventing a hostname.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    dom = normalize_domain(raw)
+    if "." in dom:
+        return dom
+    name = raw.lower()
+    like = f"%{name}%"
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT company_domain FROM company_email_patterns
+               WHERE LOWER(company_name) = ? OR LOWER(company_domain) LIKE ?
+               ORDER BY verified_samples DESC LIMIT 1""",
+            (name, f"{name}.%"),
+        )
+        row = await cur.fetchone()
+        if row and row["company_domain"]:
+            return str(row["company_domain"])
+        cur = await db.execute(
+            """SELECT company_domain, COUNT(*) AS n FROM contacts
+               WHERE company_domain IS NOT NULL AND company_domain != ''
+                 AND (LOWER(company) = ? OR LOWER(company) LIKE ?)
+               GROUP BY company_domain ORDER BY n DESC LIMIT 1""",
+            (name, like),
+        )
+        row = await cur.fetchone()
+        if row and row["company_domain"]:
+            return str(row["company_domain"])
+    finally:
+        await db.close()
+    return ""
+
+
+MEMBER_ASSERTED_CONFIDENCE = 0.80
+
+
+async def list_all_domain_patterns(
+    *, q: str | None = None, limit: int = 100, offset: int = 0
+) -> dict[str, Any]:
+    """Browse the institutional log of learned/asserted company formats.
+
+    get_domain_patterns answers for one known domain. Rendering "every company
+    whose format we know" needs this listing instead.
+    """
+    limit = max(1, min(int(limit or 100), 500))
+    offset = max(0, int(offset or 0))
+    where, params = "", []
+    term = (q or "").strip().lower()
+    if term:
+        where = "WHERE lower(company_domain) LIKE ? OR lower(IFNULL(company_name,'')) LIKE ?"
+        params = [f"%{term}%", f"%{term}%"]
+    db = await get_db()
+    try:
+        total = (await (await db.execute(
+            f"SELECT COUNT(*) AS n FROM company_email_patterns {where}", params
+        )).fetchone())["n"]
+        rows = await (await db.execute(
+            f"""SELECT company_domain, company_name, pattern_key, pattern_template, confidence,
+                       sample_count, verified_samples, failed_samples, sources_json, updated_at
+                FROM company_email_patterns {where}
+                ORDER BY verified_samples DESC, confidence DESC, company_domain
+                LIMIT ? OFFSET ?""",
+            [*params, limit, offset],
+        )).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["sources"] = json.loads(d.pop("sources_json") or "[]")
+            except Exception:
+                d["sources"] = []
+            d["member_asserted"] = any(str(s).startswith("member:") for s in d["sources"])
+            items.append(d)
+        return {"items": items, "total": int(total), "limit": limit, "offset": offset}
+    finally:
+        await db.close()
+
+
+async def set_member_asserted_pattern(
+    domain: str,
+    template: str,
+    *,
+    member_id: int,
+    company_name: str | None = None,
+) -> dict[str, Any]:
+    """Record a format a member knows first-hand.
+
+    A stated format is not an observed sample, so verified_samples is left
+    alone and confidence sits below a corroborated pattern. Learned evidence
+    therefore still outranks a human guess that turns out to be wrong.
+    """
+    dom = await resolve_company_domain(domain or "")
+    if not dom:
+        raw = (domain or "").strip()
+        if not raw:
+            raise ValueError("A company domain is required")
+        # Writing a format against "bain" would key the shared registry to a
+        # hostname that can never receive mail.
+        raise ValueError(
+            f"'{raw}' is not a mail domain and no domain is on record for it. "
+            "Give the domain itself, e.g. bain.com"
+        )
+    pattern_key, tpl = canonical_pattern(template)
+    source = f"member:{int(member_id)}"
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT id, sources_json FROM company_email_patterns WHERE company_domain=? AND pattern_key=?",
+            (dom, pattern_key),
+        )).fetchone()
+        if row:
+            try:
+                sources = json.loads(row["sources_json"] or "[]")
+            except Exception:
+                sources = []
+            if source not in sources:
+                sources.append(source)
+            await db.execute(
+                """UPDATE company_email_patterns
+                   SET pattern_template=?, sources_json=?,
+                       confidence=MAX(confidence, ?),
+                       company_name=COALESCE(?, company_name),
+                       updated_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (tpl, json.dumps(sources[-20:]), MEMBER_ASSERTED_CONFIDENCE, company_name, row["id"]),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO company_email_patterns
+                   (company_domain, company_name, pattern_key, pattern_template,
+                    confidence, sample_count, verified_samples, sources_json)
+                   VALUES (?,?,?,?,?,0,0,?)""",
+                (dom, company_name, pattern_key, tpl, MEMBER_ASSERTED_CONFIDENCE, json.dumps([source])),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"company_domain": dom, "pattern_key": pattern_key, "pattern_template": tpl}
+
+
+async def record_send_outcome(
+    db,
+    *,
+    email: str,
+    full_name: str,
+    delivered: bool,
+    source: str,
+) -> bool:
+    """Feed a real send outcome back into the format it was derived from.
+
+    A reply proves the mailbox exists, which is stronger than any crawl, so it
+    counts as a verified sample. A permanent failure is evidence against the
+    format, but only weak evidence: the person may simply have left. It is
+    therefore recorded as a failure that discounts confidence rather than
+    deleting a pattern that many other addresses still match.
+
+    Returns False when the address does not match a known format for the
+    domain, since an outcome then says nothing about any stored pattern.
+    """
+    mail = _mail_host(email)
+    if not mail or not full_name:
+        return False
+    key = pattern_for_email(email, full_name)
+    if not key:
+        return False
+    row = await (await db.execute(
+        """SELECT id, sample_count, verified_samples, failed_samples, sources_json
+           FROM company_email_patterns WHERE company_domain=? AND pattern_key=?""",
+        (mail, key),
+    )).fetchone()
+    if not row:
+        return False
+    try:
+        sources = json.loads(row["sources_json"] or "[]")
+    except Exception:
+        sources = []
+    if source not in sources:
+        sources.append(source)
+    verified = int(row["verified_samples"] or 0) + (1 if delivered else 0)
+    failed = int(row["failed_samples"] or 0) + (0 if delivered else 1)
+    samples = int(row["sample_count"] or 0)
+    # The learned curve alone would demote a member-asserted format on a
+    # successful reply, since a stated format carries no observed samples. Take
+    # the stronger of the two bases, then discount per observed failure. Derived
+    # from stored counts, so the result is idempotent rather than drifting.
+    asserted_floor = (
+        MEMBER_ASSERTED_CONFIDENCE
+        if any(str(s).startswith("member:") for s in sources)
+        else 0.0
+    )
+    base = max(0.35 + verified * 0.12 + samples * 0.03, asserted_floor)
+    confidence = min(0.98, base) - failed * 0.15
+    await db.execute(
+        """UPDATE company_email_patterns
+           SET verified_samples=?, failed_samples=?, confidence=?, sources_json=?,
+               updated_at=CURRENT_TIMESTAMP
+           WHERE id=?""",
+        (verified, failed, max(0.05, confidence), json.dumps(sources[-20:]), row["id"]),
+    )
+    return True
 
 
 def pattern_for_email(email: str, full_name: str) -> str | None:

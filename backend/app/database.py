@@ -726,6 +726,7 @@ async def init_db():
                 confidence REAL DEFAULT 0.5,
                 sample_count INTEGER DEFAULT 0,
                 verified_samples INTEGER DEFAULT 0,
+                failed_samples INTEGER DEFAULT 0,
                 sources_json TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(company_domain, pattern_key)
@@ -754,6 +755,15 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_contact_discovery_logs_run ON contact_discovery_logs(scrape_run_id);
         """)
         await db.commit()
+
+        # Migration: bounce feedback against a learned format.
+        try:
+            await db.execute(
+                "ALTER TABLE company_email_patterns ADD COLUMN failed_samples INTEGER DEFAULT 0"
+            )
+            await db.commit()
+        except Exception:
+            pass
 
         for col, col_type in [
             ("email_verification_status", "TEXT"),
