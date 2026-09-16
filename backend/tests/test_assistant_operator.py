@@ -55,12 +55,39 @@ def test_payload_and_sanitizers():
     assert parse_operator_payload('{"answer": "  "}') is None
     wrapped = 'Here you go\n{"answer": "Ready", "reads": []}\n'
     assert parse_operator_payload(wrapped)['answer'] == 'Ready'
+    like = assistant_service._find_people_payload(
+        'help me find people at companies like Niantic'
+    )
+    assert like['propose'][0]['args']['company_name'] == 'Niantic'
+    assert 'offline' not in like['answer'].lower()
+    assert assistant_service._named_company('Find people at Garmin') == 'Garmin'
     prompt = assistant_operator.operator_system_prompt()
     assert 'in-app operator' in prompt
+    assert 'companies like' in prompt.lower()
     assert 'website harness' in prompt
     assert 'optional' in prompt.lower() or 'fill Find people' in prompt.lower() or 'ask fields' in prompt.lower()
     assert sanitize_ask([{'id': 'titles', 'value': 'VPs'}])[0]['value'] == 'VPs'
     assert sanitize_ask([{'id': 'explode'}]) == []
+
+    prose = assistant_service._merge_operator_payload(
+        'Find people at Garmin', '', {'answer': 'Sure, I can help.'}
+    )
+    assert prose['propose'][0]['args']['company_name'] == 'Garmin'
+    assert any(item['id'] == 'titles' for item in prose['ask'])
+    last = assistant_service._merge_operator_payload(
+        'Import the last run into contacts', '/scraper?view=company&run=7', {'answer': 'Ok'}
+    )
+    assert last['propose'][0]['tool'] == 'import_run_to_contacts'
+    assert last['propose'][0]['args']['run_id'] == 7
+    listed = assistant_service._merge_operator_payload('Import the last run', '', {'answer': 'Ok'})
+    assert listed['propose'] == []
+    assert listed['reads'][0]['tool'] == 'list_discovery_runs'
+    opened = assistant_service._merge_operator_payload('take me to pipeline', '', {'answer': ''})
+    assert opened['open'][0]['path'] == '/outreach'
+    assert 'open that page' in opened['answer'].lower()
+    stay = assistant_service._merge_operator_payload('Send the campaign', '', {'answer': 'I will not send mail.', 'propose': [], 'open': []})
+    assert stay['propose'] == []
+    assert stay['open'] == []
 
     assert sanitize_reads(None) == []
     assert sanitize_reads('search_contacts') == []
@@ -173,8 +200,11 @@ async def run():
         await db.commit()
         await db.close()
 
-        with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=AssertionError('Find people must not call Bedrock'))):
+        acme_plan = json.dumps(assistant_service._find_people_payload('Find people at Acme'))
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value=acme_plan)) as acme_llm:
             result = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Find people at Acme', page_path='/scraper')
+        acme_llm.assert_called_once()
+        assert 'Find people at Acme' in acme_llm.call_args.args[0]
         assert result['pending_actions'][0]['tool'] == 'start_find_people'
         assert result['lookups'][0]['data']['count'] == 1
         assert result['navigations'][0]['path'].startswith('/scraper?')
@@ -182,12 +212,13 @@ async def run():
         assert result['asks'][0]['id'] == 'titles'
         assert result['asks'][0]['required'] is True
         assert 'ada@acme.com' in json.dumps(result['lookups'])
-        assert result['model'] == 'site-tools'
+        assert 'haiku' in result['model']
 
-        garmin = await assistant_service.answer(
-            {'id': 1, 'role': 'standard'},
-            'help me find people at Garmin to reach out to, VPs, execs in project management',
-        )
+        garmin_q = 'help me find people at Garmin to reach out to, VPs, execs in project management'
+        garmin_plan = json.dumps(assistant_service._find_people_payload(garmin_q))
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value=garmin_plan)) as garmin_llm:
+            garmin = await assistant_service.answer({'id': 1, 'role': 'standard'}, garmin_q)
+        garmin_llm.assert_called_once()
         assert garmin['pending_actions'][0]['args']['company_name'] == 'Garmin'
         assert garmin['pending_actions'][0]['args'].get('title_hints')
         titles = next(item['value'] for item in garmin['asks'] if item['id'] == 'titles')
@@ -197,10 +228,67 @@ async def run():
         assert 'titles=' in garmin['navigations'][0]['path']
         assert garmin['asks'][0]['required'] is True
 
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='Sure, I can help with that.')):
+            prose = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Find people at Garmin')
+        assert prose['pending_actions'][0]['args']['company_name'] == 'Garmin'
+        assert prose['asks'][0]['id'] == 'titles'
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='I can import that after you confirm.')):
+            importing = await assistant_service.answer(
+                {'id': 1, 'role': 'standard'},
+                'Import run 7 into contacts',
+                page_path='/scraper?view=company&run=7',
+            )
+        assert importing['pending_actions'][0]['tool'] == 'import_run_to_contacts'
+        assert importing['pending_actions'][0]['args']['run_id'] == 7
+        assert importing['lookups'][0]['tool'] == 'get_discovery_run'
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='I can import the latest completed run.')):
+            latest = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'Import the last run into contacts')
+        assert latest['pending_actions'][0]['args']['run_id'] == 7
+        assert latest['navigations'][0]['path'] == '/outreach'
+
+        with patch.object(assistant_service, 'complete_text', MagicMock(return_value='Opening Pipeline.')):
+            jump = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'take me to pipeline')
+        assert jump['navigations'][0]['path'] == '/outreach'
+        assert jump['pending_actions'] == []
+
+        with patch.object(assistant, 'answer', AsyncMock(return_value={
+            'answer': 'Confirm Acme',
+            'sources': [],
+            'model': 'haiku',
+            'grounded': False,
+            'lookups': [],
+            'pending_actions': [{
+                'tool': 'start_find_people',
+                'args': {'company_name': 'Acme', 'max_prospects': 250},
+                'summary': 'Find people at Acme (up to 250)',
+            }],
+            'navigations': [{'path': '/scraper?view=company&company=Acme', 'label': 'Find people'}],
+            'asks': [{'id': 'titles', 'label': 'Titles', 'value': '', 'required': True, 'placeholder': 'VPs'}],
+        })):
+            asked = await assistant.ask(assistant.AskRequest(question='Find people at Acme'), {'id': 1, 'role': 'standard'})
+        stored = await assistant.thread_messages(asked['thread_id'], {'id': 1})
+        assert stored[1]['pending_actions'][0]['tool'] == 'start_find_people'
+        assert stored[1]['asks'][0]['id'] == 'titles'
+        with patch('app.routers.yucgoutreach.import_run_to_contacts', AsyncMock(return_value={'created': 0, 'updated': 0, 'skipped': 0})):
+            await assistant.act(
+                assistant.ActRequest(tool='import_run_to_contacts', args={'run_id': 7}, thread_id=asked['thread_id']),
+                {'id': 1, 'role': 'standard'},
+            )
+        after = await assistant.thread_messages(asked['thread_id'], {'id': 1})
+        assert after[1]['pending_actions'] == []
+        assert after[-1]['navigations'][0]['path'] == '/outreach'
+
         from fastapi import HTTPException as FastAPIHTTPException
         with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):
             offline = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'What should I do on Pipeline?')
-        assert 'offline' in offline['answer'].lower() or 'forms' in offline['answer'].lower()
+        assert 'couldn\'t complete' in offline['answer'].lower()
+        assert 'company' in offline['answer'].lower()
+        assert offline['model'] == 'site-tools'
+        with patch.object(assistant_service, 'complete_text', MagicMock(side_effect=FastAPIHTTPException(503, 'The language model is unavailable right now.'))):
+            fallback = await assistant_service.answer({'id': 1, 'role': 'standard'}, 'help me find people at companies like Niantic')
+        assert fallback['pending_actions'][0]['args']['company_name'] == 'Niantic'
 
         runs_before = await execute_reads({'id': 1, 'role': 'standard'}, [{'tool': 'list_discovery_runs', 'args': {}}])
         assert runs_before[0]['data'][0]['id'] == 7

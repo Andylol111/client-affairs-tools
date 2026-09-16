@@ -155,7 +155,7 @@ async def _run() -> None:
     detail = {p["full_name"]: p for p in (await R.roster_detail(int(vb["id"])))["people"]}
     assert detail["Ada One"]["email_status"] == "provider_valid"
     assert detail["Bob Two"]["email_status"] == "bounced", "provider rejection tombstones"
-    assert detail["Cara Three"]["email_status"] == "mx_valid"
+    assert detail["Cara Three"]["email_status"] == "catch_all"
     db = await get_db()
     try:
         sup = await (await db.execute(

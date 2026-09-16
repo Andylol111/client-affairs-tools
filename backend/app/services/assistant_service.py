@@ -15,6 +15,7 @@ from app.database import get_db
 from app.services.llm import complete_text, rank_model_id
 from app.services.assistant_operator import (
     ASK_FIELDS,
+    NAV_PAGES,
     execute_reads,
     operator_system_prompt,
     parse_operator_payload,
@@ -235,11 +236,11 @@ _DOMAIN = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.I)
 
 def _named_company(question: str) -> str:
     match = re.search(
-        r"\b(?:at|for)\s+([A-Z][A-Za-z0-9&.'-]{1,40}(?:\s+[A-Z][A-Za-z0-9&.'-]{1,40}){0,3})",
+        r"\b(?:companies? like|like|at|for)\s+([A-Z][A-Za-z0-9&.'-]{1,40}(?:\s+[A-Z][A-Za-z0-9&.'-]{1,40}){0,3})",
         question or "",
     )
     name = (match.group(1) if match else "").strip()
-    if not name or name.lower() in {"yale", "yucg"}:
+    if not name or name.lower() in {"yale", "yucg", "companies", "people", "contacts"}:
         return ""
     return name[:500]
 
@@ -326,24 +327,172 @@ def _find_people_payload(question: str, *, offline: bool = False) -> dict[str, A
     }
 
 
-def _harness_fallback_payload(question: str) -> str:
-    """Keep Find people usable when Bedrock is down. Documents are not required."""
-    import json
-    payload = _find_people_payload(question, offline=True)
-    if payload:
-        return json.dumps(payload)
-    return json.dumps({
-        "answer": (
-            "The language model is offline, but I can still fill this app's forms. Which company should we search, "
+_IMPORT_INTENT = re.compile(
+    r"\b(import|keep (them|these|it)|save (them|these|the run)|add to contacts|into contacts)\b",
+    re.I,
+)
+_RUN_ID = re.compile(r"(?:[?&]run=|run\s*#?\s*)(\d+)", re.I)
+_GO_PAGE = re.compile(r"\b(go to|open|take me to|show me|switch to)\b", re.I)
+_ON_PAGE = re.compile(r"\bon (the )?(pipeline|studio|drafts|home|campaigns|documents|projects|results)\b", re.I)
+_PAGE_HINTS = (
+    (re.compile(r"\b(pipeline|outreach)\b", re.I), "/outreach"),
+    (re.compile(r"\b(studio|drafts)\b", re.I), "/studio"),
+    (re.compile(r"\b(campaigns?)\b", re.I), "/campaigns"),
+    (re.compile(r"\b(documents?)\b", re.I), "/documents"),
+    (re.compile(r"\b(projects?)\b", re.I), "/projects"),
+    (re.compile(r"\b(analytics|results|stats)\b", re.I), "/analytics"),
+    (re.compile(r"\b(target lists?)\b", re.I), "/yucgoutreach"),
+    (re.compile(r"\b(find (people|contacts)|scraper)\b", re.I), "/scraper?view=company"),
+    (re.compile(r"\bhome\b", re.I), "/"),
+    (re.compile(r"\bprofile\b", re.I), "/profile"),
+)
+
+
+def _run_id_from(text: str) -> int | None:
+    match = _RUN_ID.search(text or "")
+    if not match:
+        return None
+    run_id = int(match.group(1))
+    return run_id if run_id >= 1 else None
+
+
+def _unique_dicts(items: list[Any], field: str) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get(field) or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _open_pages(question: str) -> list[dict[str, str]]:
+    text = question or ""
+    if not _GO_PAGE.search(text) and not _ON_PAGE.search(text):
+        return []
+    out: list[dict[str, str]] = []
+    for pattern, path in _PAGE_HINTS:
+        if pattern.search(text):
+            label = NAV_PAGES.get(path.split("?", 1)[0], "Open page")
+            out.append({"path": path, "label": label})
+    return out[:4]
+
+
+def _import_run_payload(question: str, page_path: str) -> dict[str, Any] | None:
+    if not _IMPORT_INTENT.search(question or ""):
+        return None
+    run_id = _run_id_from(question or "") or _run_id_from(page_path or "")
+    reads = (
+        [{"tool": "get_discovery_run", "args": {"run_id": run_id}}]
+        if run_id
+        else [{"tool": "list_discovery_runs", "args": {}}]
+    )
+    propose = []
+    if run_id:
+        propose = [{
+            "tool": "import_run_to_contacts",
+            "args": {"run_id": run_id},
+            "summary": f"Import run #{run_id} into Contacts",
+        }]
+    answer = (
+        f"I can import Find people run #{run_id} into Contacts after you confirm. That does not send mail."
+        if run_id
+        else "I can import a finished Find people run into Contacts after you confirm. That does not send mail."
+    )
+    return {
+        "answer": answer,
+        "reads": reads,
+        "propose": propose,
+        "open": [{"path": "/outreach", "label": "Pipeline"}],
+    }
+
+
+def _latest_completed_run(lookups: list[dict[str, Any]]) -> int | None:
+    for item in lookups:
+        data = item.get("data")
+        if item.get("tool") == "list_discovery_runs" and isinstance(data, list):
+            for row in data:
+                if not isinstance(row, dict) or row.get("status") != "completed":
+                    continue
+                try:
+                    run_id = int(row.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if run_id >= 1:
+                    return run_id
+        if item.get("tool") == "get_discovery_run" and isinstance(data, dict) and not data.get("error"):
+            if data.get("status") != "completed":
+                continue
+            try:
+                run_id = int(data.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if run_id >= 1:
+                return run_id
+    return None
+
+
+def _merge_operator_payload(question: str, page_path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Fill Find people / import / open even when the model replies in prose or omits tools."""
+    merged = {
+        "answer": str(payload.get("answer") or "").strip(),
+        "reads": list(payload.get("reads") or []) if isinstance(payload.get("reads"), list) else [],
+        "ask": list(payload.get("ask") or []) if isinstance(payload.get("ask"), list) else [],
+        "propose": list(payload.get("propose") or []) if isinstance(payload.get("propose"), list) else [],
+        "open": list(payload.get("open") or []) if isinstance(payload.get("open"), list) else [],
+    }
+    find = _find_people_payload(question)
+    if find:
+        if not merged["answer"]:
+            merged["answer"] = find["answer"]
+        merged["reads"] = find["reads"] + merged["reads"]
+        merged["propose"] = find["propose"] + merged["propose"]
+        have = {item.get("id") for item in merged["ask"] if isinstance(item, dict)}
+        for field in find["ask"]:
+            if field["id"] not in have:
+                merged["ask"].append(field)
+        merged["open"] = find["open"] + merged["open"]
+    imported = _import_run_payload(question, page_path)
+    if imported:
+        if not merged["answer"]:
+            merged["answer"] = imported["answer"]
+        merged["reads"] = imported["reads"] + merged["reads"]
+        merged["propose"] = imported["propose"] + merged["propose"]
+        merged["open"] = imported["open"] + merged["open"]
+    opens = _open_pages(question)
+    if opens:
+        merged["open"] = opens + merged["open"]
+        if not merged["answer"]:
+            merged["answer"] = "I can open that page. I cannot send mail or delete records."
+    if not merged["answer"]:
+        merged["answer"] = (
+            "I can look up contacts, start Find people after you confirm, and open the right page. "
+            "I cannot send mail or delete records."
+        )
+    merged["reads"] = _unique_dicts(merged["reads"], "tool")
+    merged["propose"] = _unique_dicts(merged["propose"], "tool")
+    merged["open"] = _unique_dicts(merged["open"], "path")
+    return merged
+
+
+def _harness_fallback_payload(question: str, page_path: str | None = None) -> str:
+    """Keep site tools usable when Bedrock is down. Documents are not required."""
+    find = _find_people_payload(question, offline=True)
+    base = {
+        "answer": (find or {}).get("answer") or (
+            "I couldn't complete that with the language model on this turn. Which company should we search, "
             "and what titles or people do you already know you want to reach?"
         ),
         "reads": [],
-        "ask": [
-            {"id": "titles", "label": ASK_FIELDS["titles"]["label"], "value": "", "required": True, "placeholder": ASK_FIELDS["titles"]["placeholder"]},
-        ],
+        "ask": [],
         "propose": [],
-        "open": [{"path": "/scraper?view=company", "label": "Find people"}],
-    })
+        "open": [{"path": "/scraper?view=company", "label": "Find people"}] if not find else [],
+    }
+    return json.dumps(_merge_operator_payload(question, page_path or "", base))
 
 
 async def answer(
@@ -362,59 +511,66 @@ async def answer(
         f"CURRENT PAGE\n{page}\n\nSOURCE BLOCKS\n{sources_block}\n\n"
         f"RECENT CONVERSATION\n{prior or '(new conversation)'}\n\nMEMBER QUESTION\n{question}"
     )
-    cheap = _find_people_payload(question)
-    if cheap:
-        response = json.dumps(cheap)
-    else:
-        try:
-            response = await asyncio.to_thread(
-                complete_text,prompt,rank_model_id(),operator_system_prompt(),
-                user_id=user['id'],purpose='assistant',max_tokens=900,
-            )
-        except HTTPException as exc:
-            if exc.status_code != 503:
-                raise
-            response = _harness_fallback_payload(question)
-    payload = parse_operator_payload(response)
-    if payload:
-        answer_text = str(payload.get('answer') or '').strip()
-        lookups = await execute_reads(user, sanitize_reads(payload.get('reads')))
-        pending = sanitize_propose(payload.get('propose'))
-        navigations = sanitize_open(payload.get('open'))
-        asks = sanitize_ask(payload.get('ask'))
-        if lookups:
-            bits = []
-            pending_find = any(item.get('tool') == 'start_find_people' for item in pending)
-            for item in lookups:
-                data = item.get('data')
-                if pending_find and item.get('tool') == 'search_contacts':
-                    continue
-                if isinstance(data, dict) and data.get('error'):
-                    bits.append(f"{item['tool']}: {data['error']}")
-                elif isinstance(data, dict) and 'count' in data:
-                    bits.append(f"{item['tool']}: {data['count']} row(s)")
-                elif isinstance(data, list):
-                    bits.append(f"{item['tool']}: {len(data)} row(s)")
-            if bits:
-                answer_text = f"{answer_text}\n\nLooked up: " + '; '.join(bits)
-    else:
-        answer_text = (response or '').strip() or (
-            'I can look up contacts, start Find people after you confirm, and open the right page. I cannot send mail or delete records.'
+    used_llm = False
+    try:
+        response = await asyncio.to_thread(
+            complete_text,prompt,rank_model_id(),operator_system_prompt(),
+            user_id=user['id'],purpose='assistant',max_tokens=900,
         )
-        lookups = []
-        pending = []
-        navigations = []
-        asks = []
+        used_llm = True
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        response = _harness_fallback_payload(question, page_path)
+    payload = parse_operator_payload(response) or {"answer": (response or "").strip()}
+    payload = _merge_operator_payload(question, page_path or "", payload)
+    answer_text = str(payload.get('answer') or '').strip()
+    lookups = await execute_reads(user, sanitize_reads(payload.get('reads')))
+    pending = sanitize_propose(payload.get('propose'))
+    navigations = sanitize_open(payload.get('open'))
+    asks = sanitize_ask(payload.get('ask'))
+    if _IMPORT_INTENT.search(question or '') and not any(item.get('tool') == 'import_run_to_contacts' for item in pending):
+        run_id = _latest_completed_run(lookups)
+        if run_id:
+            pending = sanitize_propose(pending + [{
+                "tool": "import_run_to_contacts",
+                "args": {"run_id": run_id},
+                "summary": f"Import run #{run_id} into Contacts",
+            }])
+            navigations = sanitize_open(_unique_dicts(
+                navigations + [{"path": "/outreach", "label": "Pipeline"}],
+                "path",
+            ))
+    if lookups:
+        bits = []
+        pending_find = any(item.get('tool') == 'start_find_people' for item in pending)
+        for item in lookups:
+            data = item.get('data')
+            if pending_find and item.get('tool') == 'search_contacts':
+                continue
+            if isinstance(data, dict) and data.get('error'):
+                bits.append(f"{item['tool']}: {data['error']}")
+            elif isinstance(data, dict) and 'count' in data:
+                bits.append(f"{item['tool']}: {data['count']} row(s)")
+            elif isinstance(data, list):
+                bits.append(f"{item['tool']}: {len(data)} row(s)")
+        if bits:
+            answer_text = f"{answer_text}\n\nLooked up: " + '; '.join(bits)
     cited={match for match in re.findall(r'\[(D\d+-C\d+)\]',answer_text)}
     saved = 0
-    lookup_data = (lookups[0].get('data') if lookups else None) or {}
-    if isinstance(lookup_data, dict):
-        try:
-            saved = int(lookup_data.get('count') or 0)
-        except (TypeError, ValueError):
-            saved = 0
-    if pending and any(item['tool'] == 'start_find_people' for item in pending):
-        company = str(pending[0]['args'].get('company_name') or 'this company')
+    for item in lookups:
+        if item.get('tool') != 'search_contacts':
+            continue
+        lookup_data = item.get('data') or {}
+        if isinstance(lookup_data, dict):
+            try:
+                saved = int(lookup_data.get('count') or 0)
+            except (TypeError, ValueError):
+                saved = 0
+        break
+    find_action = next((item for item in pending if item['tool'] == 'start_find_people'), None)
+    if find_action:
+        company = str(find_action['args'].get('company_name') or 'this company')
         warehouse = f"{saved} already saved in the warehouse" if saved else "none already saved in the warehouse"
         answer_text = (
             f"{answer_text}\n\n{warehouse} at {company}. That is not the live search. "
@@ -423,7 +579,7 @@ async def answer(
     return {
         'answer': answer_text,
         'sources': [source for source in citations if source['id'] in cited],
-        'model': 'site-tools' if cheap else rank_model_id(),
+        'model': rank_model_id() if used_llm else 'site-tools',
         'grounded': bool(context),
         'lookups': lookups,
         'pending_actions': pending,

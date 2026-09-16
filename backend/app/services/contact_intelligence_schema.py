@@ -81,6 +81,25 @@ async def init_contact_intelligence_schema(db):
         CREATE TABLE IF NOT EXISTS discovery_run_owners (
             scrape_run_id TEXT PRIMARY KEY, owner_id INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS company_mail_domains (
+            website_domain TEXT NOT NULL,
+            mail_domain TEXT NOT NULL,
+            relation TEXT NOT NULL DEFAULT 'observed',
+            company_name TEXT,
+            mx_ok INTEGER,
+            catch_all INTEGER,
+            hard_to_reach INTEGER NOT NULL DEFAULT 0,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            bounce_count INTEGER NOT NULL DEFAULT 0,
+            reply_count INTEGER NOT NULL DEFAULT 0,
+            confidence REAL NOT NULL DEFAULT 0.5,
+            sources_json TEXT NOT NULL DEFAULT '[]',
+            note TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (website_domain, mail_domain)
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_mail_domains_mail
+            ON company_mail_domains(mail_domain);
     """)
     for table in ('generated_emails', 'outreach_dispatches'):
         columns = {row['name'] for row in await (await db.execute(f'PRAGMA table_info({table})')).fetchall()}

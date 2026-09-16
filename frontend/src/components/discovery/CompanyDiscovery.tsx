@@ -299,7 +299,7 @@ export default function CompanyDiscovery() {
               <p className="text-sm text-slate-600 mt-1" role="status">
                 {selected.progress_message || selected.status}
                 {prospects.length ? ` · ${prospects.length} people found so far` : ''}
-                {selected.max_prospects ? ` of ${selected.max_prospects}` : ''}
+                {prospects.length && selected.max_prospects ? ` of ${selected.max_prospects}` : ''}
               </p>
               {(selected.status === 'running' || selected.status === 'queued') && (
                 <div className="mt-3 h-2.5 rounded-full bg-pale-sky/70 overflow-hidden" aria-hidden>
@@ -395,7 +395,7 @@ export default function CompanyDiscovery() {
                     <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                       {selected.status === 'running' || selected.status === 'queued'
                         ? 'Discovery in progress…'
-                        : 'No verified prospects (junk filtered).'}
+                        : (selected.progress_message || 'No people saved for this run.')}
                     </td>
                   </tr>
                 )}

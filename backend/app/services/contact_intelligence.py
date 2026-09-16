@@ -124,8 +124,12 @@ def mailbox_from_legacy(result):
         return Mailbox.BAD_SYNTAX.value
     if reason == 'no_mx':
         return Mailbox.DOMAIN_HAS_NO_MAIL_ROUTE.value
-    if reason == 'recipient_rejected_5.1.1':
+    if reason == 'recipient_rejected_5.1.1' or result.get('smtp_probe') == 'invalid':
         return Mailbox.RECIPIENT_REJECTED.value
+    if result.get('catch_all') is True or result.get('smtp_probe') == 'catch_all':
+        return Mailbox.ACCEPT_ALL_OR_RISKY.value
+    if result.get('smtp_probe') == 'accepted' and result.get('catch_all') is False:
+        return Mailbox.PROVIDER_MEDIUM_CONFIDENCE.value
     if result.get('smtp_probe') == 'accepted':
         return Mailbox.ACCEPT_ALL_OR_RISKY.value
     if result.get('mx_valid') is True:
