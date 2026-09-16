@@ -280,8 +280,11 @@ test('checking an uncertain dispatch never calls a send endpoint', async ({ page
 test('campaign review exposes the exact recipient message for repair before release', async ({ page }) => {
   let updateBody = '';
   await page.route('**/api/campaigns/1/dispatches', route => route.fulfill({ json: [] }));
-  await page.route('**/api/campaigns/1/contact/11?*', route => {
-    updateBody = new URL(route.request().url()).searchParams.get('body') || '';
+  // The edit is sent as a JSON body, not query params: a recipient message can
+  // exceed the CloudFront URL limit and would otherwise land in access logs.
+  await page.route('**/api/campaigns/1/contact/11', route => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    updateBody = (route.request().postDataJSON() || {}).body || '';
     return route.fulfill({ json: { ok: true } });
   });
   await page.route('**/api/campaigns/1', async route => {
