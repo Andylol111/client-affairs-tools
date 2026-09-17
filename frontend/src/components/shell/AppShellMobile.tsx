@@ -1,4 +1,4 @@
-import type { NavItem } from '../../lib/navConfig';
+import { MOBILE_PRIMARY_IDS, type NavItem } from '../../lib/navConfig';
 import AppNavLink from './AppNavLink';
 
 type AppShellMobileProps = {
@@ -11,9 +11,9 @@ type AppShellMobileProps = {
  * Hidden on lg+ via CSS in index.css — do not render a duplicate menu in the header.
  */
 export default function AppShellMobile({ items, onOpenMenu }: AppShellMobileProps) {
-  const primaryItems = items.filter((item) =>
-    ['dashboard', 'projects', 'scraper', 'studio'].includes(item.id),
-  );
+  const primaryItems = MOBILE_PRIMARY_IDS.map((id) =>
+    items.find((item) => item.id === id),
+  ).filter((item): item is NavItem => !!item);
   return (
     <div className="app-mobile-shell">
       <nav className="app-mobile-nav" aria-label="Main navigation">

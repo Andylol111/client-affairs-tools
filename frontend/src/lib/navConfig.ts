@@ -41,6 +41,23 @@ export const ADMIN_NAV_ITEM: NavItem = {
   shortLabel: 'Admin',
 };
 
+/**
+ * Header layout. The Home screen lists every tool, so the header carries only
+ * the frequent doors plus two short dropdowns; four-item dropdowns made the
+ * menu the primary way to find anything.
+ *
+ * Both shells read this: desktop renders TOP_LEVEL_IDS then NAV_GROUPS, mobile
+ * renders MOBILE_PRIMARY_IDS with the drawer covering the rest.
+ */
+export const TOP_LEVEL_IDS: NavItemId[] = ['dashboard', 'scraper', 'campaigns'];
+
+export const NAV_GROUPS: { label: string; ids: NavItemId[] }[] = [
+  { label: 'Outreach', ids: ['studio', 'outreach', 'analytics'] },
+  { label: 'Club', ids: ['yucgoutreach', 'projects', 'documents'] },
+];
+
+export const MOBILE_PRIMARY_IDS: NavItemId[] = ['dashboard', 'scraper', 'studio', 'campaigns'];
+
 export function getNavItems(isAdmin: boolean): NavItem[] {
   return isAdmin ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
 }
