@@ -3,6 +3,7 @@ import { Link, useOutletContext } from 'react-router-dom';
 import { api, type LeaderboardRow, type CompanyReached } from '../api';
 import PageHeader from '../components/PageHeader';
 import GmailConnection from '../components/GmailConnection';
+import SlackIntegration from '../components/SlackIntegration';
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -152,6 +153,7 @@ export default function Dashboard() {
 
         <div className="space-y-6 min-w-0">
           <GmailConnection />
+          <SlackIntegration />
           <section className="surface-card p-5" aria-labelledby="my-companies-title">
             <div className="flex items-center justify-between gap-2 mb-1">
               <h2 id="my-companies-title" className="app-section-title">
