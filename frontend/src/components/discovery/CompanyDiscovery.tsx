@@ -175,7 +175,7 @@ export default function CompanyDiscovery() {
         <div>
           <h2 className="text-lg font-semibold text-deep-navy mb-1">Find people at a company</h2>
           <p className="text-sm text-slate-600">
-            Company-wide live search: website crawl, web search, and the club roster (SEC + Companies House officers), then inbox checks. Person lookup (the next tab) is only for one named person. Research is audience briefs, not this search.
+            Website crawl, web search, and the club roster (SEC + Companies House officers), then inbox checks. A company name is enough — its mail domain is looked up and MX-verified before anything is crawled.
           </p>
         </div>
         <CompanySuggestions onPick={applyCompany} />

@@ -92,7 +92,7 @@ async function mockResearch(page: Page) {
 
 test('research journey saves a brief, reviews evidence, and stays keyboard accessible', async ({ page }, testInfo) => {
   const mutations = await mockResearch(page);
-  await page.goto('/scraper');
+  await page.goto('/scraper?view=research');
   await expect(page.getByRole('heading', { level: 1, name: 'Find contacts' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Research' })).toHaveAttribute('aria-selected', 'true');
 
@@ -148,7 +148,7 @@ test('provider exhaustion keeps saved research and never implies a paid fallback
     }
     return route.fallback();
   });
-  await page.goto('/scraper');
+  await page.goto('/scraper?view=research');
   await expect(page.getByText('External validation credits are used up for today.')).toBeVisible();
   await expect(page.getByText('No paid provider is ever used automatically.')).toBeVisible();
   await page.getByRole('button', { name: 'Resume' }).click();

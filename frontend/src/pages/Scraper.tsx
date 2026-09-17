@@ -10,23 +10,21 @@ import { Notice } from '../components/ui/Primitives';
 import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
 import { useProjects } from '../lib/useProjects';
 import { useUrlTab } from '../lib/useUrlTab';
+type ScraperTab = 'research' | 'company' | 'formats' | 'find' | 'import';
 
-type ScraperTab = 'research' | 'company' | 'scrape' | 'find' | 'import';
 
-type ScrapeProgressState = {
-  phase: string;
-  pct: number;
-  message: string;
-  detail: string | null;
-};
-
-const PHASE_TYPICAL: Record<string, string> = {
-  init: 'Startup is usually a few seconds.',
-  domain: 'Site crawl: often 30 seconds–2 minutes depending on pages and latency.',
-  web: 'Web search: Tavily scans press, IR, and directories (30–90 seconds).',
-  prepare: 'Inbox + AI agent pools run in parallel (6 threaded Bedrock agents by default).',
-  save: 'Database save: quick unless you are upserting hundreds of rows.',
-};
+function aiVerdictClass(v?: string | null): string {
+  switch (v) {
+    case 'real':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'suspicious':
+      return 'bg-amber-100 text-amber-800';
+    case 'junk':
+      return 'bg-red-100 text-red-800';
+    default:
+      return 'bg-pale-sky/50 text-slate-blue';
+  }
+}
 
 function aiVerdictLabel(v?: string | null): string {
   switch (v) {
@@ -43,39 +41,6 @@ function aiVerdictLabel(v?: string | null): string {
   }
 }
 
-function aiVerdictClass(v?: string | null): string {
-  switch (v) {
-    case 'real':
-      return 'bg-emerald-100 text-emerald-800';
-    case 'suspicious':
-      return 'bg-amber-100 text-amber-800';
-    case 'junk':
-      return 'bg-red-100 text-red-800';
-    default:
-      return 'bg-pale-sky/50 text-slate-blue';
-  }
-}
-
-function formatScrapeSummary(res: {
-  count?: number;
-  found_total?: number;
-  duplicates_skipped?: number;
-  ai_junk_skipped?: number;
-}): string {
-  const found = res.found_total ?? res.count ?? 0;
-  const saved = res.count ?? 0;
-  const dupes = res.duplicates_skipped ?? 0;
-  const junk = res.ai_junk_skipped ?? 0;
-  const parts: string[] = [];
-  parts.push(`Found ${found} on page`);
-  if (saved > 0) parts.push(`${saved} new saved`);
-  if (dupes > 0) parts.push(`${dupes} already in database (shown below)`);
-  if (junk > 0) parts.push(`${junk} junk removed (not shown)`);
-  if (saved === 0 && found > 0 && dupes === found) {
-    return `Found ${found} contacts on page — all already in your database. They are listed below with fresh scrape metadata.`;
-  }
-  return parts.join(' · ');
-}
 
 function inboxStatusLabel(status?: string | null): string {
   switch (status) {
@@ -107,161 +72,7 @@ function inboxStatusClass(status?: string | null): string {
   }
 }
 
-function formatEtaSeconds(sec: number | null): string {
-  if (sec == null || !Number.isFinite(sec) || sec < 0) return 'calculating…';
-  if (sec < 90) return `~${Math.max(1, Math.round(sec))} seconds`;
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `~${m} min ${s} sec`;
-}
 
-/** `tick` bumps on an interval so elapsed/ETA refresh while backend progress is sparse (e.g. a slow crawl). */
-function elapsedSecondsSince(startedAt: number | null, tick: number): number {
-  if (!startedAt) return 0;
-  return Math.max(0, Math.round((tick - startedAt) / 1000));
-}
-
-function ScrapeProgressPanel({
-  progress,
-  startedAt,
-  tick,
-}: {
-  progress: ScrapeProgressState | null;
-  startedAt: number | null;
-  tick: number;
-}) {
-  const pct = progress?.pct ?? 0;
-  let etaSec: number | null = null;
-  if (startedAt && pct >= 4 && pct < 98) {
-    const el = Math.max(0, (tick - startedAt) / 1000);
-    if (el >= 1.2) {
-      etaSec = el * (100 / pct - 1);
-    }
-  }
-  const phaseKey = progress?.phase ?? 'init';
-  const typical = PHASE_TYPICAL[phaseKey] ?? PHASE_TYPICAL.init;
-  const detailLine = progress?.detail;
-  const tooltipTitle = [
-    progress?.message,
-    detailLine || '',
-    `Typical: ${typical}`,
-    etaSec != null ? `ETA: ${formatEtaSeconds(etaSec)}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-
-  return (
-    <div className="mt-5 space-y-2">
-      <div className="rounded-xl border border-pale-sky bg-white/90 px-4 py-3 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between mb-2">
-          <p className="text-[13px] font-medium text-deep-navy">{progress?.message || 'Working…'}</p>
-          <span className="text-[12px] tabular-nums text-slate-600">{Math.round(pct)}%</span>
-        </div>
-        <div className="relative group">
-          <div
-            className="relative h-2.5 rounded-full bg-pale-sky/70 overflow-hidden outline-none cursor-help"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(pct)}
-            aria-valuetext={tooltipTitle}
-            title={tooltipTitle}
-          >
-            <div
-              className="h-full rounded-full bg-[var(--btn-primary-bg)] transition-[width] duration-300 ease-out"
-              style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
-            />
-          </div>
-          <div
-            className="pointer-events-none absolute left-0 right-0 bottom-full mb-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-150 z-20"
-            role="tooltip"
-          >
-            <div className="rounded-lg border border-pale-sky bg-white shadow-lg px-3 py-2.5 text-[12px] text-slate-700 leading-snug space-y-1.5">
-              <p>
-                <span className="font-semibold text-deep-navy">ETA (trend): </span>
-                {etaSec != null
-                  ? formatEtaSeconds(etaSec)
-                  : 'Not enough progress yet—estimate appears after ~4% and a couple of seconds.'}
-              </p>
-              <p>
-                <span className="font-semibold text-deep-navy">Typical for this phase: </span>
-                {typical}
-              </p>
-              {detailLine && (
-                <p className="text-slate-600 border-t border-pale-sky/60 pt-1.5 mt-1">
-                  <span className="font-medium text-deep-navy">Detail: </span>
-                  {detailLine}
-                </p>
-              )}
-              <p className="text-[11px] text-slate-500">
-                Elapsed {startedAt ? `${elapsedSecondsSince(startedAt, tick)} s` : '—'} · Estimates assume current pace;
-                Web search can stall then finish quickly.
-              </p>
-            </div>
-          </div>
-        </div>
-        {detailLine && (
-          <p className="mt-2 text-[11px] text-slate-500 truncate" title={detailLine}>
-            {detailLine}
-          </p>
-        )}
-      </div>
-      <p className="text-[11px] text-slate-500 px-1">
-        Hover the progress bar for ETA and phase notes. The table preview below matches the columns of your results.
-      </p>
-    </div>
-  );
-}
-
-function ScrapeResultsSkeleton() {
-  const rows = 8;
-  return (
-    <div className="mt-6 bg-white rounded-2xl overflow-hidden shadow-sm border border-pale-sky" aria-busy="true" aria-label="Loading contacts preview">
-      <div className="px-5 py-4 border-b border-pale-sky flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div className="h-4 w-44 rounded-md bg-slate-200/90 animate-pulse" />
-        <span className="text-xs text-slate-500">Rows below mirror the table that will fill in when scraping completes</span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead>
-            <tr className="text-left text-[12px] text-slate-blue font-medium bg-pale-sky/40">
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3">Title</th>
-              <th className="px-4 py-3">Company</th>
-              <th className="px-4 py-3">LinkedIn</th>
-              <th className="px-4 py-3">Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: rows }).map((_, i) => (
-              <tr key={i} className="border-t border-pale-sky/50">
-                <td className="px-4 py-3">
-                  <div className="h-3.5 rounded bg-slate-200/80 animate-pulse w-[72%] max-w-[12rem]" />
-                </td>
-                <td className="px-4 py-3">
-                  <div className="h-3.5 rounded bg-slate-200/70 animate-pulse w-[85%] max-w-[14rem]" />
-                </td>
-                <td className="px-4 py-3">
-                  <div className="h-3.5 rounded bg-slate-200/70 animate-pulse w-[55%] max-w-[10rem]" />
-                </td>
-                <td className="px-4 py-3">
-                  <div className="h-3.5 rounded bg-slate-200/70 animate-pulse w-[60%] max-w-[9rem]" />
-                </td>
-                <td className="px-4 py-3">
-                  <div className="h-3.5 rounded bg-slate-200/65 animate-pulse w-16" />
-                </td>
-                <td className="px-4 py-3">
-                  <div className="h-5 rounded-md bg-slate-200/75 animate-pulse w-14" />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
 
 function ResearchTab() {
   const { projects, error } = useProjects();
@@ -271,7 +82,8 @@ function ResearchTab() {
 
 export default function Scraper() {
   const [params] = useSearchParams();
-  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'scrape', 'find', 'import'], 'research');
+  // Default to the crawl: it is the one door that turns a company name into people.
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'formats', 'find', 'import'], 'company');
   const discoveryKey = [
     params.get('company') || '',
     params.get('domain') || '',
@@ -279,10 +91,7 @@ export default function Scraper() {
     params.get('max') || '',
     params.get('run') || '',
   ].join('|');
-  const [companyName, setCompanyName] = useState('');
   const [domain, setDomain] = useState('');
-  const [maxPeople, setMaxPeople] = useState(200);
-  const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [error, setError] = useState('');
@@ -301,12 +110,6 @@ export default function Scraper() {
     summary: string | null;
     message: string | null;
   } | null>(null);
-  const [scrapeProgress, setScrapeProgress] = useState<ScrapeProgressState | null>(null);
-  const [scrapeTick, setScrapeTick] = useState(0);
-  const [scrapeStartedAt, setScrapeStartedAt] = useState<number | null>(null);
-  const scrapeAbortRef = useRef<AbortController | null>(null);
-  const [scrapeCancelArmed, setScrapeCancelArmed] = useState(false);
-  const scrapeCancelArmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [emailPatterns, setEmailPatterns] = useState<(EmailPatternRow & { member_asserted?: boolean })[]>([]);
   const [patternsTotal, setPatternsTotal] = useState(0);
   const [patternsLoading, setPatternsLoading] = useState(false);
@@ -317,34 +120,20 @@ export default function Scraper() {
   const [scrapeRunId, setScrapeRunId] = useState<string | null>(null);
   const [showDiscoveryLog, setShowDiscoveryLog] = useState(false);
 
-  useEffect(() => {
-    if (!loading || activeTab !== 'scrape') return;
-    const id = window.setInterval(() => setScrapeTick(Date.now()), 450);
-    return () => clearInterval(id);
-  }, [loading, activeTab]);
-
-  useEffect(() => {
-    return () => {
-      if (scrapeCancelArmTimeoutRef.current) clearTimeout(scrapeCancelArmTimeoutRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     const raw = domain.trim();
     const t = window.setTimeout(async () => {
       setPatternsLoading(true);
       try {
-        if (raw) {
-          const res = await api.contacts.emailPatterns(raw);
-          setEmailPatterns(res.patterns || []);
-          setPatternsTotal(res.patterns?.length || 0);
-        } else {
-          // No domain yet: show the club's whole format registry rather than
-          // a dead end. The data was only reachable by naming a domain first.
-          const res = await api.contacts.emailPatternRegistry({ limit: 25 });
-          setEmailPatterns(res.items || []);
-          setPatternsTotal(res.total || 0);
-        }
+        // One search path: the filter accepts a company name or a domain, and
+        // an empty filter lists the whole registry instead of a dead end.
+        const res = await api.contacts.emailPatternRegistry({
+          ...(raw ? { q: raw } : {}),
+          limit: 25,
+        });
+        setEmailPatterns(res.items || []);
+        setPatternsTotal(res.total || 0);
       } catch {
         setEmailPatterns([]);
         setPatternsTotal(0);
@@ -418,90 +207,8 @@ export default function Scraper() {
     }
   };
 
-  const disarmScrapeCancel = () => {
-    setScrapeCancelArmed(false);
-    if (scrapeCancelArmTimeoutRef.current) {
-      clearTimeout(scrapeCancelArmTimeoutRef.current);
-      scrapeCancelArmTimeoutRef.current = null;
-    }
-  };
 
-  const handleScrapeCancelClick = () => {
-    if (!loading) return;
-    if (!scrapeCancelArmed) {
-      setScrapeCancelArmed(true);
-      if (scrapeCancelArmTimeoutRef.current) clearTimeout(scrapeCancelArmTimeoutRef.current);
-      scrapeCancelArmTimeoutRef.current = setTimeout(() => {
-        setScrapeCancelArmed(false);
-        scrapeCancelArmTimeoutRef.current = null;
-      }, 6000);
-      return;
-    }
-    if (!window.confirm('Stop this scrape?\n\nThe request will disconnect and no further contacts will be saved. Rows already written stay in the database.')) {
-      disarmScrapeCancel();
-      return;
-    }
-    scrapeAbortRef.current?.abort();
-    disarmScrapeCancel();
-  };
 
-  const handleScrape = async () => {
-    if (!companyName && !domain) {
-      setError('Enter a company name or domain');
-      return;
-    }
-    disarmScrapeCancel();
-    setLoading(true);
-    setError('');
-    setInfoMessage('');
-    setContacts([]);
-    setDiscoveryLog([]);
-    setScrapeRunId(null);
-    setScrapeStartedAt(Date.now());
-    setScrapeProgress({ phase: 'init', pct: 0, message: 'Connecting to scraper…', detail: null });
-    const ac = new AbortController();
-    scrapeAbortRef.current = ac;
-    try {
-      const res = await api.contacts.scrapeStream(
-        {
-          company_name: companyName || undefined,
-          domain: domain || undefined,
-          max_people: maxPeople,
-        },
-        (ev) => {
-          if (ev.type === 'progress') {
-            setScrapeProgress({
-              phase: String(ev.phase ?? ''),
-              pct: typeof ev.pct === 'number' ? ev.pct : Number(ev.pct) || 0,
-              message: String(ev.message ?? ''),
-              detail: ev.detail != null ? String(ev.detail) : null,
-            });
-          }
-        },
-        { signal: ac.signal }
-      );
-      if (res.cancelled) {
-        setContacts(res.contacts || []);
-        setDiscoveryLog(res.discovery_log || []);
-        setScrapeRunId(res.scrape_run_id || null);
-        setInfoMessage((res.contacts?.length || 0) > 0 ? formatScrapeSummary(res) : 'Scrape stopped. Rows already found stay in the database.');
-        return;
-      }
-      setContacts(res.contacts || []);
-      setDiscoveryLog(res.discovery_log || []);
-      setScrapeRunId(res.scrape_run_id || null);
-      setInfoMessage((res.found_total || res.count || 0) > 0 ? formatScrapeSummary(res) : '');
-    } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed';
-      setError(eMessage || 'Scrape failed');
-    } finally {
-      scrapeAbortRef.current = null;
-      setLoading(false);
-      setScrapeProgress(null);
-      setScrapeStartedAt(null);
-      disarmScrapeCancel();
-    }
-  };
 
   const handleFindContact = async () => {
     const name = findName.trim();
@@ -554,18 +261,18 @@ export default function Scraper() {
     <div className="app-workspace pb-12">
       <PageHeader
         title="Find contacts"
-        subtitle="Find people = company-wide live search. Person lookup = one named person. Research = audience briefs. Instant scrape = one website."
+        subtitle="Name a company to collect people. One person = a single named contact. Import = a spreadsheet you already have."
         imageSrc="/yucg-bg/texture-panel.jpg"
       />
 
       <AppSubnav
         className="mb-8"
         items={[
-          { id: 'research', label: 'Research' },
           { id: 'company', label: 'Find people' },
-          { id: 'find', label: 'Person lookup' },
-          { id: 'scrape', label: 'Instant scrape' },
+          { id: 'find', label: 'One person' },
           { id: 'import', label: 'Import' },
+          { id: 'formats', label: 'Email formats' },
+          { id: 'research', label: 'Research' },
         ]}
         active={activeTab}
         onChange={(id) => {
@@ -573,7 +280,6 @@ export default function Scraper() {
           setError('');
           if (id !== 'find') setFindResult(null);
         }}
-        label="Find methods"
       />
 
       {activeTab === 'research' && <ResearchTab />}
@@ -667,50 +373,27 @@ export default function Scraper() {
       </>
       )}
 
-      {activeTab === 'scrape' && (
+      {activeTab === 'formats' && (
       <details className="mt-0 surface-card rounded-2xl border border-pale-sky overflow-hidden" open>
-        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Instant website scrape</summary>
+        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Company email formats</summary>
         <div className="px-5 pb-5 space-y-4 border-t border-pale-sky">
-          <p className="text-[13px] text-slate-500 pt-3">Live progress for a single domain. For dozens or hundreds of people, use the Find people tab.</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <CompanyAutocomplete
-              id="scrape-company"
-              label="Company name"
-              value={companyName}
-              placeholder="Company name"
-              onChange={(name, option) => {
-                setCompanyName(name);
-                if (option?.domain) setDomain(option.domain);
-              }}
-            />
-            <input
-              type="text"
-              placeholder="Domain (e.g. acme.com)"
-              aria-label="Company domain"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50"
-            />
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-            <div className="flex items-center gap-2 shrink-0">
-              <label htmlFor="max-employees" className="text-[15px] text-slate-blue whitespace-nowrap">Max people</label>
-              <input
-                id="max-employees"
-                type="number"
-                min={25}
-                max={300}
-                value={maxPeople}
-                onChange={(e) => setMaxPeople(parseInt(e.target.value, 10) || 200)}
-                className="w-20 px-3 py-2 rounded-lg bg-pale-sky/30 text-deep-navy text-[15px] text-right border border-pale-sky/50"
-              />
-            </div>
-          </div>
+          <p className="text-[13px] text-slate-500 pt-3">
+            Layouts learned from verified addresses, corrected by replies and bounces. Used to
+            derive addresses when a roster does not publish them.
+          </p>
+          <input
+            type="text"
+            placeholder="Filter by company or domain"
+            aria-label="Filter company formats"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            className="w-full max-w-sm px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50"
+          />
           <div className="rounded-xl border border-pale-sky/80 bg-pale-sky/20 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <p className="text-[13px] font-medium text-deep-navy">
                 {domain.trim()
-                  ? `Email layout cache · ${domain.trim()}`
+                  ? `Formats · ${domain.trim()}`
                   : `Known company formats${patternsTotal ? ` · ${patternsTotal}` : ''}`}
               </p>
               <div className="flex flex-wrap gap-3">
@@ -723,16 +406,14 @@ export default function Scraper() {
             ) : emailPatterns.length === 0 ? (
               <p className="text-[12px] text-slate-500">
                 {domain.trim()
-                  ? 'No learned patterns yet for this domain.'
-                  : 'No company formats recorded yet. They are learned from verified addresses, or set from Person lookup.'}
+                  ? 'No format on record for that company.'
+                  : 'No company formats recorded yet. They are learned from verified addresses, or set from One person.'}
               </p>
             ) : (
               <ul className="space-y-1.5">
                 {emailPatterns.map((p) => (
                   <li key={`${p.company_domain}:${p.pattern_key}`} className="text-[12px] text-slate-700 flex flex-wrap gap-x-2">
-                    {!domain.trim() && (
-                      <span className="font-medium text-deep-navy">{p.company_name || p.company_domain}</span>
-                    )}
+                    <span className="font-medium text-deep-navy">{p.company_name || p.company_domain}</span>
                     <span className="font-mono font-medium text-deep-navy">{p.pattern_template}</span>
                     <span className="text-slate-500">
                       {Math.round((p.confidence || 0) * 100)}% · {p.verified_samples} verified
@@ -744,22 +425,11 @@ export default function Scraper() {
               </ul>
             )}
           </div>
-          <div className="flex gap-2 w-full items-stretch">
-            <button type="button" onClick={handleScrape} disabled={loading || (!companyName && !domain)} className="flex-1 min-w-0 py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40">
-              {loading ? 'Scraping…' : 'Start scrape'}
-            </button>
-            <button type="button" onClick={handleScrapeCancelClick} disabled={!loading} className={`shrink-0 rounded-xl text-[14px] font-semibold border-2 ${loading ? 'px-4 py-3 border-red-300 bg-red-50 text-red-800' : 'max-w-0 opacity-0 px-0 overflow-hidden border-transparent'} ${scrapeCancelArmed ? 'ring-2 ring-amber-400' : ''}`}>
-              {scrapeCancelArmed ? 'Confirm stop' : 'Stop scrape'}
-            </button>
-          </div>
-          <button type="button" onClick={handleClearContactsCache} disabled={clearing || loading} className="text-[12px] font-semibold text-red-800 disabled:opacity-50">
+          <button type="button" onClick={handleClearContactsCache} disabled={clearing} className="text-[12px] font-semibold text-red-800 disabled:opacity-50">
             {clearing ? 'Clearing…' : 'Clear contacts & cache…'}
           </button>
-          {(loading || scrapeProgress) && <ScrapeProgressPanel progress={scrapeProgress} startedAt={scrapeStartedAt} tick={scrapeTick} />}
-          {loading && <ScrapeResultsSkeleton />}
         </div>
       </details>
-
       )}
 
       {activeTab === 'import' && (

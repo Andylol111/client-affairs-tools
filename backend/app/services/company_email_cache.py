@@ -4,6 +4,7 @@ Per-company verified email pattern cache — learn from corroborated name+email 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -440,6 +441,50 @@ async def resolve_company_domain(text: str) -> str:
             return str(row["company_domain"])
     finally:
         await db.close()
+    return ""
+
+
+async def discover_company_domain(name: str) -> str:
+    """Find a company's real mail domain from its name alone.
+
+    Tiered so the free tier answers most calls: what the club already knows,
+    then one official-website web search whose result must both look like the
+    company and resolve MX. Returns "" when nothing verifies.
+
+    This replaces extract_domain_from_company, which concatenated the first
+    three letters of the first two words ("Yale Undergraduate Consulting" ->
+    "yalund.com"). That fabricated a hostname and then crawled and mail-checked
+    against it, so a wrong domain looked like a company with no findable people.
+    """
+    company = (name or "").strip()
+    if not company:
+        return ""
+    known = await resolve_company_domain(company)
+    if known:
+        return known
+    web_ok = bool((os.getenv("TAVILY_API_KEY") or "").strip())
+    if not web_ok:
+        return ""
+    # Same evidence rule the roster resolver uses: the hit must look like the
+    # company and accept mail, otherwise it is just a search result.
+    from app.services.email_verifier import get_mx_cached
+    from app.services.roster_watch import _domain_matches_company, _registrable_domain
+    from app.services.web_contact_discovery import _tavily_search
+
+    try:
+        results = await _tavily_search(f"{company} official website", max_results=5)
+    except Exception:
+        return ""
+    for item in results or []:
+        candidate = _registrable_domain(str((item or {}).get("url") or ""))
+        if not candidate or not _domain_matches_company(company, candidate):
+            continue
+        try:
+            mx_ok, _ = await get_mx_cached(candidate, None)
+        except Exception:
+            mx_ok = False
+        if mx_ok:
+            return candidate
     return ""
 
 

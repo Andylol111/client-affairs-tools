@@ -1871,6 +1871,42 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   color: var(--deep-navy);
 }
 
+.app-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-tool {
+  display: block;
+  height: 100%;
+  padding: 0.875rem 1rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.app-tool:hover {
+  border-color: var(--steel-blue);
+}
+
+.app-tool__name {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--deep-navy);
+}
+
+.app-tool__what {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--slate-blue, #64748b);
+}
+
 .app-ai-select-wrap {
   display: flex;
   flex-direction: column;
