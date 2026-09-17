@@ -2,6 +2,8 @@ name: Production · Feature to Main
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       operation:
@@ -38,7 +40,7 @@ jobs:
         name: Choose Production waterfall
         env:
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
+          REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.head_ref) || github.ref }}
           OPERATION: ${{ inputs.operation || 'deliver' }}
         run: |
           if [ "$OPERATION" != deliver ]; then
@@ -48,7 +50,7 @@ jobs:
             exit 0
           fi
           case "$REF" in refs/heads/feature|refs/heads/main) ;; *) exit 1 ;; esac
-          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/main ]; then
+          if [ "$REF" != refs/heads/main ]; then
             echo phase=verify >> "$GITHUB_OUTPUT"
             echo 'Production: feature → main. All boundaries plus image. No ship until main.' >> "$GITHUB_STEP_SUMMARY"
           else
