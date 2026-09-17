@@ -1,0 +1,10 @@
+# Reviewed exceptions, not a blanket suppression. Both are the same class of
+# finding (encrypted with an AWS-managed key, not a customer-managed KMS key)
+# on resources where a CMK adds ~$1/mo each with no real risk reduction:
+# the backup bucket is already private, TLS-only, and AES256-encrypted; the
+# SNS topic only ever carries a weekly cost-alert text message. Paying for
+# CMKs here to satisfy a scanner default runs against the club's explicit
+# cost-discipline goal. Revisit if either resource starts holding anything
+# more sensitive. Review by 2027-03-01.
+AVD-AWS-0132 # terraform/main.tf - backups bucket, SSE-S3 matches live state
+AVD-AWS-0136 # terraform/budget.tf - SNS topic, AWS-managed key (alias/aws/sns)
