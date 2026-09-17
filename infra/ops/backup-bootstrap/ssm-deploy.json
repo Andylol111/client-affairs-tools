@@ -21,7 +21,7 @@
       "systemctl start yucg-backup.service",
       "sleep 8",
       "systemctl status yucg-backup.service --no-pager || true",
-      "aws s3 ls \"s3://$B/sqlite/\" --recursive || true"
+      "echo 'Verify from an operator session: this role can only PutObject to sqlite/*, never ListBucket.'"
     ]
   }
 }
