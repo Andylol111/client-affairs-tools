@@ -378,8 +378,7 @@ export default function Scraper() {
         <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Company email formats</summary>
         <div className="px-5 pb-5 space-y-4 border-t border-pale-sky">
           <p className="text-[13px] text-slate-500 pt-3">
-            Layouts learned from verified addresses, corrected by replies and bounces. Used to
-            derive addresses when a roster does not publish them.
+            Used to derive addresses when a roster does not publish them.
           </p>
           <input
             type="text"
@@ -407,7 +406,7 @@ export default function Scraper() {
               <p className="text-[12px] text-slate-500">
                 {domain.trim()
                   ? 'No format on record for that company.'
-                  : 'No company formats recorded yet. They are learned from verified addresses, or set from One person.'}
+                  : 'No company formats recorded yet.'}
               </p>
             ) : (
               <ul className="space-y-1.5">
