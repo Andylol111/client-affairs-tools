@@ -648,51 +648,6 @@ export default function Outreach() {
               </div>
             </div>
           )}
-          {activeTab === 'resources' && (
-            <div className="surface-card rounded-xl p-4 max-h-96 overflow-y-auto">
-              <h3 className="font-semibold text-deep-navy mb-1">Templates</h3>
-              <p className="text-xs text-slate-600 mb-3 leading-relaxed">
-                Reusable copy for first touches and follow-ups. Prefer a few strong templates per industry or use case; refine based on reply rate, not volume.
-              </p>
-              {templates.map((t) => (
-                <div key={t.id} className="p-3 border-b border-pale-sky last:border-0 flex justify-between items-center">
-                  <div>
-                    <div className="font-medium text-slate-800">{t.name}</div>
-                    <div className="text-xs text-slate-500">{t.industry || 'General'}</div>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      if (confirm('Delete this template?')) {
-                        try {
-                          await api.outreach.templates.delete(t.id);
-                          setTemplates((prev) => prev.filter((x) => x.id !== t.id));
-                        } catch (e) {
-                          alert((e as Error)?.message);
-                        }
-                      }
-                    }}
-                    className="text-xs text-red-600 hover:underline"
-                  >
-                    Delete
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {activeTab === 'resources' && (
-            <div className="surface-card rounded-xl p-4 max-h-96 overflow-y-auto">
-              <h3 className="font-semibold text-deep-navy mb-1">Sequences (follow-ups)</h3>
-              <p className="text-xs text-slate-600 mb-3 leading-relaxed">
-                Automated follow-up timing after the initial campaign send. Steps run only for contacts still marked as not replied; use <strong className="font-medium text-slate-700">Sync inbox</strong> on the Pipeline tab so Gmail replies update the board.
-              </p>
-              {sequences.map((s) => (
-                <div key={s.id} className="p-3 border-b border-pale-sky last:border-0">
-                  <div className="font-medium text-slate-800">{s.name}</div>
-                  <div className="text-xs text-slate-500">{s.steps?.length || 0} steps</div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Detail or editor */}
@@ -946,127 +901,180 @@ export default function Outreach() {
               </div>
             )
           )}
-          {activeTab === 'resources' && (
-            <div className="surface-card rounded-xl p-6">
-              <h3 className="font-semibold text-deep-navy mb-4">New Template</h3>
-              <p className="text-sm text-slate-600 mb-4">
+        </div>
+      </div>
+
+      {activeTab === 'resources' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="surface-card rounded-xl p-6 space-y-4">
+            <div>
+              <h3 className="font-semibold text-deep-navy">Templates</h3>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Reusable copy for first touches and follow-ups. Prefer a few strong templates per
+                industry or use case; refine based on reply rate, not volume.
+              </p>
+            </div>
+            {templates.length > 0 && (
+              <div className="max-h-64 overflow-y-auto border border-pale-sky rounded-lg divide-y divide-pale-sky">
+                {templates.map((t) => (
+                  <div key={t.id} className="p-3 flex justify-between items-center">
+                    <div>
+                      <div className="font-medium text-slate-800">{t.name}</div>
+                      <div className="text-xs text-slate-500">{t.industry || 'General'}</div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (confirm('Delete this template?')) {
+                          try {
+                            await api.outreach.templates.delete(t.id);
+                            setTemplates((prev) => prev.filter((x) => x.id !== t.id));
+                          } catch (e) {
+                            alert((e as Error)?.message);
+                          }
+                        }
+                      }}
+                      className="text-xs text-red-600 hover:underline"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="pt-2 border-t border-pale-sky space-y-3">
+              <p className="text-sm font-medium text-deep-navy">New template</p>
+              <p className="text-xs text-slate-500">
                 Use {'{first}'}, {'{last}'}, {'{company}'}, {'{title}'} for merge fields.
               </p>
-              <div className="space-y-3">
-                <input
-                  value={templateForm.name}
-                  onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="Template name"
-                  className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                />
-                <input
-                  value={templateForm.industry}
-                  onChange={(e) => setTemplateForm((p) => ({ ...p, industry: e.target.value }))}
-                  placeholder="Industry (optional)"
-                  className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                />
-                <input
-                  value={templateForm.subject}
-                  onChange={(e) => setTemplateForm((p) => ({ ...p, subject: e.target.value }))}
-                  placeholder="Subject"
-                  className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                />
-                <textarea
-                  value={templateForm.body}
-                  onChange={(e) => setTemplateForm((p) => ({ ...p, body: e.target.value }))}
-                  placeholder="Body"
-                  className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                  rows={6}
-                />
-                <button
-                  onClick={saveTemplate}
-                  disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
-                  className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-                >
-                  {loading ? 'Saving...' : 'Save Template'}
-                </button>
-              </div>
+              <input
+                value={templateForm.name}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Template name"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              <input
+                value={templateForm.industry}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, industry: e.target.value }))}
+                placeholder="Industry (optional)"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              <input
+                value={templateForm.subject}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, subject: e.target.value }))}
+                placeholder="Subject"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              <textarea
+                value={templateForm.body}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, body: e.target.value }))}
+                placeholder="Body"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+                rows={5}
+              />
+              <button
+                onClick={saveTemplate}
+                disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
+              >
+                {loading ? 'Saving...' : 'Save template'}
+              </button>
             </div>
-          )}
-          {activeTab === 'resources' && (
-            <div className="surface-card rounded-xl p-6">
-              <h3 className="font-semibold text-deep-navy mb-4">New Follow-up Sequence</h3>
-              <p className="text-sm text-slate-600 mb-4">
-                Define automated follow-ups (e.g. Day 3, Day 7). Use with campaigns.
+          </div>
+
+          <div className="surface-card rounded-xl p-6 space-y-4">
+            <div>
+              <h3 className="font-semibold text-deep-navy">Sequences (follow-ups)</h3>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Automated follow-up timing after the initial campaign send. Steps run only for
+                contacts still marked as not replied; use{' '}
+                <strong className="font-medium text-slate-700">Sync inbox</strong> on Pipeline so
+                Gmail replies update the board.
               </p>
-              <div className="space-y-4">
-                <input
-                  value={sequenceForm.name}
-                  onChange={(e) => setSequenceForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder="Sequence name"
-                  className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                />
-                {sequenceForm.steps.map((step, i) => (
-                  <div key={i} className="p-4 border border-pale-sky rounded-lg space-y-2">
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        value={step.days_after}
-                        onChange={(e) =>
-                          setSequenceForm((p) => ({
-                            ...p,
-                            steps: p.steps.map((s, j) =>
-                              j === i ? { ...s, days_after: parseInt(e.target.value) || 0 } : s
-                            ),
-                          }))
-                        }
-                        placeholder="Days after"
-                        className="w-24 px-3 py-2 rounded-lg border border-pale-sky"
-                      />
-                      <input
-                        value={step.subject}
-                        onChange={(e) =>
-                          setSequenceForm((p) => ({
-                            ...p,
-                            steps: p.steps.map((s, j) => (j === i ? { ...s, subject: e.target.value } : s)),
-                          }))
-                        }
-                        placeholder="Subject"
-                        className="flex-1 px-3 py-2 rounded-lg border border-pale-sky"
-                      />
-                    </div>
-                    <textarea
-                      value={step.body}
+            </div>
+            {sequences.length > 0 && (
+              <div className="max-h-64 overflow-y-auto border border-pale-sky rounded-lg divide-y divide-pale-sky">
+                {sequences.map((s) => (
+                  <div key={s.id} className="p-3">
+                    <div className="font-medium text-slate-800">{s.name}</div>
+                    <div className="text-xs text-slate-500">{s.steps?.length || 0} steps</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="pt-2 border-t border-pale-sky space-y-3">
+              <p className="text-sm font-medium text-deep-navy">New sequence</p>
+              <p className="text-xs text-slate-500">Define automated follow-ups (e.g. Day 3, Day 7). Use with campaigns.</p>
+              <input
+                value={sequenceForm.name}
+                onChange={(e) => setSequenceForm((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Sequence name"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              {sequenceForm.steps.map((step, i) => (
+                <div key={i} className="p-4 border border-pale-sky rounded-lg space-y-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      value={step.days_after}
                       onChange={(e) =>
                         setSequenceForm((p) => ({
                           ...p,
-                          steps: p.steps.map((s, j) => (j === i ? { ...s, body: e.target.value } : s)),
+                          steps: p.steps.map((s, j) =>
+                            j === i ? { ...s, days_after: parseInt(e.target.value) || 0 } : s
+                          ),
                         }))
                       }
-                      placeholder="Body"
-                      className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                      rows={3}
+                      placeholder="Days after"
+                      className="w-24 px-3 py-2 rounded-lg border border-pale-sky"
+                    />
+                    <input
+                      value={step.subject}
+                      onChange={(e) =>
+                        setSequenceForm((p) => ({
+                          ...p,
+                          steps: p.steps.map((s, j) => (j === i ? { ...s, subject: e.target.value } : s)),
+                        }))
+                      }
+                      placeholder="Subject"
+                      className="flex-1 px-3 py-2 rounded-lg border border-pale-sky"
                     />
                   </div>
-                ))}
-                <button
-                  onClick={() =>
-                    setSequenceForm((p) => ({
-                      ...p,
-                      steps: [...p.steps, { days_after: 7, subject: '', body: '' }],
-                    }))
-                  }
-                  className="text-sm text-[var(--accent)] hover:underline"
-                >
-                  + Add Step
-                </button>
-                <button
-                  onClick={saveSequence}
-                  disabled={loading || !sequenceForm.name}
-                  className="block px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-                >
-                  {loading ? 'Saving...' : 'Save Sequence'}
-                </button>
-              </div>
+                  <textarea
+                    value={step.body}
+                    onChange={(e) =>
+                      setSequenceForm((p) => ({
+                        ...p,
+                        steps: p.steps.map((s, j) => (j === i ? { ...s, body: e.target.value } : s)),
+                      }))
+                    }
+                    placeholder="Body"
+                    className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+                    rows={3}
+                  />
+                </div>
+              ))}
+              <button
+                onClick={() =>
+                  setSequenceForm((p) => ({
+                    ...p,
+                    steps: [...p.steps, { days_after: 7, subject: '', body: '' }],
+                  }))
+                }
+                className="text-sm text-[var(--accent)] hover:underline"
+              >
+                + Add step
+              </button>
+              <button
+                onClick={saveSequence}
+                disabled={loading || !sequenceForm.name}
+                className="block px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
+              >
+                {loading ? 'Saving...' : 'Save sequence'}
+              </button>
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
