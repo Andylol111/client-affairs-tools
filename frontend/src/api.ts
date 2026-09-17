@@ -35,6 +35,25 @@ export type SendAllowance = {
 export type PipelineMetrics = { by_status: { pipeline_status: string; count: number }[] };
 export type OneDriveItem = { id: string; name: string; folder?: object; size?: number };
 
+export type LeaderboardRow = {
+  user_id: number;
+  name: string | null;
+  picture: string | null;
+  sent: number;
+  replied: number;
+  penalized_bounces: number;
+  forgiven_bounces: number;
+  companies_reached: number;
+  quality_score: number;
+};
+export type CompanyReached = {
+  company: string;
+  company_domain?: string | null;
+  contacts_reached: number;
+  replies: number;
+  last_sent_at?: string | null;
+};
+
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
 export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
 export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
@@ -712,6 +731,12 @@ export const api = {
   },
   analytics: {
     dashboard: () => fetchApi<{ contacts_discovered_today: number; emails_in_queue: number; active_campaigns: number; total_sent: number; opened: number; open_rate: number; reply_rate: number }>('/api/analytics/dashboard'),
+    leaderboard: () =>
+      fetchApi<{ leaderboard: LeaderboardRow[] }>('/api/analytics/leaderboard'),
+    companiesReached: (userId?: number) =>
+      fetchApi<{ companies: CompanyReached[] }>(
+        `/api/analytics/companies-reached${userId != null ? `?user_id=${userId}` : ''}`
+      ),
     campaignMetrics: (id: number) => fetchApi<unknown>(`/api/analytics/campaigns/${id}/metrics`),
     insights: () => fetchApi<{ insights: string[] }>('/api/analytics/insights'),
     dueFollowUps: () => fetchApi<{ count: number }>('/api/analytics/due-follow-ups'),

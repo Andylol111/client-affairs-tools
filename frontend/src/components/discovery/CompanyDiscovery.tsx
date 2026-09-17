@@ -175,7 +175,7 @@ export default function CompanyDiscovery() {
         <div>
           <h2 className="text-lg font-semibold text-deep-navy mb-1">Find people at a company</h2>
           <p className="text-sm text-slate-600">
-            Website crawl, web search, and the club roster (SEC + Companies House officers), then inbox checks. A company name is enough — its mail domain is looked up and MX-verified before anything is crawled.
+            Website crawl, web search, and the club roster (SEC + Companies House officers), then inbox checks. A company name is enough — no domain or URL required.
           </p>
         </div>
         <CompanySuggestions onPick={applyCompany} />
