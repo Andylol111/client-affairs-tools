@@ -1938,8 +1938,10 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   min-width: 0;
 }
 
-.email-studio.app-workspace {
-  max-width: min(100%, 1920px);
+@layer components {
+  .email-studio.app-workspace {
+    max-width: min(100%, 1920px);
+  }
 }
 
 .email-studio-layout {
@@ -2397,10 +2399,12 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   padding: 1.125rem 1.25rem;
 }
 
-.app-workspace {
-  width: 100%;
-  max-width: 90rem;
-  margin-inline: auto;
+@layer components {
+  .app-workspace {
+    width: 100%;
+    max-width: 90rem;
+    margin-inline: auto;
+  }
 }
 
 .app-toolbar {
