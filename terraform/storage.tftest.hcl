@@ -1,9 +1,10 @@
 mock_provider "aws" {}
 
 variables {
-  account_id      = "123456789012"
-  bucket_prefix   = "yucg-contract-test"
-  frontend_origin = "https://club.example.org"
+  account_id                 = "123456789012"
+  bucket_prefix              = "yucg-contract-test"
+  frontend_origin            = "https://club.example.org"
+  weekly_compute_alert_email = "test@example.org"
 }
 
 run "disabled_by_default" {

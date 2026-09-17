@@ -27,8 +27,12 @@ data "archive_file" "budget_lambda" {
   output_path = "${path.module}/lambda-budget/handler.zip"
 }
 
+# AWS-managed key, no extra cost - this fixes a real Trivy finding (AWS-0095)
+# on a resource this session created, unlike the backups bucket encryption
+# finding below, which reflects live state that predates this Terraform.
 resource "aws_sns_topic" "weekly_compute_alert" {
-  name = "yucg-weekly-compute-alert"
+  name              = "yucg-weekly-compute-alert"
+  kms_master_key_id = "alias/aws/sns"
 }
 resource "aws_sns_topic_subscription" "weekly_compute_alert_email" {
   topic_arn = aws_sns_topic.weekly_compute_alert.arn
