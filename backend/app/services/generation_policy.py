@@ -136,6 +136,36 @@ async def reserve_assistant_request(user_id: int):
         await db.close()
 
 
+async def reserve_firecrawl_call(user_id: int):
+    """Same allowance shape as reserve_assistant_request: 15/hr/member, 120/hr club.
+
+    Per the Firecrawl expansion plan (docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md,
+    section 1.6): the OCI VM is a shared 2 OCPU/12GB box already serving another
+    tenant. Reuse this exact mechanism/numbers rather than inventing a new cap -
+    a second budget with different math is a second place to get the math wrong.
+    """
+    try:
+        member_limit = min(100, max(1, int(os.getenv('FIRECRAWL_CALLS_PER_MEMBER_PER_HOUR', '15'))))
+        club_limit = min(1000, max(1, int(os.getenv('FIRECRAWL_CALLS_PER_CLUB_PER_HOUR', '120'))))
+    except ValueError as exc:
+        raise HTTPException(503, 'Firecrawl quota configuration is invalid') from exc
+    db = await get_db()
+    try:
+        await db.execute('BEGIN IMMEDIATE')
+        row = await (await db.execute("""SELECT count(*) AS total,
+            coalesce(sum(CASE WHEN user_id=? THEN 1 ELSE 0 END),0) AS member
+            FROM usage_events WHERE event_type='firecrawl_reserved'
+            AND created_at>=datetime('now','-1 hour')""", (user_id,))).fetchone()
+        if row['total'] >= club_limit or row['member'] >= member_limit:
+            raise HTTPException(429, 'Web fetch limit reached. Please try again later.')
+        await db.execute(
+            "INSERT INTO usage_events(user_id,event_type,resource_type) VALUES(?,'firecrawl_reserved','web_fetch')",
+            (user_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def draft_evidence(db, contact: dict, actor_id: int) -> dict:
     """Use member-accepted public/project facts, never another member's private research."""
     from app.services.contact_intelligence import contact_evidence
