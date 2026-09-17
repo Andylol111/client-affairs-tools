@@ -292,8 +292,8 @@ async def export_analytics_csv():
 
 
 @router.get("/insights")
-async def get_ai_insights():
-    """AI-surfaced insights (plain-English observations). MVP: rule-based."""
+async def get_insights():
+    """Reply-rate observations for campaigns that have sent, compared against the member's own average."""
     db = await get_db()
     try:
         insights = []
@@ -305,16 +305,15 @@ async def get_ai_insights():
                JOIN campaign_contacts cc ON cc.campaign_id = c.id AND cc.sent_at IS NOT NULL
                GROUP BY c.id"""
         )
-        rows = await cursor.fetchall()
-        for r in rows:
-            if r["total"] and r["replied"]:
-                rate = r["replied"] / r["total"] * 100
-                insights.append(
-                    f"Campaign '{r['name']}' has a {rate:.1f}% reply rate — above average."
-                )
-        if not insights:
-            insights.append("Start by scraping contacts and generating personalized emails with AI.")
-            insights.append("Add contacts to a campaign and review emails before sending.")
+        rows = [r for r in await cursor.fetchall() if r["total"]]
+        rates = [(r["name"], r["replied"] / r["total"] * 100) for r in rows]
+        if rates:
+            average = sum(rate for _, rate in rates) / len(rates)
+            for name, rate in sorted(rates, key=lambda item: item[1], reverse=True):
+                if rate > average:
+                    insights.append(
+                        f"Campaign '{name}' has a {rate:.1f}% reply rate, above your {average:.1f}% average."
+                    )
         return {"insights": insights[:5]}
     finally:
         await db.close()
