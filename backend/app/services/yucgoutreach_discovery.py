@@ -23,7 +23,6 @@ from app.services.contact_ai_review import _log_row
 from app.services.contact_merge import merge_contacts
 from app.services.company_email_cache import build_email_for_person_sync
 from app.services.contact_scraper import (
-    extract_domain_from_company,
     is_employee_outreach_email,
     is_heuristic_junk_contact,
     is_valid_person_contact,

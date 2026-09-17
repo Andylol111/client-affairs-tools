@@ -21,7 +21,6 @@ from app.services.contact_intelligence import ingest_contact, contact_evidence, 
 from app.services.contact_merge import merge_contacts
 from app.services.contact_scraper import (
     scrape_contacts_from_domain,
-    extract_domain_from_company,
     infer_email_from_name,
     normalize_domain,
     sanitize_email,
@@ -85,7 +84,17 @@ async def _execute_scrape(
     scrape_run_id = str(uuid.uuid4())
     domain = req.domain
     if not domain and req.company_name:
-        domain = extract_domain_from_company(req.company_name)
+        # Real lookup, MX-verified. A fabricated hostname used to send the whole
+        # crawl at a domain that does not exist.
+        from app.services.company_email_cache import discover_company_domain
+
+        domain = await discover_company_domain(req.company_name)
+        if not domain:
+            raise HTTPException(
+                400,
+                f"No mail domain could be verified for '{req.company_name}'. "
+                "Enter the company domain to continue.",
+            )
     if not domain:
         raise HTTPException(400, "Provide a company domain or company name")
 
@@ -156,8 +165,6 @@ async def _execute_scrape(
     )
     await _check_cancel()
 
-    if not domain and company_name:
-        domain = extract_domain_from_company(company_name)
     domain = normalize_domain(domain or "")
 
     await emit("prepare", 85.0, "Merging contacts and loading email patterns", None)

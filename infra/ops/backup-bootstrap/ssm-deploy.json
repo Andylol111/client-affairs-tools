@@ -1,0 +1,27 @@
+{
+  "DocumentName": "AWS-RunShellScript",
+  "InstanceIds": ["i-09a071e22270b027c"],
+  "Comment": "Install opt-in SQLite backup to S3 (bootstrap files already staged in the bucket)",
+  "Parameters": {
+    "commands": [
+      "set -euo pipefail",
+      "mkdir -p /opt/yucg/backup /etc/yucg",
+      "B=yucgbak442429446212",
+      "aws s3 cp s3://$B/bootstrap/backup-to-s3.sh /opt/yucg/backup/backup-to-s3.sh",
+      "aws s3 cp s3://$B/bootstrap/backup_sqlite.py /opt/yucg/backup/backup_sqlite.py",
+      "aws s3 cp s3://$B/bootstrap/yucg-backup.service /etc/systemd/system/yucg-backup.service",
+      "aws s3 cp s3://$B/bootstrap/yucg-backup.timer /etc/systemd/system/yucg-backup.timer",
+      "chmod 0755 /opt/yucg/backup/backup-to-s3.sh /opt/yucg/backup/backup_sqlite.py",
+      "chmod 0644 /etc/systemd/system/yucg-backup.service /etc/systemd/system/yucg-backup.timer",
+      "printf 'BACKUP_UPLOAD_APPROVED=true\\nBACKUP_BUCKET=%s\\nAWS_DEFAULT_REGION=us-east-1\\nAWS_EC2_METADATA_DISABLED=false\\n' \"$B\" > /etc/yucg/backup.env",
+      "chown root:root /etc/yucg/backup.env",
+      "chmod 0600 /etc/yucg/backup.env",
+      "systemctl daemon-reload",
+      "systemctl enable --now yucg-backup.timer",
+      "systemctl start yucg-backup.service",
+      "sleep 8",
+      "systemctl status yucg-backup.service --no-pager || true",
+      "aws s3 ls \"s3://$B/sqlite/\" --recursive || true"
+    ]
+  }
+}

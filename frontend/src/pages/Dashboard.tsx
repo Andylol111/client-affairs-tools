@@ -43,9 +43,20 @@ const WEEK = [
   },
 ];
 
+/** Every work surface, with what it is for. Mirrors navConfig destinations. */
+const TOOLS = [
+  { name: 'Find contacts', what: 'Name a company and collect verified people', to: '/scraper' },
+  { name: 'Target lists', what: 'Pick companies and keep the right contacts', to: '/yucgoutreach' },
+  { name: 'Drafts', what: 'Write and generate emails per contact', to: '/studio' },
+  { name: 'Campaigns', what: 'Review recipients, release, and monitor sends', to: '/campaigns' },
+  { name: 'Pipeline', what: 'Track every contact by stage', to: '/outreach' },
+  { name: 'Results', what: 'Replies, delivery failures, and rates', to: '/analytics' },
+  { name: 'Projects', what: 'Semester projects and assignments', to: '/projects' },
+  { name: 'Documents', what: 'Club files the assistant can cite', to: '/documents' },
+];
+
 export default function Dashboard() {
   const [data, setData] = useState<typeof DEFAULT_DATA>(DEFAULT_DATA);
-  const [insights, setInsights] = useState<string[]>([]);
   const [dueFollowUps, setDueFollowUps] = useState(0);
   const [apiError, setApiError] = useState(false);
 
@@ -57,10 +68,6 @@ export default function Dashboard() {
         setData(DEFAULT_DATA);
         setApiError(true);
       });
-    api.analytics
-      .insights()
-      .then((i) => setInsights(i?.insights || []))
-      .catch(() => setInsights([]));
     api.analytics
       .dueFollowUps()
       .then((d) => setDueFollowUps(d?.count ?? 0))
@@ -122,21 +129,24 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="surface-card p-6">
-        <h2 className="text-lg font-semibold text-deep-navy mb-3">Notes from the numbers</h2>
-        <ul className="space-y-2">
-          {insights.length === 0 ? (
-            <li className="text-sm text-deep-navy/70">No insights yet.</li>
-          ) : (
-            insights.map((s, i) => (
-              <li key={i} className="text-deep-navy flex items-start gap-2">
-                <span className="text-steel-blue">•</span>
-                {s}
-              </li>
-            ))
-          )}
+      <section className="surface-card p-6" aria-labelledby="tools-title">
+        <h2 id="tools-title" className="text-lg font-semibold text-deep-navy mb-1">
+          Tools
+        </h2>
+        <p className="text-sm text-slate-600 mb-4">
+          Every door, openable in any order. Nothing here waits on another step.
+        </p>
+        <ul className="app-tool-grid">
+          {TOOLS.map((tool) => (
+            <li key={tool.to}>
+              <Link to={tool.to} className="app-tool surface-card">
+                <span className="app-tool__name">{tool.name}</span>
+                <span className="app-tool__what">{tool.what}</span>
+              </Link>
+            </li>
+          ))}
         </ul>
-      </div>
+      </section>
     </div>
   );
 }

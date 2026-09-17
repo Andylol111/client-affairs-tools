@@ -865,19 +865,6 @@ def sanitize_email(email: str) -> str:
     return email
 
 
-def extract_domain_from_company(company_name: str) -> Optional[str]:
-    """Infer domain from company name (e.g., 'Acme Corp' -> acme.com)."""
-    if not company_name:
-        return None
-    # Simple: lowercase, remove common suffixes, replace spaces with nothing
-    clean = re.sub(r"\b(inc|corp|llc|ltd|co|company)\b", "", company_name, flags=re.I)
-    clean = re.sub(r"[^a-zA-Z0-9\s]", "", clean).strip()
-    words = clean.split()
-    if not words:
-        return None
-    base = "".join(w[:3] for w in words[:2]) if len(words) > 1 else words[0][:6]
-    return f"{base.lower()}.com"
-
 def is_heuristic_junk_contact(contact: dict, company_name: str | None = None) -> tuple[bool, str]:
     """Fast local junk gate — skips Bedrock for obvious nav/product/role rows."""
     name = (contact.get("name") or "").strip()
@@ -1097,8 +1084,8 @@ async def _scrape_contacts_from_domain_html(
     Scrape a company domain for contact information.
     Returns list of contact dicts with name, email, title, confidence.
     """
-    if not domain:
-        domain = extract_domain_from_company(company_name or "")
+    # Callers resolve the domain (MX-verified) before reaching here. Guessing one
+    # from the name sent the crawler at hosts that do not exist.
     if not domain:
         return []
 

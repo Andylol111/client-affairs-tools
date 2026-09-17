@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import type { NavItem } from '../../lib/navConfig';
+import { NAV_GROUPS, TOP_LEVEL_IDS, type NavItem } from '../../lib/navConfig';
 import AppNavLink from './AppNavLink';
 
 type AppShellHeaderProps = {
@@ -22,13 +22,10 @@ export default function AppShellHeader({ user, navItems, onLogout }: AppShellHea
     document.addEventListener('pointerdown', closeOutside);
     return () => document.removeEventListener('pointerdown', closeOutside);
   }, []);
-  const groups = [
-    { label: 'Projects', ids: ['projects', 'documents'] },
-    { label: 'Contacts', ids: ['scraper', 'yucgoutreach'] },
-    { label: 'Outreach', ids: ['studio', 'campaigns', 'outreach', 'analytics'] },
-  ];
-  const groupedIds = new Set(groups.flatMap(group => group.ids));
-  const primary = navItems.filter(item => !groupedIds.has(item.id) && item.id !== 'admin');
+  const groups = NAV_GROUPS;
+  const primary = TOP_LEVEL_IDS.map(id => navItems.find(item => item.id === id)).filter(
+    (item): item is NavItem => !!item,
+  );
   return (
     <header className="app-shell-header app-top-nav sticky top-0 z-50">
       <div className="app-shell-header-inner">
