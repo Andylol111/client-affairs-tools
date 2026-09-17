@@ -1,6 +1,10 @@
 .terraform/
-*.tfstate*
-*.tfplan
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+terraform.tfvars.json
 backend.hcl
-*.auto.tfvars
+*.tfplan
+lambda-budget/handler.zip
 crash.log
+crash.*.log

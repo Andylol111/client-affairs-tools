@@ -1,0 +1,5 @@
+account_id                 = "442429446212"
+frontend_origin             = "https://d2vjpur8zjk0ai.cloudfront.net"
+weekly_compute_alert_email = "you@yale.edu"
+# bucket_prefix and enable_new_storage only matter if you opt into the
+# not-yet-approved static/documents buckets; leave them unset otherwise.
