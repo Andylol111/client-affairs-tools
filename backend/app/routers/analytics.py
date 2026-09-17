@@ -8,6 +8,78 @@ from app.database import get_db
 router = APIRouter()
 
 
+
+@router.get("/leaderboard")
+async def get_leaderboard():
+    """Per-member send quality, not volume. Ranks replies and calls above raw
+    sent count, and only counts a bounce against a member when the address
+    was independently verified (contacts.confidence='high') - a bounce on an
+    AI-derived guess (confidence 'low'/'medium', set when a member accepts a
+    predicted address) reflects the prediction, not the member's outreach,
+    and must not be held against them.
+    """
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            """SELECT
+                 u.id AS user_id,
+                 u.name,
+                 u.picture,
+                 COUNT(*) FILTER (WHERE cc.status IN ('sent','replied','bounced')) AS sent,
+                 COUNT(*) FILTER (WHERE cc.status = 'replied') AS replied,
+                 COUNT(*) FILTER (WHERE cc.status = 'bounced' AND c.confidence = 'high') AS penalized_bounces,
+                 COUNT(*) FILTER (WHERE cc.status = 'bounced' AND c.confidence != 'high') AS forgiven_bounces,
+                 COUNT(DISTINCT c.company) FILTER (WHERE cc.status IN ('sent','replied','bounced')) AS companies_reached
+               FROM campaign_contacts cc
+               JOIN users u ON u.id = cc.sent_by_user_id
+               JOIN contacts c ON c.id = cc.contact_id
+               WHERE cc.sent_by_user_id IS NOT NULL
+               GROUP BY u.id
+               HAVING sent > 0"""
+        )).fetchall()
+        board = []
+        for r in rows:
+            d = dict(r)
+            # Replies and calls are the point; volume alone earns nothing.
+            # A verified-address bounce costs more than a raw send is worth,
+            # so spamming unverified volume cannot outscore fewer, real replies.
+            d["quality_score"] = d["replied"] * 10 - d["penalized_bounces"] * 4
+            board.append(d)
+        board.sort(key=lambda d: (-d["quality_score"], -d["replied"]))
+        return {"leaderboard": board}
+    finally:
+        await db.close()
+
+
+@router.get("/companies-reached")
+async def get_companies_reached(user_id: int | None = None):
+    """Companies a member (or, for an admin query, anyone) has already
+    contacted - so a member can check before starting outreach somewhere
+    someone else already covered."""
+    db = await get_db()
+    try:
+        params: list = []
+        scope = ""
+        if user_id is not None:
+            scope = "AND cc.sent_by_user_id = ?"
+            params.append(user_id)
+        rows = await (await db.execute(
+            f"""SELECT c.company, c.company_domain,
+                      COUNT(DISTINCT c.id) AS contacts_reached,
+                      SUM(CASE WHEN cc.status = 'replied' THEN 1 ELSE 0 END) AS replies,
+                      MAX(cc.sent_at) AS last_sent_at
+               FROM campaign_contacts cc
+               JOIN contacts c ON c.id = cc.contact_id
+               WHERE cc.status IN ('sent','replied','bounced') {scope}
+               GROUP BY c.company
+               ORDER BY last_sent_at DESC""",
+            params,
+        )).fetchall()
+        return {"companies": [dict(r) for r in rows]}
+    finally:
+        await db.close()
+
+
 @router.get("/dashboard")
 async def get_dashboard():
     """Home dashboard metrics: active campaigns, contacts discovered, emails in queue."""

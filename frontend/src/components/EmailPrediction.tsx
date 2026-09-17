@@ -212,8 +212,7 @@ export default function EmailPrediction({
 
       {!unknownDomain && (
         <p className="text-[11px] text-slate-500 mt-2">
-          A derived address is a guess, not mailbox proof. A reply or a bounce is the evidence, and
-          both feed back into this company's format.
+          A derived address is a guess, not mailbox proof.
         </p>
       )}
     </div>

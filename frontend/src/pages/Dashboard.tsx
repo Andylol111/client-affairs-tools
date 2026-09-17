@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api } from '../api';
+import { Link, useOutletContext } from 'react-router-dom';
+import { api, type LeaderboardRow, type CompanyReached } from '../api';
 import PageHeader from '../components/PageHeader';
+import GmailConnection from '../components/GmailConnection';
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -12,38 +13,9 @@ const DEFAULT_DATA = {
   reply_rate: 0,
 };
 
-const WEEK = [
-  {
-    n: '1',
-    door: 'Target lists',
-    title: 'Choose companies',
-    body: 'Choose companies for a defined outreach effort.',
-    to: '/yucgoutreach',
-  },
-  {
-    n: '2',
-    door: 'Target lists',
-    title: 'Review contacts',
-    body: 'Review suggested addresses and keep relevant contacts. A working domain does not confirm a mailbox exists.',
-    to: '/yucgoutreach?view=comb',
-  },
-  {
-    n: '3',
-    door: 'Drafts',
-    title: 'Write',
-    body: 'Select a contact, prepare an email, and save your draft.',
-    to: '/studio',
-  },
-  {
-    n: '4',
-    door: 'Campaigns',
-    title: 'Review and send',
-    body: 'Review your sender account and recipients in Campaigns. Monitor replies and delivery failures after sending.',
-    to: '/campaigns',
-  },
-];
-
-/** Every work surface, with what it is for. Mirrors navConfig destinations. */
+/** Every work surface, one click each. Mirrors navConfig destinations - the
+ * only place tool links live; the nav header groups the same set, nothing
+ * here duplicates it. */
 const TOOLS = [
   { name: 'Find contacts', what: 'Name a company and collect verified people', to: '/scraper' },
   { name: 'Target lists', what: 'Pick companies and keep the right contacts', to: '/yucgoutreach' },
@@ -56,9 +28,12 @@ const TOOLS = [
 ];
 
 export default function Dashboard() {
+  const { user } = useOutletContext<{ user: { id?: number; name?: string; picture?: string } }>();
   const [data, setData] = useState<typeof DEFAULT_DATA>(DEFAULT_DATA);
   const [dueFollowUps, setDueFollowUps] = useState(0);
   const [apiError, setApiError] = useState(false);
+  const [board, setBoard] = useState<LeaderboardRow[]>([]);
+  const [myCompanies, setMyCompanies] = useState<CompanyReached[]>([]);
 
   useEffect(() => {
     api.analytics
@@ -72,7 +47,19 @@ export default function Dashboard() {
       .dueFollowUps()
       .then((d) => setDueFollowUps(d?.count ?? 0))
       .catch(() => setDueFollowUps(0));
+    api.analytics
+      .leaderboard()
+      .then((d) => setBoard(d.leaderboard || []))
+      .catch(() => setBoard([]));
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    api.analytics
+      .companiesReached(user.id)
+      .then((d) => setMyCompanies(d.companies || []))
+      .catch(() => setMyCompanies([]));
+  }, [user?.id]);
 
   const cards = [
     { label: 'Found today', value: data.contacts_discovered_today ?? 0, to: '/scraper' },
@@ -98,28 +85,6 @@ export default function Dashboard() {
         </p>
       )}
 
-      <section className="app-week-guide mb-8" aria-labelledby="week-guide-title">
-        <h2 id="week-guide-title" className="app-week-guide__title">
-          How outreach works
-        </h2>
-        <ol className="app-week-guide__list">
-          {WEEK.map((step) => (
-            <li key={step.n} className="app-week-guide__item">
-              <Link to={step.to} className="app-week-guide__link">
-                <span className="app-week-guide__n" aria-hidden="true">
-                  {step.n}
-                </span>
-                <span className="app-week-guide__copy">
-                  <span className="app-week-guide__door">{step.door}</span>
-                  <span className="app-week-guide__name">{step.title}</span>
-                  <span className="app-week-guide__how">{step.body}</span>
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ol>
-      </section>
-
       <div className="app-stat-grid mb-8">
         {cards.map((c) => (
           <Link key={c.label} to={c.to} className="app-stat surface-card">
@@ -129,24 +94,95 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <section className="surface-card p-6" aria-labelledby="tools-title">
-        <h2 id="tools-title" className="text-lg font-semibold text-deep-navy mb-1">
-          Tools
-        </h2>
-        <p className="text-sm text-slate-600 mb-4">
-          Every door, openable in any order. Nothing here waits on another step.
-        </p>
-        <ul className="app-tool-grid">
-          {TOOLS.map((tool) => (
-            <li key={tool.to}>
-              <Link to={tool.to} className="app-tool surface-card">
-                <span className="app-tool__name">{tool.name}</span>
-                <span className="app-tool__what">{tool.what}</span>
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+        <div className="space-y-6 min-w-0">
+          <section className="surface-card p-6" aria-labelledby="tools-title">
+            <h2 id="tools-title" className="text-lg font-semibold text-deep-navy mb-4">
+              Tools
+            </h2>
+            <ul className="app-tool-grid">
+              {TOOLS.map((tool) => (
+                <li key={tool.to}>
+                  <Link to={tool.to} className="app-tool surface-card">
+                    <span className="app-tool__name">{tool.name}</span>
+                    <span className="app-tool__what">{tool.what}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="surface-card p-6" aria-labelledby="leaderboard-title">
+            <h2 id="leaderboard-title" className="text-lg font-semibold text-deep-navy mb-1">
+              This semester's leaderboard
+            </h2>
+            <p className="text-sm text-slate-600 mb-4">
+              Ranked by replies, not volume. Bounces on unverified addresses don't count against
+              you.
+            </p>
+            {board.length === 0 ? (
+              <p className="text-sm text-slate-500">No sends recorded yet.</p>
+            ) : (
+              <ol className="space-y-2">
+                {board.map((row, i) => (
+                  <li
+                    key={row.user_id}
+                    className={`flex items-center gap-3 rounded-xl px-3 py-2 ${
+                      row.user_id === user?.id ? 'bg-pale-sky/40' : ''
+                    }`}
+                  >
+                    <span className="w-5 text-sm font-semibold text-slate-500">{i + 1}</span>
+                    {row.picture && (
+                      <img src={row.picture} alt="" className="w-7 h-7 rounded-full" referrerPolicy="no-referrer" />
+                    )}
+                    <span className="flex-1 text-sm font-medium text-deep-navy truncate">
+                      {row.name || 'Member'}
+                      {row.user_id === user?.id ? ' (you)' : ''}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {row.replied} replied · {row.companies_reached} companies
+                      {row.penalized_bounces ? ` · ${row.penalized_bounces} bounced` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </div>
+
+        <div className="space-y-6 min-w-0">
+          <GmailConnection />
+          <section className="surface-card p-5" aria-labelledby="my-companies-title">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <h2 id="my-companies-title" className="app-section-title">
+                Companies you've reached
+              </h2>
+              <Link to="/outreach" className="text-xs font-semibold text-steel-blue">
+                View pipeline
               </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
+            </div>
+            {myCompanies.length === 0 ? (
+              <p className="text-sm text-slate-500 mt-2">
+                Nothing sent yet. Check here before starting outreach somewhere a teammate
+                already covered.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {myCompanies.slice(0, 8).map((c) => (
+                  <li key={c.company} className="text-sm">
+                    <span className="font-medium text-deep-navy">{c.company}</span>
+                    <span className="text-slate-500">
+                      {' '}
+                      · {c.contacts_reached} contact{c.contacts_reached === 1 ? '' : 's'}
+                      {c.replies ? ` · ${c.replies} replied` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
