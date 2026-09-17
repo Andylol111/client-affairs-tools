@@ -2,8 +2,6 @@ name: Beta · Develop to Feature
 on:
   push:
     branches: [feature]
-  pull_request:
-    branches: [feature]
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,10 +18,10 @@ jobs:
         name: Choose Beta waterfall
         env:
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.head_ref) || github.ref }}
+          REF: ${{ github.ref }}
         run: |
           case "$REF" in refs/heads/develop|refs/heads/feature) ;; *) exit 1 ;; esac
-          if [ "$REF" != refs/heads/feature ]; then
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/feature ]; then
             echo phase=verify >> "$GITHUB_OUTPUT"
             echo 'Beta: develop → feature. Full candidate including image. Live box is not this stage.' >> "$GITHUB_STEP_SUMMARY"
           else
