@@ -22,6 +22,50 @@ YUCG_BORDER = "C8DCED"
 YUCG_ALT = "E8EEF4"
 
 
+
+# --- Firecrawl self-test (admin only, self-service debugging) ---
+@router.get("/firecrawl-status")
+async def firecrawl_status(admin: dict = Depends(get_current_admin)):
+    """Real end-to-end check of both Firecrawl capabilities this app depends
+    on - fetch (scrape a known-good URL) and search (a universal query that
+    should always have results). Lets a member verify discovery is actually
+    working without needing server access; every call here matches exactly
+    what the discovery pipeline itself does, including the quota gate."""
+    import time
+    from app.services.web_fetch import firecrawl_configured, fetch_page, web_search
+
+    configured = firecrawl_configured()
+    result: dict = {"configured": configured, "firecrawl_url_set": configured}
+    if not configured:
+        result["fetch"] = {"ok": False, "note": "FIRECRAWL_URL is not set"}
+        result["search"] = {"ok": False, "note": "FIRECRAWL_URL is not set"}
+        return result
+
+    fetch_started = time.monotonic()
+    try:
+        page = await fetch_page("https://example.com", user_id=admin["id"])
+        result["fetch"] = {
+            "ok": page is not None,
+            "duration_s": round(time.monotonic() - fetch_started, 2),
+            "content_chars": len(page.content) if page else 0,
+        }
+    except HTTPException as exc:
+        result["fetch"] = {"ok": False, "duration_s": round(time.monotonic() - fetch_started, 2), "error": exc.detail}
+
+    search_started = time.monotonic()
+    try:
+        results = await web_search("hello world", max_results=3, user_id=admin["id"])
+        result["search"] = {
+            "ok": len(results) > 0,
+            "duration_s": round(time.monotonic() - search_started, 2),
+            "result_count": len(results),
+            "note": None if results else "Firecrawl returned zero results for a universal query - its search backend is likely blocked or unreachable upstream. See CloudWatch logs (logger name yucg.firecrawl) for the exact warning Firecrawl returned.",
+        }
+    except HTTPException as exc:
+        result["search"] = {"ok": False, "duration_s": round(time.monotonic() - search_started, 2), "error": exc.detail}
+
+    return result
+
 # --- Usage events (admin only) ---
 @router.get("/events")
 async def list_events(
