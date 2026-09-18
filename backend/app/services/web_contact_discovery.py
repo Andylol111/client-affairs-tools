@@ -38,9 +38,9 @@ WEB_DISCOVERY_WORKERS = int(os.getenv("WEB_DISCOVERY_WORKERS", "6"))
 
 
 async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:
-    from app.services.web_fetch import firecrawl_configured, web_search
+    from app.services.web_fetch import web_search_configured, web_search
 
-    if firecrawl_configured():
+    if web_search_configured():
         return await web_search(query, max_results=max_results)
     key = (os.getenv("TAVILY_API_KEY") or "").strip()
     if not key:
@@ -193,8 +193,8 @@ async def discover_contacts_from_web(
         return []
 
     dom = normalize_domain(domain or "") if domain else ""
-    from app.services.web_fetch import firecrawl_configured
-    if not firecrawl_configured() and not (os.getenv("TAVILY_API_KEY") or "").strip():
+    from app.services.web_fetch import web_search_configured
+    if not web_search_configured() and not (os.getenv("TAVILY_API_KEY") or "").strip():
         return []
 
     async def emit(msg: str, pct: float) -> None:

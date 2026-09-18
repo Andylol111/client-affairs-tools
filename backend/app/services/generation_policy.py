@@ -195,6 +195,35 @@ async def reserve_segment_classification(user_id: int):
     finally:
         await db.close()
 
+async def reserve_tinyfish_call(user_id: int):
+    """Same shape as reserve_firecrawl_call, higher numbers: TinyFish's own
+    published free-tier ceiling is 500 search requests/hour and 1,000 fetch
+    urls/day (per API key, account-wide - see https://www.tinyfish.ai/pricing).
+    Keep this club-wide limit under that with real margin rather than up
+    against it, and use a per-member limit that still leaves every other
+    active member headroom in the same hour.
+    """
+    try:
+        member_limit = min(200, max(1, int(os.getenv('TINYFISH_CALLS_PER_MEMBER_PER_HOUR', '30'))))
+        club_limit = min(2000, max(1, int(os.getenv('TINYFISH_CALLS_PER_CLUB_PER_HOUR', '400'))))
+    except ValueError as exc:
+        raise HTTPException(503, 'TinyFish quota configuration is invalid') from exc
+    db = await get_db()
+    try:
+        await db.execute('BEGIN IMMEDIATE')
+        row = await (await db.execute("""SELECT count(*) AS total,
+            coalesce(sum(CASE WHEN user_id=? THEN 1 ELSE 0 END),0) AS member
+            FROM usage_events WHERE event_type='tinyfish_reserved'
+            AND created_at>=datetime('now','-1 hour')""", (user_id,))).fetchone()
+        if row['total'] >= club_limit or row['member'] >= member_limit:
+            raise HTTPException(429, 'Web search limit reached. Please try again later.')
+        await db.execute(
+            "INSERT INTO usage_events(user_id,event_type,resource_type) VALUES(?,'tinyfish_reserved','web_fetch')",
+            (user_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
 
 async def draft_evidence(db, contact: dict, actor_id: int) -> dict:
     """Use member-accepted public/project facts, never another member's private research."""

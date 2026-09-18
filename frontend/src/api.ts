@@ -71,10 +71,12 @@ export type SegmentSummaryRow = {
   companies_list: SegmentCompanyRow[];
 };
 
+export type WebProbeResult = { ok: boolean; duration_s?: number; content_chars?: number; result_count?: number; error?: string; note?: string | null };
+export type BackendProbeStatus = { configured: boolean; fetch?: WebProbeResult; search?: WebProbeResult };
 export type FirecrawlStatus = {
-  configured: boolean;
-  fetch?: { ok: boolean; duration_s?: number; content_chars?: number; error?: string; note?: string };
-  search?: { ok: boolean; duration_s?: number; result_count?: number; note?: string | null; error?: string };
+  tinyfish: BackendProbeStatus;
+  firecrawl: BackendProbeStatus;
+  effective: { fetch: WebProbeResult; search: WebProbeResult; note: string };
 };
 
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';

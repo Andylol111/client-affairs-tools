@@ -784,7 +784,7 @@ export default function Admin() {
 
           <div className="surface-card rounded-xl p-6">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-              <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Discovery search (Firecrawl)</h2>
+              <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Discovery search (TinyFish / Firecrawl)</h2>
               <button
                 type="button"
                 className="ui-button ui-button--secondary ui-button--sm"
@@ -795,55 +795,70 @@ export default function Admin() {
                   try {
                     setFirecrawlStatus(await api.admin.operations.firecrawlStatus());
                   } catch (e) {
-                    setFirecrawlError(e instanceof Error ? e.message : 'Firecrawl self-test failed');
+                    setFirecrawlError(e instanceof Error ? e.message : 'Web search self-test failed');
                   } finally {
                     setFirecrawlTesting(false);
                   }
                 }}
               >
-                {firecrawlTesting ? 'Testing…' : 'Test Firecrawl now'}
+                {firecrawlTesting ? 'Testing…' : 'Test web search now'}
               </button>
             </div>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-              Runs the exact fetch and search calls the discovery pipeline makes, live, against the
-              self-hosted Firecrawl instance. Use this instead of guessing why a company search
-              found nothing.
+              Runs the exact fetch and search calls the discovery pipeline makes, live, against
+              TinyFish and the self-hosted Firecrawl instance independently, plus what the
+              pipeline actually gets right now (TinyFish first, then Firecrawl). Use this instead
+              of guessing why a company search found nothing.
             </p>
             {firecrawlError && <p className="text-sm text-red-700 mb-3">{firecrawlError}</p>}
             {firecrawlStatus && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div className="rounded-lg border border-pale-sky/80 px-4 py-3">
-                  <div className="font-medium text-deep-navy mb-1">
-                    Configured: {firecrawlStatus.configured ? 'Yes' : 'No'}
+              <div className="space-y-4 text-sm">
+                {(['tinyfish', 'firecrawl'] as const).map((backend) => {
+                  const status = firecrawlStatus[backend];
+                  const label = backend === 'tinyfish' ? 'TinyFish' : 'Firecrawl';
+                  return (
+                    <div key={backend}>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">{label}</h3>
+                      {!status.configured ? (
+                        <p className="text-xs text-slate-500 rounded-lg border border-pale-sky/80 px-4 py-3">
+                          Not configured{backend === 'tinyfish' ? ' (TINYFISH_API_KEY is not set)' : ' (FIRECRAWL_URL is not set)'}.
+                        </p>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {(['fetch', 'search'] as const).map((probe) => {
+                            const result = status[probe];
+                            if (!result) return null;
+                            return (
+                              <div key={probe} className={`rounded-lg border px-4 py-3 ${result.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                                <div className="font-medium text-deep-navy mb-1 capitalize">{probe}: {result.ok ? 'Working' : 'Failing'}</div>
+                                <p className="text-xs text-slate-600">
+                                  {result.duration_s != null && `${result.duration_s}s`}
+                                  {result.content_chars != null && ` · ${result.content_chars} chars fetched`}
+                                  {result.result_count != null && ` · ${result.result_count} results for a universal test query`}
+                                </p>
+                                {(result.error || result.note) && (
+                                  <p className="text-xs text-red-700 mt-1">{result.error || result.note}</p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">What the pipeline gets right now</h3>
+                  <p className="text-xs text-slate-500 mb-2">{firecrawlStatus.effective.note}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className={`rounded-lg border px-4 py-3 ${firecrawlStatus.effective.fetch.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                      <div className="font-medium text-deep-navy">Fetch: {firecrawlStatus.effective.fetch.ok ? 'Working' : 'Failing'}</div>
+                    </div>
+                    <div className={`rounded-lg border px-4 py-3 ${firecrawlStatus.effective.search.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                      <div className="font-medium text-deep-navy">Search: {firecrawlStatus.effective.search.ok ? 'Working' : 'Failing'}</div>
+                    </div>
                   </div>
-                  {!firecrawlStatus.configured && (
-                    <p className="text-xs text-slate-500">FIRECRAWL_URL is not set on this box.</p>
-                  )}
                 </div>
-                {firecrawlStatus.fetch && (
-                  <div className={`rounded-lg border px-4 py-3 ${firecrawlStatus.fetch.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
-                    <div className="font-medium text-deep-navy mb-1">Fetch (scrape): {firecrawlStatus.fetch.ok ? 'Working' : 'Failing'}</div>
-                    <p className="text-xs text-slate-600">
-                      {firecrawlStatus.fetch.duration_s != null && `${firecrawlStatus.fetch.duration_s}s`}
-                      {firecrawlStatus.fetch.content_chars != null && ` · ${firecrawlStatus.fetch.content_chars} chars fetched`}
-                    </p>
-                    {(firecrawlStatus.fetch.error || firecrawlStatus.fetch.note) && (
-                      <p className="text-xs text-red-700 mt-1">{firecrawlStatus.fetch.error || firecrawlStatus.fetch.note}</p>
-                    )}
-                  </div>
-                )}
-                {firecrawlStatus.search && (
-                  <div className={`rounded-lg border px-4 py-3 sm:col-span-2 ${firecrawlStatus.search.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
-                    <div className="font-medium text-deep-navy mb-1">Search: {firecrawlStatus.search.ok ? 'Working' : 'Failing'}</div>
-                    <p className="text-xs text-slate-600">
-                      {firecrawlStatus.search.duration_s != null && `${firecrawlStatus.search.duration_s}s`}
-                      {firecrawlStatus.search.result_count != null && ` · ${firecrawlStatus.search.result_count} results for a universal test query`}
-                    </p>
-                    {(firecrawlStatus.search.error || firecrawlStatus.search.note) && (
-                      <p className="text-xs text-red-700 mt-1">{firecrawlStatus.search.error || firecrawlStatus.search.note}</p>
-                    )}
-                  </div>
-                )}
               </div>
             )}
           </div>

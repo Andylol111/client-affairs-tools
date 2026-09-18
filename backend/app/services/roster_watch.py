@@ -626,8 +626,8 @@ async def remember_discovery_people(company: str, domain: str | None, contacts: 
 
 
 async def _web_people(company: str, domain: str | None) -> list[dict[str, Any]]:
-    from app.services.web_fetch import firecrawl_configured
-    if not (firecrawl_configured() or (os.getenv("TAVILY_API_KEY") or "").strip()):
+    from app.services.web_fetch import web_search_configured
+    if not (web_search_configured() or (os.getenv("TAVILY_API_KEY") or "").strip()):
         return []
     if (os.getenv("ROSTER_WEB_ON_ENROLL") or "0").strip().lower() not in {"1", "true", "yes"}:
         return []
@@ -703,8 +703,8 @@ async def resolve_missing_domains(limit: int | None = None) -> int:
     cap = limit if limit is not None else max(0, min(int(os.getenv("ROSTER_DOMAIN_LOOKUPS", "4") or 4), 25))
     if cap <= 0:
         return 0
-    from app.services.web_fetch import firecrawl_configured
-    web_ok = (firecrawl_configured() or bool((os.getenv("TAVILY_API_KEY") or "").strip())) and (os.getenv("ROSTER_DOMAIN_WEB") or "1").strip().lower() in {"1", "true", "yes"}
+    from app.services.web_fetch import web_search_configured
+    web_ok = (web_search_configured() or bool((os.getenv("TAVILY_API_KEY") or "").strip())) and (os.getenv("ROSTER_DOMAIN_WEB") or "1").strip().lower() in {"1", "true", "yes"}
     stale = iso(utcnow() - timedelta(days=30))
     db = await get_db()
     try:
