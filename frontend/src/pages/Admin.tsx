@@ -821,7 +821,7 @@ export default function Admin() {
                       <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">{label}</h3>
                       {!status.configured ? (
                         <p className="text-xs text-slate-500 rounded-lg border border-pale-sky/80 px-4 py-3">
-                          Not configured{backend === 'tinyfish' ? ' (TINYFISH_API_KEY is not set)' : ' (FIRECRAWL_URL is not set)'}.
+                          Not configured{backend === 'tinyfish' ? ' (MONID_API_KEY is not set)' : ' (FIRECRAWL_URL is not set)'}.
                         </p>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
