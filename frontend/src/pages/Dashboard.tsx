@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
-import { api, type LeaderboardRow, type CompanyReached } from '../api';
+import { api, type LeaderboardRow, type CompanyReached, type Campaign, type PipelineMetrics } from '../api';
 import PageHeader from '../components/PageHeader';
 import GmailConnection from '../components/GmailConnection';
 import SlackIntegration from '../components/SlackIntegration';
+import { canManageCampaign } from '../lib/campaignAccess';
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -14,20 +15,6 @@ const DEFAULT_DATA = {
   reply_rate: 0,
 };
 
-/** Every work surface, one click each. Mirrors navConfig destinations - the
- * only place tool links live; the nav header groups the same set, nothing
- * here duplicates it. */
-const TOOLS = [
-  { name: 'Find contacts', what: 'Name a company and collect verified people', to: '/scraper' },
-  { name: 'Target lists', what: 'Pick companies and keep the right contacts', to: '/yucgoutreach' },
-  { name: 'Drafts', what: 'Write and generate emails per contact', to: '/studio' },
-  { name: 'Campaigns', what: 'Review recipients, release, and monitor sends', to: '/campaigns' },
-  { name: 'Pipeline', what: 'Track every contact by stage', to: '/outreach' },
-  { name: 'Results', what: 'Replies, delivery failures, and rates', to: '/analytics' },
-  { name: 'Projects', what: 'Semester projects and assignments', to: '/projects' },
-  { name: 'Documents', what: 'Club files the assistant can cite', to: '/documents' },
-];
-
 export default function Dashboard() {
   const { user } = useOutletContext<{ user: { id?: number; name?: string; picture?: string } }>();
   const [data, setData] = useState<typeof DEFAULT_DATA>(DEFAULT_DATA);
@@ -35,6 +22,8 @@ export default function Dashboard() {
   const [apiError, setApiError] = useState(false);
   const [board, setBoard] = useState<LeaderboardRow[]>([]);
   const [myCompanies, setMyCompanies] = useState<CompanyReached[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [pipeline, setPipeline] = useState<PipelineMetrics['by_status']>([]);
 
   useEffect(() => {
     api.analytics
@@ -52,6 +41,14 @@ export default function Dashboard() {
       .leaderboard()
       .then((d) => setBoard(d.leaderboard || []))
       .catch(() => setBoard([]));
+    api.campaigns
+      .list()
+      .then(setCampaigns)
+      .catch(() => setCampaigns([]));
+    api.outreach
+      .pipelineMetrics()
+      .then((d) => setPipeline(d.by_status || []))
+      .catch(() => setPipeline([]));
   }, []);
 
   useEffect(() => {
@@ -62,22 +59,15 @@ export default function Dashboard() {
       .catch(() => setMyCompanies([]));
   }, [user?.id]);
 
-  const cards = [
-    { label: 'Found today', value: data.contacts_discovered_today ?? 0, to: '/scraper' },
-    { label: 'In queue', value: data.emails_in_queue ?? 0, to: '/campaigns' },
-    { label: 'Active sends', value: data.active_campaigns ?? 0, to: '/campaigns' },
-    { label: 'Follow-ups due', value: dueFollowUps, to: '/campaigns' },
-    { label: 'Sent', value: data.total_sent ?? 0, to: '/analytics' },
-    { label: 'Reply rate', value: `${data.reply_rate ?? 0}%`, to: '/analytics' },
-  ];
+  const needsAttention = campaigns.filter(
+    (c) => canManageCampaign(c, user?.id) && (c.status === 'needs_attention' || c.status === 'paused')
+  );
+  const pipelineTotal = pipeline.reduce((sum, p) => sum + p.count, 0);
 
   return (
     <div className="app-workspace max-w-[1920px]">
       <PageHeader
-        hero
         title="Home"
-        subtitle="Your club’s projects, contacts, and outreach activity in one place."
-        imageSrc="/yucg-bg/hero-campus.jpg"
         actions={<Link to="/yucgoutreach" className="ui-button ui-button--primary">Open target lists</Link>}
       />
       {apiError && (
@@ -86,41 +76,74 @@ export default function Dashboard() {
         </p>
       )}
 
-      <div className="app-stat-grid mb-8">
-        {cards.map((c) => (
-          <Link key={c.label} to={c.to} className="app-stat surface-card">
-            <div className="app-stat__label">{c.label}</div>
-            <div className="app-stat__value">{c.value}</div>
-          </Link>
-        ))}
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         <div className="space-y-6 min-w-0">
-          <section className="surface-card p-6" aria-labelledby="tools-title">
-            <h2 id="tools-title" className="text-lg font-semibold text-deep-navy mb-4">
-              Tools
-            </h2>
-            <ul className="app-tool-grid">
-              {TOOLS.map((tool) => (
-                <li key={tool.to}>
-                  <Link to={tool.to} className="app-tool surface-card">
-                    <span className="app-tool__name">{tool.name}</span>
-                    <span className="app-tool__what">{tool.what}</span>
+          {needsAttention.length > 0 && (
+            <section className="surface-card p-5" aria-label="Needs your attention">
+              <h2 className="app-section-title mb-3">Needs your attention</h2>
+              <ul className="space-y-1">
+                {needsAttention.map((c) => (
+                  <li key={c.id}>
+                    <Link
+                      to={`/campaigns/${c.id}`}
+                      className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-pale-sky/30"
+                    >
+                      <span className="font-medium text-deep-navy truncate">{c.name}</span>
+                      <span className="text-xs font-semibold text-red-700 whitespace-nowrap">
+                        {c.status === 'needs_attention' ? `${c.failed_count || 0} failed` : 'Paused'}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Link to="/campaigns" className="surface-card p-4 block hover:bg-pale-sky/10">
+              <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Sending</div>
+              <div className="mt-1 text-2xl font-bold text-deep-navy">{data.active_campaigns}</div>
+              <div className="text-xs text-slate-500">active · {data.emails_in_queue} queued</div>
+            </Link>
+            <Link to="/outreach" className="surface-card p-4 block hover:bg-pale-sky/10">
+              <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Follow-ups due</div>
+              <div className="mt-1 text-2xl font-bold text-deep-navy">{dueFollowUps}</div>
+              <div className="text-xs text-slate-500">in the pipeline</div>
+            </Link>
+            <Link to="/analytics" className="surface-card p-4 block hover:bg-pale-sky/10">
+              <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Reply rate</div>
+              <div className="mt-1 text-2xl font-bold text-deep-navy">{data.reply_rate}%</div>
+              <div className="text-xs text-slate-500">{data.total_sent} sent</div>
+            </Link>
+          </div>
+
+          <section className="surface-card p-5" aria-label="Pipeline">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h2 className="app-section-title">Pipeline</h2>
+              <Link to="/outreach" className="text-xs font-semibold text-steel-blue">
+                Open board
+              </Link>
+            </div>
+            {pipelineTotal === 0 ? (
+              <p className="text-sm text-slate-500">No contacts in the pipeline yet.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {pipeline.map((p) => (
+                  <Link
+                    key={p.pipeline_status}
+                    to="/outreach"
+                    className="rounded-lg bg-pale-sky/30 px-3 py-2 hover:bg-pale-sky/50 min-w-[5.5rem]"
+                    title={`${p.count} of ${pipelineTotal} contacts (${Math.round((p.count / pipelineTotal) * 100)}%) are ${p.pipeline_status}`}
+                  >
+                    <span className="block text-xs text-slate-600 capitalize">{p.pipeline_status}</span>
+                    <span className="block text-lg font-bold text-deep-navy">{p.count}</span>
                   </Link>
-                </li>
-              ))}
-            </ul>
+                ))}
+              </div>
+            )}
           </section>
 
-          <section className="surface-card p-6" aria-labelledby="leaderboard-title">
-            <h2 id="leaderboard-title" className="text-lg font-semibold text-deep-navy mb-1">
-              This semester's leaderboard
-            </h2>
-            <p className="text-sm text-slate-600 mb-4">
-              Ranked by replies, not volume. Bounces on unverified addresses don't count against
-              you.
-            </p>
+          <section className="surface-card p-6" aria-label="Leaderboard">
             {board.length === 0 ? (
               <p className="text-sm text-slate-500">No sends recorded yet.</p>
             ) : (
@@ -155,7 +178,7 @@ export default function Dashboard() {
           <GmailConnection />
           <SlackIntegration />
           <section className="surface-card p-5" aria-labelledby="my-companies-title">
-            <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="mb-1">
               <h2 id="my-companies-title" className="app-section-title">
                 Companies you've reached
               </h2>

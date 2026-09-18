@@ -37,7 +37,7 @@ from app.services.yucgoutreach_discovery import (
     recover_interrupted_yucgoutreach_runs,
 )
 from app.services.assistant_service import drain_document_index_queue,recover_document_indexes
-from app.routers import research
+from app.routers import research, segments
 from app.services.research_service import recover_research_jobs, drain_research_queue
 from app.services.roster_watch import drain_roster_queue, enroll_prospect_companies
 from app.services.roster_email import drain_roster_emails, drain_roster_verification
@@ -209,6 +209,7 @@ app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgo
 app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
 app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases"], dependencies=_require_user)
 app.include_router(research.router, prefix="/api/research", tags=["research"], dependencies=_require_user)
+app.include_router(segments.router, prefix="/api/segments", tags=["segments"], dependencies=_require_user)
 
 
 @app.get("/api/health")

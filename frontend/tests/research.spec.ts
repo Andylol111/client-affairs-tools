@@ -94,7 +94,7 @@ test('research journey saves a brief, reviews evidence, and stays keyboard acces
   const mutations = await mockResearch(page);
   await page.goto('/scraper?view=research');
   await expect(page.getByRole('heading', { level: 1, name: 'Find contacts' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Research' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { level: 2, name: 'Research many companies at once' })).toBeVisible();
 
   await page.getByLabel('Brief name').fill('Spring manufacturers');
   await page.getByLabel('Project scope').selectOption('1');
