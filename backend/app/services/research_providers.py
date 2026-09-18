@@ -87,6 +87,23 @@ async def finish_request(request_id: int, result=None):
 
 
 async def search_sources(actor_id: int, query: str) -> list[dict]:
+    from app.services.web_fetch import firecrawl_configured, web_search
+
+    if firecrawl_configured():
+        request_id, cached = await reserve_request(actor_id, 'firecrawl', hashlib.sha256(query.encode()).hexdigest())
+        if cached is not None:
+            return cached
+        try:
+            rows = await web_search(query[:1200], max_results=8, user_id=actor_id)
+            result = [{'url': r['url'], 'title': r['title'][:300],
+                       'excerpt': r['content'][:4000], 'observed_at': utcnow(), 'source_type': 'public_search'}
+                      for r in rows if public_url(r.get('url', '')) and r.get('content')]
+            await finish_request(request_id, result)
+            return result
+        except Exception:
+            await finish_request(request_id)
+            raise ProviderUnavailable('unavailable', 'Public search could not complete; retry after provider recovery') from None
+
     key = os.getenv('TAVILY_API_KEY', '').strip()
     if not key:
         raise ProviderUnavailable('unconfigured', 'Public search is not configured; website evidence is retained')
