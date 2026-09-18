@@ -71,6 +71,12 @@ export type SegmentSummaryRow = {
   companies_list: SegmentCompanyRow[];
 };
 
+export type FirecrawlStatus = {
+  configured: boolean;
+  fetch?: { ok: boolean; duration_s?: number; content_chars?: number; error?: string; note?: string };
+  search?: { ok: boolean; duration_s?: number; result_count?: number; note?: string | null; error?: string };
+};
+
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
 export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
 export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
@@ -1028,6 +1034,7 @@ export const api = {
         a.click();
         URL.revokeObjectURL(url);
       },
+      firecrawlStatus: () => fetchApi<FirecrawlStatus>('/api/admin/operations/firecrawl-status'),
     },
   },
   outreach: {
