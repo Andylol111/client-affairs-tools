@@ -3,7 +3,7 @@ import Invitations from '../components/Invitations';
 import { useEffect, useState, Fragment } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { api } from '../api';
+import { api, type FirecrawlStatus } from '../api';
 import { useToast } from '../contexts/useToast';
 import { AnimatedEventTypeChart, AnimatedResourceChart } from '../components/AnimatedOperationsCharts';
 import AppTabMenu from '../components/AppTabMenu';
@@ -44,6 +44,9 @@ export default function Admin() {
     matrix_2d?: { row_labels: string[]; col_labels: string[]; values: number[][] };
   } | null>(null);
   const [opsEvents, setOpsEvents] = useState<Awaited<ReturnType<typeof api.admin.operations.events>>>([]);
+  const [firecrawlStatus, setFirecrawlStatus] = useState<FirecrawlStatus | null>(null);
+  const [firecrawlTesting, setFirecrawlTesting] = useState(false);
+  const [firecrawlError, setFirecrawlError] = useState('');
 
   const opsMatrix2d = opsHeatmap?.matrix_2d;
 
@@ -777,6 +780,72 @@ export default function Admin() {
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-2">Assistant knowledge</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">The shared Assistant uses the same private document register as Projects. Access is checked for every retrieval, and Amazon Bedrock receives only the short source excerpts needed for an answer.</p>
             <div className="flex flex-wrap gap-2"><Link to="/documents" className="ui-button ui-button--secondary">Manage documents</Link><Link to="/?assistant=1" className="ui-button ui-button--primary">Open assistant</Link></div>
+          </div>
+
+          <div className="surface-card rounded-xl p-6">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Discovery search (Firecrawl)</h2>
+              <button
+                type="button"
+                className="ui-button ui-button--secondary ui-button--sm"
+                disabled={firecrawlTesting}
+                onClick={async () => {
+                  setFirecrawlTesting(true);
+                  setFirecrawlError('');
+                  try {
+                    setFirecrawlStatus(await api.admin.operations.firecrawlStatus());
+                  } catch (e) {
+                    setFirecrawlError(e instanceof Error ? e.message : 'Firecrawl self-test failed');
+                  } finally {
+                    setFirecrawlTesting(false);
+                  }
+                }}
+              >
+                {firecrawlTesting ? 'Testing…' : 'Test Firecrawl now'}
+              </button>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+              Runs the exact fetch and search calls the discovery pipeline makes, live, against the
+              self-hosted Firecrawl instance. Use this instead of guessing why a company search
+              found nothing.
+            </p>
+            {firecrawlError && <p className="text-sm text-red-700 mb-3">{firecrawlError}</p>}
+            {firecrawlStatus && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg border border-pale-sky/80 px-4 py-3">
+                  <div className="font-medium text-deep-navy mb-1">
+                    Configured: {firecrawlStatus.configured ? 'Yes' : 'No'}
+                  </div>
+                  {!firecrawlStatus.configured && (
+                    <p className="text-xs text-slate-500">FIRECRAWL_URL is not set on this box.</p>
+                  )}
+                </div>
+                {firecrawlStatus.fetch && (
+                  <div className={`rounded-lg border px-4 py-3 ${firecrawlStatus.fetch.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="font-medium text-deep-navy mb-1">Fetch (scrape): {firecrawlStatus.fetch.ok ? 'Working' : 'Failing'}</div>
+                    <p className="text-xs text-slate-600">
+                      {firecrawlStatus.fetch.duration_s != null && `${firecrawlStatus.fetch.duration_s}s`}
+                      {firecrawlStatus.fetch.content_chars != null && ` · ${firecrawlStatus.fetch.content_chars} chars fetched`}
+                    </p>
+                    {(firecrawlStatus.fetch.error || firecrawlStatus.fetch.note) && (
+                      <p className="text-xs text-red-700 mt-1">{firecrawlStatus.fetch.error || firecrawlStatus.fetch.note}</p>
+                    )}
+                  </div>
+                )}
+                {firecrawlStatus.search && (
+                  <div className={`rounded-lg border px-4 py-3 sm:col-span-2 ${firecrawlStatus.search.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="font-medium text-deep-navy mb-1">Search: {firecrawlStatus.search.ok ? 'Working' : 'Failing'}</div>
+                    <p className="text-xs text-slate-600">
+                      {firecrawlStatus.search.duration_s != null && `${firecrawlStatus.search.duration_s}s`}
+                      {firecrawlStatus.search.result_count != null && ` · ${firecrawlStatus.search.result_count} results for a universal test query`}
+                    </p>
+                    {(firecrawlStatus.search.error || firecrawlStatus.search.note) && (
+                      <p className="text-xs text-red-700 mt-1">{firecrawlStatus.search.error || firecrawlStatus.search.note}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
