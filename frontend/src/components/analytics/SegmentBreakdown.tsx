@@ -18,9 +18,9 @@ export default function SegmentBreakdown() {
   const refresh = () => {
     Promise.all([api.segments.list(), api.segments.summary()])
       .then(([listRes, summaryRes]) => {
-        setSegments(listRes.segments);
-        setSummary(summaryRes.summary);
-        setUnclassified(summaryRes.unclassified_companies);
+        setSegments(listRes.segments ?? []);
+        setSummary(summaryRes.summary ?? []);
+        setUnclassified(summaryRes.unclassified_companies ?? 0);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load segments'))
       .finally(() => setLoading(false));
@@ -133,6 +133,7 @@ export default function SegmentBreakdown() {
                       aria-valuenow={s.companies}
                       aria-valuemin={0}
                       aria-valuemax={s.target_companies || scale}
+                      aria-label={`${s.segment}: ${s.companies} of ${s.target_companies || scale} companies`}
                     >
                       <div
                         className={`h-full transition-[width] duration-300 ${

@@ -311,7 +311,7 @@ export default function Scraper() {
           onClick={() => setActiveTab('company')}
           className="mb-4 text-[13px] font-semibold text-steel-blue hover:underline"
         >
-          ← Back to Find people
+          ← Back to the company crawl
         </button>
       )}
 
