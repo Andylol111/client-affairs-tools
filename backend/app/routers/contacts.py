@@ -569,10 +569,10 @@ async def search_person(req: SearchPersonRequest):
     if not query:
         raise HTTPException(400, "Name is required")
 
-    from app.services.web_fetch import firecrawl_configured, web_search
+    from app.services.web_fetch import web_search_configured, web_search
 
     search_query = f"{req.name} contact email professional {req.company or ''}".strip()
-    if firecrawl_configured():
+    if web_search_configured():
         try:
             raw_results = await web_search(search_query, max_results=10)
             results = [{"title": r.get("title"), "url": r.get("url"), "content": (r.get("content") or "")[:500]} for r in raw_results]
