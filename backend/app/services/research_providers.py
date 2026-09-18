@@ -87,10 +87,10 @@ async def finish_request(request_id: int, result=None):
 
 
 async def search_sources(actor_id: int, query: str) -> list[dict]:
-    from app.services.web_fetch import firecrawl_configured, web_search
+    from app.services.web_fetch import web_search_configured, web_search
 
-    if firecrawl_configured():
-        request_id, cached = await reserve_request(actor_id, 'firecrawl', hashlib.sha256(query.encode()).hexdigest())
+    if web_search_configured():
+        request_id, cached = await reserve_request(actor_id, 'web_search', hashlib.sha256(query.encode()).hexdigest())
         if cached is not None:
             return cached
         try:
