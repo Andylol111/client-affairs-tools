@@ -38,6 +38,9 @@ def tests() -> None:
                 await db.execute(
                     "INSERT INTO users (id,email,name,role,is_active) VALUES (2,'b@yale.edu','B','standard',1)"
                 )
+                await db.execute(
+                    "INSERT INTO users (id,email,name,role,is_active) VALUES (3,'c@yale.edu','C','standard',1)"
+                )
                 await db.commit()
             finally:
                 await db.close()
@@ -107,6 +110,44 @@ def tests() -> None:
         # unconfigured case rather than raising.
         with patch('app.services.web_fetch.httpx.AsyncClient', client):
             assert asyncio.run(web_fetch.fetch_page('', user_id=1)) is None
+
+        # web_search: unconfigured returns [], never calls the network.
+        os.environ.pop('FIRECRAWL_URL', None)
+        assert asyncio.run(web_fetch.web_search('Acme CEO', user_id=1)) == []
+
+        os.environ['FIRECRAWL_URL'] = 'http://100.84.7.57:3002'
+        search_calls: list[str] = []
+
+        def search_handler(request: httpx.Request) -> httpx.Response:
+            search_calls.append(str(request.url))
+            import json
+            payload = json.loads(request.read())
+            if payload['query'] == 'error query':
+                return httpx.Response(500, json={'error': 'boom'})
+            return httpx.Response(200, json={
+                'data': [
+                    {'url': 'https://acme.com/about', 'title': 'Acme - About', 'description': 'Acme makes things.'},
+                    {'url': 'https://acme.com/team', 'title': 'Acme - Team'},
+                ],
+            })
+
+        def search_client(**kwargs):
+            return real_client(transport=httpx.MockTransport(search_handler), **kwargs)
+
+        with patch('app.services.web_fetch.httpx.AsyncClient', search_client):
+            results = asyncio.run(web_fetch.web_search('Acme CEO', user_id=3))
+            assert results == [
+                {'title': 'Acme - About', 'url': 'https://acme.com/about', 'content': 'Acme makes things.'},
+                {'title': 'Acme - Team', 'url': 'https://acme.com/team', 'content': ''},
+            ]
+            assert search_calls == ['http://100.84.7.57:3002/v1/search']
+
+            # A 500 degrades to an empty list, matching fetch_page's degrade
+            # behavior - callers never special-case a Firecrawl outage.
+            assert asyncio.run(web_fetch.web_search('error query', user_id=3)) == []
+
+            # No query given: no request attempted.
+            assert asyncio.run(web_fetch.web_search('', user_id=3)) == []
 
 
 if __name__ == '__main__':

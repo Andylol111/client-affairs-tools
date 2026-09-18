@@ -51,6 +51,10 @@ async def _llm_json(prompt: str) -> dict[str, Any]:
 
 
 async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:
+    from app.services.web_fetch import firecrawl_configured, web_search
+
+    if firecrawl_configured():
+        return await web_search(query, max_results=max_results)
     key = (os.getenv("TAVILY_API_KEY") or "").strip()
     if not key:
         return []
@@ -151,7 +155,8 @@ def _title_hints_from_spec(spec: dict[str, Any]) -> str:
 
 async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str], title_hints: str = "") -> list[dict]:
     """Supplement merged list with Tavily+LLM name extraction when Apify/web yield few rows."""
-    if max_n <= 0 or not (os.getenv("TAVILY_API_KEY") or "").strip():
+    from app.services.web_fetch import firecrawl_configured
+    if max_n <= 0 or not (firecrawl_configured() or (os.getenv("TAVILY_API_KEY") or "").strip()):
         return []
     role = (title_hints or "employees OR leadership").strip()
     results = await _tavily_search(
@@ -382,8 +387,9 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         )
 
     async def _web() -> list[dict]:
+        from app.services.web_fetch import firecrawl_configured
         cn = company or (domain.split(".")[0].title() if domain else "")
-        if not cn or not (os.getenv("TAVILY_API_KEY") or "").strip():
+        if not cn or not (firecrawl_configured() or (os.getenv("TAVILY_API_KEY") or "").strip()):
             return []
         return await discover_contacts_from_web(cn, domain or None, max_people=web_max, title_hints=title_hints)
 

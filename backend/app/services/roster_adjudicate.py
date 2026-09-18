@@ -114,7 +114,8 @@ async def build_dossier(roster: dict[str, Any], people: list[dict[str, Any]]) ->
     domain = roster.get("company_domain") or ""
     web_text = ""
     web_names: list[str] = []
-    if (os.getenv("TAVILY_API_KEY") or "").strip():
+    from app.services.web_fetch import firecrawl_configured
+    if firecrawl_configured() or (os.getenv("TAVILY_API_KEY") or "").strip():
         try:
             results = await _tavily_search(
                 f"{roster['company_name']} directors senior management leadership team",
