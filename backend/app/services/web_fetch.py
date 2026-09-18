@@ -2,20 +2,24 @@
 second, a real Tavily key (if one is ever configured) as a last resort at
 call sites.
 
-TinyFish (https://www.tinyfish.ai) is a hosted, free-at-this-scale service
-whose Search and Fetch APIs are explicitly engineered around the exact
-failure mode Firecrawl hit in production here: residential proxies and
-anti-bot handling "at the infrastructure layer" (their own pricing page),
-versus this app's self-hosted Firecrawl on an OCI VM with no proxy
-configured (docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md section 1.6). Free tier
-ceiling, from TinyFish's own pricing page: 30 search requests/min (500/hour)
-and 150 fetch urls/min (1,000/day), per API key, no card required.
+TinyFish (https://www.tinyfish.ai)'s Search and Fetch capabilities are
+reached through Monid (https://monid.ai), a hosted API broker - MONID_API_KEY
+authenticates against Monid's own API (https://api.monid.ai), not TinyFish
+directly. A single `POST /v1/run` call with {"provider": "tinyfish",
+"endpoint": "/search"|"/fetch", "input": {...}} runs synchronously and
+returns {"status": "COMPLETED", "output": {...}} - confirmed live against
+TinyFish's published free-tier pricing (billedUnits: 0 for both endpoints).
+TinyFish itself is a browser-rendered search/fetch service, engineered
+around the exact failure mode self-hosted Firecrawl hit in production here:
+its own Monid catalog entry reports "healthy" status where Firecrawl's
+/v1/search consistently returned zero results (bot-blocked upstream, see
+docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md section 1.6).
 
 Firecrawl (per docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md) runs on an OCI VM,
 reachable from this app once the EC2 host joined the same Tailscale mesh
 (plan section 1.3, completed). It stays wired as the second layer: if
-TinyFish is ever unconfigured, rate-limited, or has an outage, Firecrawl is
-a working fallback rather than an immediate drop to nothing.
+TinyFish/Monid is ever unconfigured, rate-limited, or has an outage,
+Firecrawl is a working fallback rather than an immediate drop to nothing.
 
 The club does not pay for Tavily/Apify/Verifalia. A caller checks
 TAVILY_API_KEY only as an optional bonus path if one is ever configured
@@ -23,6 +27,7 @@ later - it is never required.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -36,7 +41,11 @@ from app.services.generation_policy import reserve_firecrawl_call, reserve_tinyf
 
 logger = logging.getLogger("yucg.firecrawl")
 _TIMEOUT_S = 30.0
-_TINYFISH_TIMEOUT_S = 20.0
+_MONID_API_BASE = "https://api.monid.ai"
+_MONID_SEARCH_TIMEOUT_S = 20.0
+_MONID_FETCH_TIMEOUT_S = 45.0
+_MONID_POLL_ATTEMPTS = 5
+_MONID_POLL_INTERVAL_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -52,7 +61,9 @@ def firecrawl_configured() -> bool:
 
 
 def tinyfish_configured() -> bool:
-    return bool((os.getenv("TINYFISH_API_KEY") or "").strip())
+    """TinyFish is reached through Monid - MONID_API_KEY is a Monid platform
+    key (format monid_<stage>_<secret>), not a TinyFish-issued key."""
+    return bool((os.getenv("MONID_API_KEY") or "").strip())
 
 
 def web_search_configured() -> bool:
@@ -63,43 +74,81 @@ def web_search_configured() -> bool:
     return tinyfish_configured() or firecrawl_configured()
 
 
-# --- TinyFish ---------------------------------------------------------
+# --- TinyFish, via Monid ------------------------------------------------
+
+
+async def _monid_run(client: httpx.AsyncClient, api_key: str, endpoint: str,
+                      *, query_params: dict[str, Any] | None = None,
+                      body: dict[str, Any] | None = None,
+                      poll_attempts: int, poll_interval_s: float) -> dict[str, Any] | None:
+    """POST /v1/run against Monid's TinyFish provider and, on the rare
+    non-terminal response, poll /v1/runs/{id} until a terminal status.
+    Returns the run's `output` dict on COMPLETED, or None on any failure
+    (HTTP error, non-COMPLETED terminal status, network error, malformed
+    body) - callers fall back to Firecrawl."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload: dict[str, Any] = {"provider": "tinyfish", "endpoint": endpoint, "input": {}}
+    if query_params:
+        payload["input"]["queryParams"] = query_params
+    if body:
+        payload["input"]["body"] = body
+
+    try:
+        resp = await client.post(f"{_MONID_API_BASE}/v1/run", json=payload, headers=headers)
+        data = resp.json()
+        if resp.status_code >= 400:
+            logger.warning("monid tinyfish%s HTTP %s: %s", endpoint, resp.status_code, str(data)[:300])
+            return None
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("monid tinyfish%s request failed: %s: %s", endpoint, type(exc).__name__, exc)
+        return None
+
+    run_id = data.get("runId") if isinstance(data, dict) else None
+    for _ in range(poll_attempts):
+        status = data.get("status") if isinstance(data, dict) else None
+        if status == "COMPLETED":
+            output = data.get("output")
+            return output if isinstance(output, dict) else None
+        if status in {"FAILED", "BLOCKED", "STOPPED", "TIMED_OUT"}:
+            logger.warning("monid tinyfish%s run %s ended %s: %r", endpoint, run_id, status, data.get("error"))
+            return None
+        if not run_id:
+            logger.warning("monid tinyfish%s malformed response: %r", endpoint, data)
+            return None
+        await asyncio.sleep(poll_interval_s)
+        try:
+            resp = await client.get(f"{_MONID_API_BASE}/v1/runs/{run_id}", headers=headers)
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("monid tinyfish%s poll failed for run %s: %s: %s", endpoint, run_id, type(exc).__name__, exc)
+            return None
+    logger.warning("monid tinyfish%s run %s never reached a terminal status", endpoint, run_id)
+    return None
 
 
 async def _tinyfish_fetch_page(url: str, *, user_id: int | None = None) -> FetchedPage | None:
     """Returns None on any failure (auth, rate limit, network, no content) -
     the caller falls back to Firecrawl. Never raises except the member
     quota HTTPException, matching every other paid/metered-call gate."""
-    api_key = (os.getenv("TINYFISH_API_KEY") or "").strip()
+    api_key = (os.getenv("MONID_API_KEY") or "").strip()
     if not api_key or not url:
         return None
     if user_id is not None:
         await reserve_tinyfish_call(user_id)
 
     started = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=_TINYFISH_TIMEOUT_S) as client:
-            resp = await client.post(
-                "https://api.fetch.tinyfish.ai",
-                json={"urls": [url], "format": "markdown"},
-                headers={"X-API-Key": api_key, "Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        logger.warning("tinyfish fetch_page HTTP %s for %s in %.2fs: %s",
-                        exc.response.status_code, url, time.monotonic() - started, exc.response.text[:300])
-        return None
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("tinyfish fetch_page failed for %s in %.2fs: %s: %s",
-                        url, time.monotonic() - started, type(exc).__name__, exc)
-        return None
+    async with httpx.AsyncClient(timeout=_MONID_FETCH_TIMEOUT_S) as client:
+        output = await _monid_run(
+            client, api_key, "/fetch", body={"urls": [url], "links": True},
+            poll_attempts=_MONID_POLL_ATTEMPTS, poll_interval_s=_MONID_POLL_INTERVAL_S,
+        )
 
-    results = data.get("results") if isinstance(data, dict) else None
+    if output is None:
+        return None
+    results = output.get("results")
     if not isinstance(results, list) or not results:
-        errors = data.get("errors") if isinstance(data, dict) else None
         logger.info("tinyfish fetch_page no result for %s in %.2fs (errors=%r)",
-                     url, time.monotonic() - started, errors)
+                     url, time.monotonic() - started, output.get("errors"))
         return None
     doc = results[0]
     if not isinstance(doc, dict):
@@ -108,49 +157,39 @@ async def _tinyfish_fetch_page(url: str, *, user_id: int | None = None) -> Fetch
     if not content:
         logger.info("tinyfish fetch_page empty content for %s in %.2fs", url, time.monotonic() - started)
         return None
-    logger.info("tinyfish fetch_page ok for %s in %.2fs: %d chars", url, time.monotonic() - started, len(content))
-    # Fetch API returns page text/metadata, not an outbound link list -
-    # callers that need links (crawling subpages) get [] from TinyFish and
-    # should treat that as "no further links found", same as any page with
-    # none.
-    return FetchedPage(url=str(doc.get("url") or url), content=content, links=[])
+    links = [str(link) for link in (doc.get("links") or []) if link]
+    logger.info("tinyfish fetch_page ok for %s in %.2fs: %d chars, %d links",
+                 url, time.monotonic() - started, len(content), len(links))
+    return FetchedPage(url=str(doc.get("final_url") or doc.get("url") or url), content=content, links=links)
 
 
 async def _tinyfish_web_search(query: str, max_results: int, *, user_id: int | None = None) -> list[dict[str, Any]] | None:
     """Returns None on failure (caller falls back to Firecrawl) and a list
     (possibly empty) on success - a real empty result is trusted, not
-    treated as a failure to fall back from."""
-    api_key = (os.getenv("TINYFISH_API_KEY") or "").strip()
+    treated as a failure to fall back from. TinyFish's search API has no
+    result-count parameter; max_results only truncates the response it
+    returns (observed at ~8 results per call)."""
+    api_key = (os.getenv("MONID_API_KEY") or "").strip()
     if not api_key or not query:
         return None
     if user_id is not None:
         await reserve_tinyfish_call(user_id)
 
     started = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=_TINYFISH_TIMEOUT_S) as client:
-            resp = await client.get(
-                "https://api.search.tinyfish.ai",
-                params={"query": query, "num_results": max(1, min(20, max_results))},
-                headers={"X-API-Key": api_key},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        logger.warning("tinyfish web_search HTTP %s for %r in %.2fs: %s",
-                        exc.response.status_code, query, time.monotonic() - started, exc.response.text[:300])
-        return None
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("tinyfish web_search failed for %r in %.2fs: %s: %s",
-                        query, time.monotonic() - started, type(exc).__name__, exc)
-        return None
+    async with httpx.AsyncClient(timeout=_MONID_SEARCH_TIMEOUT_S) as client:
+        output = await _monid_run(
+            client, api_key, "/search", query_params={"query": query},
+            poll_attempts=_MONID_POLL_ATTEMPTS, poll_interval_s=_MONID_POLL_INTERVAL_S,
+        )
 
-    results = data.get("results") if isinstance(data, dict) else None
+    if output is None:
+        return None
+    results = output.get("results")
     if not isinstance(results, list):
-        logger.warning("tinyfish web_search malformed response for %r: %r", query, data)
+        logger.warning("tinyfish web_search malformed response for %r: %r", query, output)
         return None
     out: list[dict[str, Any]] = []
-    for item in results:
+    for item in results[:max(1, max_results)]:
         if not isinstance(item, dict):
             continue
         out.append({
