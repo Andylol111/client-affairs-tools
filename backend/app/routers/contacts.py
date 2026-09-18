@@ -562,55 +562,65 @@ async def import_contacts(
 
 @router.post("/search-person")
 async def search_person(req: SearchPersonRequest):
-    """Search the web for information about a person (name + optional company). Uses Tavily if TAVILY_API_KEY is set; optional LLM summary via Bedrock."""
+    """Search the web for information about a person (name + optional company). Uses Firecrawl if configured, Tavily as a fallback if a key is set; optional LLM summary via Bedrock."""
     query = req.name.strip()
     if req.company and req.company.strip():
         query = f"{query} {req.company.strip()}"
     if not query:
         raise HTTPException(400, "Name is required")
 
-    api_key = (os.getenv("TAVILY_API_KEY") or "").strip()
-    if not api_key:
-        return {
-            "query": query,
-            "results": [],
-            "summary": None,
-            "message": "Web search is not configured. Set TAVILY_API_KEY in the backend .env to enable finding contact information from the internet.",
-        }
+    from app.services.web_fetch import firecrawl_configured, web_search
 
-    import httpx
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    search_query = f"{req.name} contact email professional {req.company or ''}".strip()
+    if firecrawl_configured():
         try:
-            r = await client.post(
-                "https://api.tavily.com/search",
-                json={
-                    "api_key": api_key,
-                    "query": f"{req.name} contact email professional {req.company or ''}".strip(),
-                    "search_depth": "basic",
-                    "max_results": 10,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-        except httpx.HTTPStatusError as e:
-            return {
-                "query": query,
-                "results": [],
-                "summary": None,
-                "message": f"Search API error: {e.response.status_code}",
-            }
+            raw_results = await web_search(search_query, max_results=10)
+            results = [{"title": r.get("title"), "url": r.get("url"), "content": (r.get("content") or "")[:500]} for r in raw_results]
         except Exception as e:
+            return {"query": query, "results": [], "summary": None, "message": str(e)}
+    else:
+        api_key = (os.getenv("TAVILY_API_KEY") or "").strip()
+        if not api_key:
             return {
                 "query": query,
                 "results": [],
                 "summary": None,
-                "message": str(e),
+                "message": "Web search is not configured.",
             }
 
-    results = [
-        {"title": x.get("title"), "url": x.get("url"), "content": (x.get("content") or "")[:500]}
-        for x in data.get("results") or []
-    ]
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                r = await client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": api_key,
+                        "query": search_query,
+                        "search_depth": "basic",
+                        "max_results": 10,
+                    },
+                )
+                r.raise_for_status()
+                data = r.json()
+            except httpx.HTTPStatusError as e:
+                return {
+                    "query": query,
+                    "results": [],
+                    "summary": None,
+                    "message": f"Search API error: {e.response.status_code}",
+                }
+            except Exception as e:
+                return {
+                    "query": query,
+                    "results": [],
+                    "summary": None,
+                    "message": str(e),
+                }
+
+        results = [
+            {"title": x.get("title"), "url": x.get("url"), "content": (x.get("content") or "")[:500]}
+            for x in data.get("results") or []
+        ]
 
     summary = None
     if results:

@@ -462,7 +462,8 @@ async def discover_company_domain(name: str) -> str:
     known = await resolve_company_domain(company)
     if known:
         return known
-    web_ok = bool((os.getenv("TAVILY_API_KEY") or "").strip())
+    from app.services.web_fetch import firecrawl_configured
+    web_ok = firecrawl_configured() or bool((os.getenv("TAVILY_API_KEY") or "").strip())
     if not web_ok:
         return ""
     # Same evidence rule the roster resolver uses: the hit must look like the

@@ -1,16 +1,17 @@
-"""Single fetch adapter for the self-hosted Firecrawl instance.
+"""Single fetch/search adapter for the self-hosted Firecrawl instance.
 
 Firecrawl (per docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md) runs on an OCI VM,
-reachable from this app only once the EC2 host joins the same Tailscale mesh
-(plan section 1.3) — infrastructure this module does not perform. Until that
-network path exists, FIRECRAWL_URL is unset and every call here degrades to
-telling the caller to keep using its existing fetch, so importing this module
-is safe today and callers do not need two code paths.
+reachable from this app once the EC2 host joins the same Tailscale mesh
+(plan section 1.3, completed). Until FIRECRAWL_URL is set every call here
+degrades to telling the caller to keep using its existing fetch/search, so
+importing this module is safe even when the network path is down.
 
-Firecrawl replaces the BeautifulSoup/httpx *fetch* step (contact_scraper.py,
-research_providers.py) — it does not replace Tavily's *search* step. A caller
-still asks Tavily "what is Acme's official site" and hands the resulting URL
-here to fetch.
+Firecrawl is the primary search AND fetch backend - not Tavily. The club
+does not pay for Tavily/Apify/Verifalia; this self-hosted instance replaces
+both the *search* step (web_search, backed by /v1/search) and the *fetch*
+step (fetch_page, backed by /v1/scrape) that Tavily and raw BeautifulSoup/
+httpx previously covered. A caller checks TAVILY_API_KEY only as an optional
+bonus path if one is ever configured later - it is never required.
 """
 from __future__ import annotations
 
@@ -75,3 +76,44 @@ async def fetch_page(url: str, *, user_id: int | None = None) -> FetchedPage | N
     links = [str(link) for link in (doc.get("links") or []) if link]
     screenshot = doc.get("screenshot")
     return FetchedPage(url=url, content=content, links=links, screenshot=screenshot)
+
+
+async def web_search(query: str, max_results: int = 8, *, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Web search through Firecrawl. Returns [] when unconfigured or on any
+    failure — matches the existing Tavily helpers' shape exactly
+    ([{"title", "url", "content"}]) so callers need no changes beyond
+    swapping which function they call.
+    """
+    base = (os.getenv("FIRECRAWL_URL") or "").strip().rstrip("/")
+    if not base or not query:
+        return []
+
+    if user_id is not None:
+        await reserve_firecrawl_call(user_id)
+
+    api_key = (os.getenv("FIRECRAWL_API_KEY") or "").strip()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    payload: dict[str, Any] = {"query": query, "limit": max(1, min(20, max_results))}
+
+    async with discovery_job():
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+                resp = await client.post(f"{base}/v1/search", json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return []
+
+    results = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(results, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "title": str(item.get("title") or ""),
+            "url": str(item.get("url") or ""),
+            "content": str(item.get("description") or item.get("content") or "")[:1500],
+        })
+    return out
