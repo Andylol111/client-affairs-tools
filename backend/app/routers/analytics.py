@@ -100,7 +100,7 @@ async def get_dashboard():
 
         # Active campaigns
         cursor = await db.execute(
-            """SELECT COUNT(*) as count FROM campaigns WHERE status IN ('draft', 'sending')"""
+            """SELECT COUNT(*) as count FROM campaigns WHERE status = 'releasing'"""
         )
         active_campaigns = (await cursor.fetchone())["count"]
 

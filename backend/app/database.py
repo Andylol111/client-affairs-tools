@@ -839,10 +839,12 @@ async def init_db():
         from app.services.research_schema import init_research_schema
         from app.services.roster_schema import init_roster_schema
         from app.services.mail_domain_map import ensure_mail_domain_schema
+        from app.services.segment_schema import init_segment_schema
         await init_contact_intelligence_schema(db)
         await init_research_schema(db)
         await init_roster_schema(db)
         await ensure_mail_domain_schema(db)
+        await init_segment_schema(db)
         await db.commit()
     finally:
         await db.close()

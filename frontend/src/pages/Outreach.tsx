@@ -388,7 +388,6 @@ export default function Outreach() {
       <PageHeader
         title="Pipeline"
         subtitle="Track relationships from first contact through completed engagements."
-        imageSrc="/yucg-bg/pauli-murray-tower.jpg"
       />
 
       <div className="mb-6">

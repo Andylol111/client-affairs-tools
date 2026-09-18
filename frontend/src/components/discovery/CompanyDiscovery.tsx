@@ -302,7 +302,14 @@ export default function CompanyDiscovery() {
                 {prospects.length && selected.max_prospects ? ` of ${selected.max_prospects}` : ''}
               </p>
               {(selected.status === 'running' || selected.status === 'queued') && (
-                <div className="mt-3 h-2.5 rounded-full bg-pale-sky/70 overflow-hidden" aria-hidden>
+                <div
+                  className="mt-3 h-2.5 rounded-full bg-pale-sky/70 overflow-hidden"
+                  role="progressbar"
+                  aria-valuenow={Math.round(selected.progress_pct || 0)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  title={`${Math.round(selected.progress_pct || 0)}%${selected.progress_message ? ` · ${selected.progress_message}` : ''}`}
+                >
                   <div className="h-full bg-[var(--btn-primary-bg)] transition-[width] duration-300" style={{ width: `${Math.min(100, Math.max(4, selected.progress_pct || 0))}%` }} />
                 </div>
               )}

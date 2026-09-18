@@ -77,7 +77,19 @@ function inboxStatusClass(status?: string | null): string {
 function ResearchTab() {
   const { projects, error } = useProjects();
   if (error) return <Notice tone="danger">{error}</Notice>;
-  return <ResearchWorkspace projects={projects} />;
+  return (
+    <div className="space-y-6">
+      <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-deep-navy mb-1">Research many companies at once</h2>
+        <p className="text-sm text-slate-600">
+          Define an audience once, then let research run across a batch of companies over time.
+          Results land in a review queue instead of returning immediately - use Find people when
+          you already know the one company to search.
+        </p>
+      </div>
+      <ResearchWorkspace projects={projects} />
+    </div>
+  );
 }
 
 export default function Scraper() {
@@ -261,8 +273,7 @@ export default function Scraper() {
     <div className="app-workspace pb-12">
       <PageHeader
         title="Find contacts"
-        subtitle="Name a company to collect people. One person = a single named contact. Import = a spreadsheet you already have."
-        imageSrc="/yucg-bg/texture-panel.jpg"
+        subtitle="Name a company to collect people, or search for one person by name."
       />
 
       <AppSubnav
@@ -270,11 +281,9 @@ export default function Scraper() {
         items={[
           { id: 'company', label: 'Find people' },
           { id: 'find', label: 'One person' },
-          { id: 'import', label: 'Import' },
           { id: 'formats', label: 'Email formats' },
-          { id: 'research', label: 'Research' },
         ]}
-        active={activeTab}
+        active={activeTab === 'import' || activeTab === 'research' ? 'company' : activeTab}
         onChange={(id) => {
           setActiveTab(id as ScraperTab);
           setError('');
@@ -282,8 +291,31 @@ export default function Scraper() {
         }}
       />
 
+      {activeTab === 'company' && (
+        <>
+          <CompanyDiscovery key={discoveryKey} />
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-[13px]">
+            <button type="button" onClick={() => setActiveTab('import')} className="font-semibold text-steel-blue hover:underline">
+              Have a spreadsheet already? Import it →
+            </button>
+            <button type="button" onClick={() => setActiveTab('research')} className="font-semibold text-steel-blue hover:underline">
+              Researching many companies at once? →
+            </button>
+          </div>
+        </>
+      )}
+
+      {(activeTab === 'import' || activeTab === 'research') && (
+        <button
+          type="button"
+          onClick={() => setActiveTab('company')}
+          className="mb-4 text-[13px] font-semibold text-steel-blue hover:underline"
+        >
+          ← Back to the company crawl
+        </button>
+      )}
+
       {activeTab === 'research' && <ResearchTab />}
-      {activeTab === 'company' && <CompanyDiscovery key={discoveryKey} />}
 
       {activeTab === 'find' && (
       <>
