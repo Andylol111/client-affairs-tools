@@ -42,9 +42,10 @@ export const ADMIN_NAV_ITEM: NavItem = {
 };
 
 /**
- * Header layout. The Home screen lists every tool, so the header carries only
- * the frequent doors plus two short dropdowns; four-item dropdowns made the
- * menu the primary way to find anything.
+ * Header layout. Every destination is reachable from TOP_LEVEL_IDS plus the
+ * two NAV_GROUPS dropdowns - Home does not need to mirror this list with its
+ * own tile grid. Home instead surfaces live work state (needs attention,
+ * pipeline snapshot, leaderboard) that links into these same destinations.
  *
  * Both shells read this: desktop renders TOP_LEVEL_IDS then NAV_GROUPS, mobile
  * renders MOBILE_PRIMARY_IDS with the drawer covering the rest.

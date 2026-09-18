@@ -4,9 +4,7 @@ import type { ReactNode } from 'react';
 type PageHeaderProps = {
   title: string;
   subtitle?: string;
-  imageSrc?: string;
   actions?: ReactNode;
-  hero?: boolean;
 };
 
 export default function PageHeader({ title, subtitle, actions }: PageHeaderProps) {

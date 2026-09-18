@@ -54,6 +54,23 @@ export type CompanyReached = {
   last_sent_at?: string | null;
 };
 
+export type SegmentCompanyRow = {
+  company_key: string;
+  company_name: string;
+  company_domain: string | null;
+  contacts: number;
+};
+export type SegmentSummaryRow = {
+  segment: string;
+  companies: number;
+  contacts: number;
+  reached_contacts: number;
+  replied_contacts: number;
+  target_companies: number;
+  progress_pct: number | null;
+  companies_list: SegmentCompanyRow[];
+};
+
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
 export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
 export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
@@ -754,6 +771,24 @@ export const api = {
       a.download = 'analytics_export.csv';
       a.click();
       URL.revokeObjectURL(url);
+    },
+  },
+  segments: {
+    list: () => fetchApi<{ segments: string[] }>('/api/segments/list'),
+    summary: () => fetchApi<{ summary: SegmentSummaryRow[]; unclassified_companies: number }>('/api/segments/summary'),
+    classify: () => fetchApi<{ classified: number; remaining: number }>('/api/segments/classify', { method: 'POST' }),
+    reassign: (companyKey: string, segment: string) =>
+      fetchApi<{ ok: boolean }>(`/api/segments/company/${encodeURIComponent(companyKey)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ segment }),
+      }),
+    goals: {
+      list: () => fetchApi<{ goals: Record<string, number> }>('/api/segments/goals'),
+      set: (segment: string, target_companies: number) =>
+        fetchApi<{ ok: boolean }>('/api/segments/goals', {
+          method: 'PUT',
+          body: JSON.stringify({ segment, target_companies }),
+        }),
     },
   },
   auth: {

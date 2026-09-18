@@ -892,7 +892,6 @@ export default function YucgOutreach() {
       <PageHeader
         title="Target lists"
         subtitle="Choose companies, review suggested addresses, and move relevant contacts into outreach."
-        imageSrc="/yucg-bg/team-banner.jpg"
       />
 
       <AppTabMenu

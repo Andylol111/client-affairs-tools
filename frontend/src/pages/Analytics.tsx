@@ -1,4 +1,5 @@
 import OutreachLedger from '../components/OutreachLedger';
+import SegmentBreakdown from '../components/analytics/SegmentBreakdown';
 import { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import { api, type Campaign } from '../api';
@@ -61,7 +62,6 @@ export default function Analytics() {
       <PageHeader
         title="Results"
         subtitle="Delivery, opens, and replies after send. Opens are directional; replies are the stronger outcome."
-        imageSrc="/yucg-bg/hero-campus.jpg"
         actions={
           <Button
             onClick={() => api.analytics.exportCsv().catch((requestError) => setError((requestError as Error).message))}
@@ -157,6 +157,11 @@ export default function Analytics() {
           </div>
         </section>
       )}
+
+      <section className="surface-card mb-8 rounded-xl p-5 sm:p-6">
+        <h2 className="app-section-title mb-4">Companies by segment</h2>
+        <SegmentBreakdown />
+      </section>
 
       <section className="surface-card rounded-xl p-5 sm:p-6">
         <h2 className="app-section-title mb-4">Notes from the data</h2>

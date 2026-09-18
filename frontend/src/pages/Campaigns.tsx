@@ -81,7 +81,6 @@ export default function Campaigns() {
       <PageHeader
         title="Campaigns"
         subtitle="Prepare and send from your own account. Shared summaries show the club’s outreach activity."
-        imageSrc="/yucg-bg/texture-panel.jpg"
       />
 
       {error && <Notice tone="danger" className="mb-5">{error}</Notice>}
@@ -138,7 +137,14 @@ export default function Campaigns() {
                       {total} recipients · {sent} sent · {campaign.pending_count ?? 0} queued
                       {(campaign.failed_count ?? 0) > 0 ? ` · ${campaign.failed_count} failed` : ''}
                     </p>
-                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200" aria-label={`${progress}% sent`}>
+                    <div
+                      className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200"
+                      role="progressbar"
+                      aria-valuenow={progress}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      title={`${progress}% sent (${sent} of ${total})`}
+                    >
                       <div className="h-full bg-[var(--accent)]" style={{ width: `${progress}%` }} />
                     </div>
                   </button>

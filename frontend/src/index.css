@@ -28,7 +28,7 @@
   --success-soft: #ecfdf3;
   --warning-soft: #fffaeb;
   --info-soft: #eff8ff;
-  --radius-control: 0.375rem;
+  --radius-control: 0.5rem;
   --radius-panel: 0.5rem;
   --control-height: 2.75rem;
   --yale-blue: #00356b;
@@ -467,7 +467,7 @@ html:not(.dark) .surface-card {
   height: 2rem;
   object-fit: cover;
   border: 2px solid var(--deep-navy);
-  border-radius: 0 !important;
+  border-radius: 999px !important;
 }
 
 /* ——— App shell (desktop + mobile) ——— */
@@ -1286,34 +1286,34 @@ html:not(.dark) .surface-card {
 .app-toast {
   border: 2px solid var(--border);
   box-shadow: none;
-  border-radius: 0;
+  border-radius: var(--radius-panel);
 }
 
 .dark .app-sidebar-link:hover {
   background: #334155;
 }
 
-/* Inputs & buttons: rigid frame */
+/* Inputs & buttons share the same control radius as everything else. */
 html:not(.dark) input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']):not([type='file']):not([type='submit']):not([type='button']):not([type='reset']):not([type='image']),
 html:not(.dark) select,
 html:not(.dark) textarea,
 .dark input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']):not([type='file']):not([type='submit']):not([type='button']):not([type='reset']):not([type='image']),
 .dark select,
 .dark textarea {
-  border-radius: 0 !important;
+  border-radius: var(--radius-control) !important;
+}
+
+/* Single-line text inputs and selects get a height floor so a field on one
+   page matches a field on another - a textarea is naturally multi-line and
+   is excluded, and this is a floor (min-height), not a forced height, so an
+   input that already needs more room for its own content is unaffected. */
+input:not([type='checkbox']):not([type='radio']):not([type='color']):not([type='range']):not([type='file']):not([type='submit']):not([type='button']):not([type='reset']):not([type='image']),
+select {
+  min-height: var(--control-height);
 }
 
 .btn-danger-solid {
-  border-radius: 0;
-}
-
-.btn-primary-solid {
-  border-radius: 0;
-  border: 2px solid var(--deep-navy);
-}
-
-.dark .btn-primary-solid {
-  border-color: var(--accent);
+  border-radius: var(--radius-control);
 }
 
 
@@ -1358,6 +1358,41 @@ html:not(.dark) textarea,
 .dark .email-studio-gmail-toolbar span {
   color: var(--text-primary);
 }
+/* Raw ad hoc buttons across pages repeat the same primary/danger color
+   utilities without the shared .ui-button/.btn-danger-solid classes. Target
+   them by the color marker so every button reading as "primary" or
+   "danger" gets the same height and radius tier as componentized buttons,
+   without having to touch every call site's className string. Padding is
+   pinned too - a min-height alone is a floor, not a ceiling, and several
+   of these buttons use larger py- utilities that would still render taller.
+   Small/inline buttons (text-xs, text-[12px]) keep a smaller, still-
+   consistent tier rather than being forced to full CTA height - a tiny
+   inline suggestion action next to compact text should not suddenly
+   dominate its own card. */
+button[class*="btn-primary-bg"],
+button[class*="btn-primary-hover"] {
+  min-height: var(--control-height);
+  padding: 0.625rem 1rem;
+  border-radius: var(--radius-control);
+}
+button[class*="btn-primary-bg"][class*="text-xs"],
+button[class*="btn-primary-hover"][class*="text-xs"],
+button[class*="btn-primary-bg"][class*="text-[12px]"],
+button[class*="btn-primary-hover"][class*="text-[12px]"] {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.75rem;
+}
+
+/* Secondary/neutral action buttons and link-styled actions share the same
+   border-pale-sky marker but drift between compact (py-1.5) and standard
+   (py-2) heights depending on who wrote that page. Give them the same
+   floor as everything else so a toolbar button next to a text input on the
+   same row does not look mismatched. */
+button[class*="border-pale-sky"],
+a[class*="border-pale-sky"][class*="rounded-lg"] {
+  min-height: 2.75rem;
+}
+
 
 /* Destructive actions — solid fill, never washed out by theme utilities */
 .btn-danger-solid {
@@ -1365,7 +1400,7 @@ html:not(.dark) textarea,
   color: #ffffff;
   font-weight: 600;
   border: 1px solid #7f1d1d;
-  border-radius: 0;
+  border-radius: var(--radius-control);
 }
 .btn-danger-solid:hover:not(:disabled) {
   background-color: #7f1d1d;
@@ -2254,7 +2289,7 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   gap: 0.5rem;
   padding: 0.625rem 1rem;
   border: 2px solid transparent;
-  border-radius: 0.25rem !important;
+  border-radius: var(--radius-control) !important;
   font: inherit;
   font-size: 0.875rem;
   font-weight: 700;
@@ -2310,6 +2345,7 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-left-width: 4px;
+  border-radius: var(--radius-panel);
   color: var(--ink);
   font-size: 0.875rem;
   line-height: 1.45;
@@ -2342,6 +2378,7 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
 .ui-empty {
   padding: clamp(2rem, 6vw, 4rem) 1.25rem;
   border: 1px dashed var(--border);
+  border-radius: var(--radius-panel);
   background: var(--surface);
   color: var(--ink);
   text-align: center;
@@ -2382,6 +2419,7 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
   width: min(32rem, 100%);
   padding: 1.25rem;
   border: 2px solid var(--deep-navy);
+  border-radius: var(--radius-panel);
   background: var(--surface-raised);
   color: var(--ink);
   box-shadow: var(--shadow-xl);
