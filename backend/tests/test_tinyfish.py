@@ -1,12 +1,17 @@
-"""TinyFish adapter and the TinyFish-first, Firecrawl-fallback waterfall.
+"""TinyFish (via Monid) adapter and the TinyFish-first, Firecrawl-fallback
+waterfall.
 
-TinyFish (https://www.tinyfish.ai) is layered ahead of self-hosted Firecrawl
-because its own pricing page advertises residential proxies and anti-bot
-handling "at the infrastructure layer" - exactly the failure mode Firecrawl
-hit in production (see test_web_fetch.py's docstring and
-docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md section 1.6). These tests use
-httpx.MockTransport, matching the convention in test_web_fetch.py, and
-never touch a network.
+TinyFish's Search and Fetch capabilities are reached through Monid
+(https://api.monid.ai), a hosted API broker - MONID_API_KEY authenticates
+against Monid's API, not a TinyFish-issued key. A single POST /v1/run call
+runs synchronously and returns {"status": "COMPLETED", "output": {...}} -
+confirmed live against real production traffic (see web_fetch.py's module
+docstring). TinyFish itself is layered ahead of self-hosted Firecrawl
+because it is a healthy, working search backend where Firecrawl's
+self-hosted /v1/search is bot-blocked upstream (see test_web_fetch.py's
+docstring and docs/FIRECRAWL-SEARCH-EXPANSION-PLAN.md section 1.6). These
+tests use httpx.MockTransport, matching the convention in test_web_fetch.py,
+and never touch a network.
 """
 import asyncio
 import os
@@ -51,7 +56,7 @@ def tests() -> None:
             return lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs)
 
         # --- Unconfigured: never raises, never calls the network ---
-        os.environ.pop('TINYFISH_API_KEY', None)
+        os.environ.pop('MONID_API_KEY', None)
         os.environ.pop('FIRECRAWL_URL', None)
         assert not web_fetch.tinyfish_configured()
         assert not web_fetch.web_search_configured()
@@ -59,49 +64,93 @@ def tests() -> None:
         assert asyncio.run(web_fetch.web_search('Acme CEO', user_id=1)) == []
 
         # web_search_configured() is true with either backend alone.
-        os.environ['TINYFISH_API_KEY'] = 'tf-test-key'
+        os.environ['MONID_API_KEY'] = 'monid_live_test'
         assert web_fetch.tinyfish_configured()
         assert web_fetch.web_search_configured()
-        os.environ.pop('TINYFISH_API_KEY')
+        os.environ.pop('MONID_API_KEY')
         os.environ['FIRECRAWL_URL'] = 'http://100.84.7.57:3002'
         assert web_fetch.web_search_configured()
         os.environ.pop('FIRECRAWL_URL')
-        os.environ['TINYFISH_API_KEY'] = 'tf-test-key'
+        os.environ['MONID_API_KEY'] = 'monid_live_test'
 
-        # --- TinyFish fetch: success shape mapping ---
+        # --- TinyFish fetch via Monid: success shape mapping, synchronous
+        # COMPLETED on the first POST (the common case observed live). ---
         def fetch_handler(request: httpx.Request) -> httpx.Response:
-            assert request.headers['X-API-Key'] == 'tf-test-key'
+            assert request.headers['Authorization'] == 'Bearer monid_live_test'
+            assert str(request.url) == 'https://api.monid.ai/v1/run'
+            import json
+            body = json.loads(request.content)
+            assert body == {"provider": "tinyfish", "endpoint": "/fetch",
+                             "input": {"body": {"urls": ["https://acme.com"], "links": True}}}
             return httpx.Response(200, json={
-                "results": [{"url": "https://acme.com", "title": "Acme", "text": "# Acme\nWe make things."}],
-                "errors": [],
+                "runId": "01TEST", "provider": "tinyfish", "endpoint": "/fetch", "status": "COMPLETED",
+                "output": {"results": [{"url": "https://acme.com", "final_url": "https://acme.com",
+                                         "title": "Acme", "text": "# Acme\nWe make things.",
+                                         "links": ["https://acme.com/about"]}], "errors": []},
             })
 
         with patch('app.services.web_fetch.httpx.AsyncClient', client_for(fetch_handler)):
             page = asyncio.run(web_fetch.fetch_page('https://acme.com', user_id=1))
             assert page is not None
             assert page.content == '# Acme\nWe make things.'
-            assert page.links == []
+            assert page.links == ['https://acme.com/about']
 
         # --- TinyFish fetch: no results / errors degrades to None ---
         def fetch_empty_handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"results": [], "errors": [{"url": "https://acme.com", "error": "timeout"}]})
+            return httpx.Response(200, json={
+                "runId": "01TEST", "status": "COMPLETED",
+                "output": {"results": [], "errors": [{"url": "https://acme.com", "error": "timeout"}]},
+            })
 
         with patch('app.services.web_fetch.httpx.AsyncClient', client_for(fetch_empty_handler)):
             assert asyncio.run(web_fetch.fetch_page('https://acme.com', user_id=1)) is None
 
-        # --- TinyFish search: success shape mapping (snippet -> content) ---
-        def search_handler(request: httpx.Request) -> httpx.Response:
-            assert request.headers['X-API-Key'] == 'tf-test-key'
+        # --- A run that never completes (FAILED) also degrades to None ---
+        def fetch_failed_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"runId": "01TEST", "status": "FAILED", "error": {"message": "boom"}})
+
+        with patch('app.services.web_fetch.httpx.AsyncClient', client_for(fetch_failed_handler)):
+            assert asyncio.run(web_fetch.fetch_page('https://acme.com', user_id=1)) is None
+
+        # --- A non-terminal status is polled via GET /v1/runs/{id} until
+        # terminal, matching Monid's async run model for slower jobs. ---
+        poll_calls = {'n': 0}
+
+        def search_poll_dispatch(request: httpx.Request) -> httpx.Response:
+            if request.method == 'POST':
+                return httpx.Response(200, json={"runId": "01POLL", "status": "RUNNING"})
+            poll_calls['n'] += 1
+            if poll_calls['n'] < 2:
+                return httpx.Response(200, json={"runId": "01POLL", "status": "RUNNING"})
             return httpx.Response(200, json={
-                "query": "Acme CEO",
-                "results": [
+                "runId": "01POLL", "status": "COMPLETED",
+                "output": {"query": "Acme CEO", "results": [
+                    {"position": 1, "title": "Acme", "url": "https://acme.com", "snippet": "Acme is a company."},
+                ]},
+            })
+
+        with patch('app.services.web_fetch.httpx.AsyncClient', client_for(search_poll_dispatch)), \
+             patch('app.services.web_fetch.asyncio.sleep', return_value=None):
+            results = asyncio.run(web_fetch.web_search('Acme CEO', user_id=1))
+            assert results == [{"title": "Acme", "url": "https://acme.com", "content": "Acme is a company."}]
+            assert poll_calls['n'] == 2, 'Expected exactly one poll before the run completed'
+
+        # --- TinyFish search: success shape mapping (snippet -> content),
+        # truncated to max_results since the API has no count parameter. ---
+        def search_handler(request: httpx.Request) -> httpx.Response:
+            import json
+            body = json.loads(request.content)
+            assert body["input"]["queryParams"] == {"query": "Acme CEO"}
+            return httpx.Response(200, json={
+                "runId": "01TEST", "status": "COMPLETED",
+                "output": {"query": "Acme CEO", "results": [
                     {"position": 1, "title": "Acme - Wikipedia", "url": "https://en.wikipedia.org/wiki/Acme", "snippet": "Acme is a company."},
-                ],
-                "total_results": 1,
+                    {"position": 2, "title": "Acme Careers", "url": "https://acme.com/careers", "snippet": "Join Acme."},
+                ], "total_results": 2},
             })
 
         with patch('app.services.web_fetch.httpx.AsyncClient', client_for(search_handler)):
-            results = asyncio.run(web_fetch.web_search('Acme CEO', user_id=1))
+            results = asyncio.run(web_fetch.web_search('Acme CEO', max_results=1, user_id=1))
             assert results == [{"title": "Acme - Wikipedia", "url": "https://en.wikipedia.org/wiki/Acme", "content": "Acme is a company."}]
 
         # --- A genuine empty TinyFish search result is trusted, not treated
@@ -109,28 +158,23 @@ def tests() -> None:
         os.environ['FIRECRAWL_URL'] = 'http://100.84.7.57:3002'
         firecrawl_called = False
 
-        def search_empty_handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"query": "hello world", "results": [], "total_results": 0})
-
-        def firecrawl_should_not_be_called(request: httpx.Request) -> httpx.Response:
+        def dispatch_empty(request: httpx.Request) -> httpx.Response:
+            if 'monid.ai' in str(request.url):
+                return httpx.Response(200, json={"runId": "01TEST", "status": "COMPLETED",
+                                                  "output": {"query": "hello world", "results": []}})
             nonlocal firecrawl_called
             firecrawl_called = True
             return httpx.Response(200, json={"data": [{"title": "should not happen", "url": "x", "description": "x"}]})
 
-        def dispatch(request: httpx.Request) -> httpx.Response:
-            if 'tinyfish' in str(request.url):
-                return search_empty_handler(request)
-            return firecrawl_should_not_be_called(request)
-
-        with patch('app.services.web_fetch.httpx.AsyncClient', client_for(dispatch)):
+        with patch('app.services.web_fetch.httpx.AsyncClient', client_for(dispatch_empty)):
             results = asyncio.run(web_fetch.web_search('hello world', user_id=1))
             assert results == []
             assert not firecrawl_called, 'A real empty TinyFish result must not fall through to Firecrawl'
 
         # --- TinyFish failure DOES fall through to Firecrawl ---
         def dispatch_fallback(request: httpx.Request) -> httpx.Response:
-            if 'tinyfish' in str(request.url):
-                return httpx.Response(500, json={"error": {"code": "INTERNAL_ERROR"}})
+            if 'monid.ai' in str(request.url):
+                return httpx.Response(401, json={"code": 401, "message": "Invalid API key format"})
             return httpx.Response(200, json={"data": [{"title": "Firecrawl result", "url": "https://acme.com", "description": "from firecrawl"}]})
 
         with patch('app.services.web_fetch.httpx.AsyncClient', client_for(dispatch_fallback)):
@@ -139,8 +183,8 @@ def tests() -> None:
 
         # Same fallback behavior for fetch_page.
         def dispatch_fetch_fallback(request: httpx.Request) -> httpx.Response:
-            if 'tinyfish' in str(request.url):
-                return httpx.Response(429, json={"error": {"code": "RATE_LIMIT_EXCEEDED"}})
+            if 'monid.ai' in str(request.url):
+                return httpx.Response(429, json={"code": 429, "message": "rate limited"})
             return httpx.Response(200, json={"data": {"markdown": "# from firecrawl", "links": []}})
 
         with patch('app.services.web_fetch.httpx.AsyncClient', client_for(dispatch_fetch_fallback)):
@@ -150,14 +194,12 @@ def tests() -> None:
 
         os.environ.pop('FIRECRAWL_URL')
 
-        # --- Quota: same 15/hr/member, 120/hr club shape, mirroring
-        # reserve_firecrawl_call, with TinyFish's own higher numbers as the
-        # informed default. ---
+        # --- Quota: same shape as reserve_firecrawl_call. ---
         os.environ['TINYFISH_CALLS_PER_MEMBER_PER_HOUR'] = '2'
         os.environ['TINYFISH_CALLS_PER_CLUB_PER_HOUR'] = '100'
 
         def ok_search_handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"results": []})
+            return httpx.Response(200, json={"runId": "01TEST", "status": "COMPLETED", "output": {"results": []}})
 
         with patch('app.services.web_fetch.httpx.AsyncClient', client_for(ok_search_handler)):
             for _ in range(2):

@@ -196,12 +196,14 @@ async def reserve_segment_classification(user_id: int):
         await db.close()
 
 async def reserve_tinyfish_call(user_id: int):
-    """Same shape as reserve_firecrawl_call, higher numbers: TinyFish's own
-    published free-tier ceiling is 500 search requests/hour and 1,000 fetch
-    urls/day (per API key, account-wide - see https://www.tinyfish.ai/pricing).
-    Keep this club-wide limit under that with real margin rather than up
-    against it, and use a per-member limit that still leaves every other
-    active member headroom in the same hour.
+    """Same shape as reserve_firecrawl_call. TinyFish is reached through
+    Monid (MONID_API_KEY, see app/services/web_fetch.py) rather than a
+    direct TinyFish account, so its exact upstream ceiling for this key is
+    opaque - these defaults stay comfortably under TinyFish's own published
+    free-tier numbers (500 search requests/hour, 1,000 fetch urls/day, see
+    https://www.tinyfish.ai/pricing) with real margin, and use a per-member
+    limit that still leaves every other active member headroom in the same
+    hour.
     """
     try:
         member_limit = min(200, max(1, int(os.getenv('TINYFISH_CALLS_PER_MEMBER_PER_HOUR', '30'))))
