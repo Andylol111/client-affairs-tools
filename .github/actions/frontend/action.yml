@@ -20,7 +20,7 @@ runs:
       run: npm run lint
     - shell: bash
       working-directory: frontend
-      run: npm audit --audit-level=high
+      run: bash "$GITHUB_WORKSPACE/scripts/npm_audit_gate.sh"
     - shell: bash
       working-directory: frontend
       run: npm run build

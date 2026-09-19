@@ -212,6 +212,74 @@ def tests() -> None:
         asyncio.run(check_people())
 
 
+UK_COLS = ['CompanyName', ' CompanyNumber', 'RegAddress.AddressLine1', 'RegAddress.PostTown',
+           'CompanyCategory', 'CompanyStatus', 'DissolutionDate', 'IncorporationDate',
+           'Accounts.LastMadeUpDate', 'Accounts.AccountCategory', 'SICCode.SicText_1', 'URI']
+
+
+def _uk_csv(rows):
+    import csv as _csv
+    buf = io.StringIO()
+    writer = _csv.DictWriter(buf, fieldnames=UK_COLS)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({col: row.get(col.strip(), '') for col in UK_COLS})
+    return buf.getvalue().encode('utf-8')
+
+
+def uk_tests() -> None:
+    """Companies House bulk: only active companies above the small-company
+    accounts thresholds that are operating businesses. Column names and value
+    shapes match the live 2026-09 file (' CompanyNumber' really does carry a
+    leading space; dates are dd/mm/yyyy)."""
+    import zipfile as _zip
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services import company_register as cr
+
+    rows = [
+        {'CompanyName': 'DELIVEROO PLC', 'CompanyNumber': '13227665', 'RegAddress.PostTown': 'LONDON',
+         'CompanyStatus': 'Active', 'Accounts.AccountCategory': 'GROUP', 'IncorporationDate': '21/11/2020',
+         'Accounts.LastMadeUpDate': '31/12/2025', 'SICCode.SicText_1': '56102 - Unlicensed restaurants and cafes',
+         'CompanyCategory': 'Public Limited Company', 'URI': 'http://business.data.gov.uk/id/company/13227665'},
+        {'CompanyName': 'MIDSIZE MAKER LTD', 'CompanyNumber': '00000002', 'RegAddress.PostTown': 'LEEDS',
+         'CompanyStatus': 'Active', 'Accounts.AccountCategory': 'MEDIUM',
+         'SICCode.SicText_1': '25620 - Machining'},
+        # Below the thresholds: a one-person consultancy.
+        {'CompanyName': 'TINY CONSULTANCY LTD', 'CompanyNumber': '00000003', 'CompanyStatus': 'Active',
+         'Accounts.AccountCategory': 'MICRO ENTITY', 'SICCode.SicText_1': '70229 - Management consultancy'},
+        # Right size, wrong kind: a holding vehicle, like Form D pooled funds.
+        {'CompanyName': 'BIGCO HOLDINGS LIMITED', 'CompanyNumber': '00000004', 'CompanyStatus': 'Active',
+         'Accounts.AccountCategory': 'FULL', 'SICCode.SicText_1': '64209 - Activities of other holding companies'},
+        {'CompanyName': 'PROPERTY VEHICLE LTD', 'CompanyNumber': '00000005', 'CompanyStatus': 'Active',
+         'Accounts.AccountCategory': 'FULL', 'SICCode.SicText_1': '68209 - Other letting of own real estate'},
+        # Right size and kind, but no longer trading.
+        {'CompanyName': 'GONE LTD', 'CompanyNumber': '00000006', 'CompanyStatus': 'Liquidation',
+         'Accounts.AccountCategory': 'FULL', 'SICCode.SicText_1': '25620 - Machining'},
+    ]
+    buffer = io.BytesIO()
+    with _zip.ZipFile(buffer, 'w') as zf:
+        zf.writestr('BasicCompanyDataAsOneFile-2026-09-01.csv', _uk_csv(rows))
+    with _zip.ZipFile(io.BytesIO(buffer.getvalue())) as zf:
+        with zf.open(zf.namelist()[0]) as handle:
+            kept = list(cr.parse_uk_bulk(handle))
+
+    names = [c['company_name'] for c in kept]
+    assert names == ['Deliveroo Plc', 'Midsize Maker Ltd'], names
+    first = kept[0]
+    assert first['tier'] == 'uk' and first['country'] == 'GB' and first['source_key'] == '13227665'
+    assert first['sector_code'] == '56102' and first['sector_label'] == 'Unlicensed restaurants and cafes'
+    assert first['region'] == 'London'
+    assert first['last_event_at'] == '2025-12-31' and first['last_event_kind'] == 'accounts_filed'
+    assert first['metadata']['size_band'] == 'group (consolidated accounts)'
+    assert first['metadata']['incorporated'] == '2020-11-21'
+    # No invented headcount: the band is the evidence, and its source is named.
+    assert first.get('employees') is None
+    assert first['employees_source'] == 'companies_house_account_category'
+    assert kept[1]['metadata']['size_band'].startswith('medium')
+    assert cr._uk_date('') is None and cr._uk_date('31/12/2025') == '2025-12-31'
+
+
 if __name__ == '__main__':
     tests()
+    uk_tests()
     print('company register: ok')

@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 const user = { id: 1, email: 'alice@yale.edu', name: 'Alice', role: 'admin', is_active: 1 };
 
+const UK_ROW = { id: 3, source: 'companies_house', tier: 'uk', country: 'GB', company_name: 'Hansford Sensors Limited', sector_label: 'Manufacture of electronic industrial process control equipment', region: 'High Wycombe', employees: null, employees_source: 'companies_house_account_category', last_event_at: '2025-12-31', last_event_amount: null, last_event_kind: 'accounts_filed', officer_count: 0, metadata: { size_band: 'group (consolidated accounts)' } };
+
 const ROWS = [
   { id: 1, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Gilgamesh Pharma Inc.', sector_label: 'Pharmaceuticals', region: 'New York', employees: null, employees_source: null, last_event_at: '2026-03-27', last_event_amount: 15000000, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: { revenue_range: 'No Revenues' } },
   { id: 2, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Lucem Health, Inc.', sector_label: 'Other Technology', region: 'North Carolina', employees: null, employees_source: null, last_event_at: '2026-03-26', last_event_amount: 8397541, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: {} },
@@ -15,7 +17,7 @@ async function mockRegister(page: Page) {
     let body: unknown = {};
     if (path === '/api/auth/me') body = { authenticated: true, user };
     else if (path === '/api/yucgoutreach/register/summary') body = {
-      tiers: [{ tier: 'us_public', country: 'US', n: 8031, with_officers: 0 }, { tier: 'us_private', country: 'US', n: 1563, with_officers: 1556 }],
+      tiers: [{ tier: 'us_public', country: 'US', n: 8031, with_officers: 0 }, { tier: 'us_private', country: 'US', n: 1563, with_officers: 1556 }, { tier: 'uk', country: 'GB', n: 82819, with_officers: 0 }],
       sectors: [{ sector: 'Other Technology', n: 505 }, { sector: 'Biotechnology', n: 108 }],
       recent_ingests: [],
     };
@@ -23,7 +25,7 @@ async function mockRegister(page: Page) {
       calls.push(url.search);
       const tier = url.searchParams.get('tier');
       const sector = url.searchParams.get('sector');
-      let items = ROWS.filter(r => !tier || r.tier === tier);
+      let items = [...ROWS, UK_ROW].filter(r => !tier || r.tier === tier);
       if (sector) items = items.filter(r => r.sector_label === sector);
       body = { items, total: items.length, limit: 40, offset: 0 };
     }
@@ -50,7 +52,7 @@ test('register browses the free public pool and hands a company to Find people',
   await page.getByRole('tab', { name: 'Company register' }).click();
 
   // Defaults to the startup pool and states what is on record.
-  await expect(page.getByText('8,031 listed · 1,563 recently funded · 1,556 with named officers')).toBeVisible();
+  await expect(page.getByText('8,031 listed · 1,563 recently funded · 82,819 UK · 1,556 with named officers')).toBeVisible();
   await expect(page.getByText('Gilgamesh Pharma Inc.')).toBeVisible();
   await expect(page.getByText(/Pharmaceuticals · New York · raised \$15M · 2026-03-27/)).toBeVisible();
 
@@ -63,6 +65,14 @@ test('register browses the free public pool and hands a company to Find people',
   await expect(page.getByText('0 matches')).toBeVisible();
   await page.getByLabel('Sector', { exact: true }).selectOption('Other Technology');
   await expect(page.getByText('Lucem Health, Inc.')).toBeVisible();
+
+  // UK tier shows Companies House rows with their statutory size band, and
+  // never an invented employee count.
+  await page.getByLabel('Sector', { exact: true }).selectOption('');
+  await page.getByRole('button', { name: 'UK' }).click();
+  await expect(page.getByText('Hansford Sensors Limited')).toBeVisible();
+  await expect(page.getByText(/High Wycombe · group \(consolidated accounts\)/)).toBeVisible();
+  await expect(page.getByText(/employees \(/)).toHaveCount(0);
 
   // Tier switch asks the API for listed companies.
   await page.getByRole('button', { name: 'US listed' }).click();
