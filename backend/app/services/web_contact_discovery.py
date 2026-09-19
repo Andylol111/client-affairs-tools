@@ -95,11 +95,25 @@ async def _tavily_parallel(queries: list[str], max_results: int = 8) -> list[dic
     return merged
 
 
+_LINKEDIN_DEDUP_SUFFIX_RE = re.compile(r"(?=[0-9a-f]*\d)[0-9a-f]{5,10}$", re.I)
+
+
 def _slug_to_name(slug: str) -> str | None:
+    """LinkedIn appends a short auto-generated suffix to a profile slug when
+    the readable one is already taken - either as its own hyphenated segment
+    (e.g. don-gross-25b76b8) or fused onto the last word with no separator
+    (e.g. rachel-hutter60). Both are hex-digit strings containing at least
+    one digit, so real names (which never mix digits into a surname) are
+    never mistaken for one."""
     slug = (slug or "").strip().strip("/")
     if not slug or len(slug) < 4:
         return None
-    parts = [p for p in re.split(r"[-_]+", slug) if p and not p.isdigit()]
+    parts = [p for p in re.split(r"[-_]+", slug) if p]
+    while parts and _LINKEDIN_DEDUP_SUFFIX_RE.fullmatch(parts[-1]):
+        parts.pop()
+    if parts:
+        parts[-1] = re.sub(r"\d+$", "", parts[-1]) or parts[-1]
+    parts = [p for p in parts if p and not p.isdigit()]
     if len(parts) < 2:
         return None
     name = " ".join(p.capitalize() for p in parts[:3])
