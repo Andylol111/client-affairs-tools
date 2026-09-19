@@ -12,6 +12,7 @@ RUN apk upgrade --no-cache
 COPY backend/requirements.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY backend .
+COPY data ./data
 COPY --from=fe /fe/dist /app/frontend_dist
 ENV FRONTEND_DIST=/app/frontend_dist
 RUN addgroup -g 10001 yucg && adduser -D -u 10001 -G yucg yucg \
