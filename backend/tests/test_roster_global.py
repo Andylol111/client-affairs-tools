@@ -34,11 +34,15 @@ MONZO_SEARCH = {
         {"company_number": "999", "company_name": "Monzo Corner Cafe", "company_status": "dissolved", "title": "MONZO CORNER CAFE"},
     ]
 }
+# Field names match a live response from api.company-information.service.gov.uk
+# /company/{n}/officers: the person is "name", not "officer_name". The old
+# fixture invented "officer_name", so it passed while production dropped
+# every UK officer of every company.
 MONZO_OFFICERS = {
     "items": [
-        {"officer_name": "QUANT, Ada", "officer_role": "director", "occupation": "Software Engineer", "appointed_on": "2015-01-01"},
-        {"officer_name": "BANKER, Rex Mr", "officer_role": "director", "occupation": "Banker", "resigned_on": "2024-06-30"},
-        {"officer_name": "MONZO NOMINEES LIMITED", "officer_role": "corporate-director", "identification": {"registration_number": "1"}},
+        {"name": "QUANT, Ada", "officer_role": "director", "occupation": "Software Engineer", "appointed_on": "2015-01-01"},
+        {"name": "BANKER, Rex Mr", "officer_role": "director", "occupation": "Banker", "resigned_on": "2024-06-30"},
+        {"name": "MONZO NOMINEES LIMITED", "officer_role": "corporate-director", "identification": {"registration_number": "1"}},
     ],
     "links": {},
 }
@@ -50,6 +54,9 @@ def test_ch_mapping() -> None:
     assert "Ada Quant" in names, people
     assert "Rex Banker" in names
     assert len(people) == 2, "corporate officers are skipped"
+    # A natural-person officer must never be dropped for want of a name: that
+    # silently emptied the whole UK register path in production.
+    assert all(person["full_name"].strip() for person in people)
     by = {p["full_name"]: p for p in people}
     assert by["Ada Quant"]["employment"] == "current"
     assert by["Ada Quant"]["role_type"] == "director"
