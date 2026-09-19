@@ -141,20 +141,29 @@ export default function AssistantBubble({ user }: { user: { id?: number } }) {
   }
 
   function fillFindPeople(index: number, message: Message) {
-    const action = message.pending_actions?.find((item) => item.tool === 'start_find_people');
-    const company = String(action?.args.company_name || '').trim();
-    if (!company) {
-      const dest = message.navigations?.[0]?.path || '/scraper?view=company';
-      navigate(dest);
-      return;
-    }
     const missing = missingRequired(index, message);
     if (missing.length) {
       setAskError((current) => ({ ...current, [index]: `Answer ${missing.map((field) => field.label.toLowerCase()).join(', ')} before filling Find people.` }));
       return;
     }
     setAskError((current) => ({ ...current, [index]: '' }));
-    navigate(findPeoplePath(company, answersFor(index, message)));
+    const answers = answersFor(index, message);
+    const action = message.pending_actions?.find((item) => item.tool === 'start_find_people');
+    const company = String(action?.args.company_name || '').trim();
+    if (company) {
+      // A proposal carries the sheet's own title hint for that company;
+      // the member's typed answer wins when they gave one.
+      const proposed = String(action?.args.title_hints || '').trim();
+      navigate(findPeoplePath(company, { ...answers, titles: answers.titles?.trim() || proposed }));
+      return;
+    }
+    // No single company yet (a sector question, or the model named none):
+    // still land on Find people with the titles filled in, never a bare page.
+    const dest = message.navigations?.find((item) => item.path.startsWith('/scraper'))?.path || '/scraper?view=company';
+    const url = new URL(dest, window.location.origin);
+    if (answers.titles?.trim()) url.searchParams.set('titles', answers.titles.trim());
+    if (answers.company_domain?.trim()) url.searchParams.set('domain', answers.company_domain.trim());
+    navigate(`${url.pathname}${url.search}`);
   }
 
   async function ask() {

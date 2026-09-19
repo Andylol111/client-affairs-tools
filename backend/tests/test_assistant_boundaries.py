@@ -1,5 +1,6 @@
 """Assistant retrieval, indexing, ownership and cost gates without live AWS."""
 import asyncio
+import json
 import io
 import os
 import sys
@@ -101,6 +102,33 @@ async def run():
             blocked=await assistant_service.answer({'id':2},'Private pricing',document_ids=[1])
         assert 'Confidential pricing' not in private.call_args.args[0]
         assert blocked['pending_actions']==[]
+
+        # A sector request: the model reads recommend_companies but, seeing no
+        # results in its single pass, proposes nothing. The service must turn
+        # the rows it fetched into Find people proposals, prefill titles from
+        # the sheet's target role, and open the first company - not end at
+        # "Looked up: 5 row(s)" with nothing to click.
+        sector_reply=MagicMock(return_value=json.dumps({
+            'answer':'Let me find entertainment targets.',
+            'reads':[{'tool':'recommend_companies','args':{'sector':'entertainment','n':5}}],
+            'ask':[],'propose':[],'open':[],
+        }))
+        rows=[
+            {'prospect':{'company':'The Walt Disney Company (Studios)','sector':'Entertainment — Major Studio','recommended_message_angle':'','target_role_title':'SVP Franchise Marketing or VP Consumer Insights'}},
+            {'prospect':{'company':'A24','sector':'Entertainment — Indie','recommended_message_angle':'','target_role_title':'Head of Acquisitions'}},
+        ]
+        with patch.object(assistant_service,'complete_text',sector_reply), \
+             patch('app.services.prospect_coordinator.recommend_prospects',return_value=rows) as rec:
+            sector=await assistant_service.answer({'id':2,'role':'standard'},'help me reach out to companies in entertainment')
+        assert rec.call_args.kwargs=={'n':5,'sector':'entertainment'}
+        proposed=[item for item in sector['pending_actions'] if item['tool']=='start_find_people']
+        assert [item['args']['company_name'] for item in proposed]==['The Walt Disney Company (Studios)','A24']
+        assert proposed[0]['args']['title_hints']=='SVP Franchise Marketing or VP Consumer Insights'
+        titles=next(field for field in sector['asks'] if field['id']=='titles')
+        assert titles['value']=='SVP Franchise Marketing or VP Consumer Insights' and titles['required'] is True
+        assert any(field['id']=='company_domain' for field in sector['asks'])
+        assert any(nav['path'].startswith('/scraper?view=company&company=The%20Walt%20Disney') for nav in sector['navigations'])
+        assert 'Recommended: The Walt Disney Company (Studios), A24' in sector['answer']
 
         generated={'answer':'Grounded [D2-C1]','sources':result['sources'],'model':'haiku','grounded':True}
         with patch.object(assistant,'answer',AsyncMock(return_value=generated)):

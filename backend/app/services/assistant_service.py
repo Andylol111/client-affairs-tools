@@ -8,6 +8,7 @@ import os
 import re
 from html import escape
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -411,6 +412,20 @@ def _import_run_payload(question: str, page_path: str) -> dict[str, Any] | None:
     }
 
 
+
+def _recommended_companies(lookups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Company rows from a recommend_companies read, in either shape it
+    returns (a plain list, or {"companies": [...]} when the sector fell back)."""
+    for item in lookups:
+        if item.get('tool') != 'recommend_companies':
+            continue
+        data = item.get('data')
+        rows = data.get('companies') if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict) and str(row.get('company') or '').strip()]
+    return []
+
 def _latest_completed_run(lookups: list[dict[str, Any]]) -> int | None:
     for item in lookups:
         data = item.get("data")
@@ -539,6 +554,34 @@ async def answer(
             }])
             navigations = sanitize_open(_unique_dicts(
                 navigations + [{"path": "/outreach", "label": "Pipeline"}],
+                "path",
+            ))
+    # The model's single pass cannot see what its reads returned. When it
+    # asked for company recommendations and proposed nothing, turn the rows
+    # it fetched into one Find people proposal per company - otherwise a
+    # sector request ends with "Looked up: 5 row(s)" and nothing to click.
+    if not any(item.get('tool') == 'start_find_people' for item in pending):
+        recommended = _recommended_companies(lookups)
+        if recommended:
+            proposals = [{
+                "tool": "start_find_people",
+                "args": {
+                    "company_name": row["company"],
+                    "title_hints": row.get("target_role_title") or "",
+                    "max_prospects": 250,
+                },
+                "summary": f"Find people at {row['company']}",
+            } for row in recommended[:5]]
+            pending = sanitize_propose(pending + proposals)
+            first = recommended[0]
+            names = ", ".join(row["company"] for row in recommended[:5])
+            answer_text = f"{answer_text}\n\nRecommended: {names}. Pick one below to fill Find people."
+            if not any(field.get('id') == 'titles' for field in asks):
+                asks = sanitize_ask(asks + [{"id": "titles", "value": first.get("target_role_title") or "", "required": True}])
+            if not asks or not any(field.get('id') == 'company_domain' for field in asks):
+                asks = sanitize_ask(asks + [{"id": "company_domain", "value": "", "required": False}])
+            navigations = sanitize_open(_unique_dicts(
+                navigations + [{"path": f"/scraper?view=company&company={quote(first['company'])}", "label": f"Find people at {first['company']}"}],
                 "path",
             ))
     if lookups:
