@@ -20,6 +20,7 @@ READ_TOOLS = {
     "list_discovery_runs",
     "get_discovery_run",
     "recommend_companies",
+    "browse_register",
     "search_person",
     "get_company_pattern",
     "predict_email",
@@ -75,7 +76,7 @@ Cite document claims with [source-id] only when sources were supplied.
 Reply with a single JSON object:
 {
   "answer": "plain language reply the member will read",
-  "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|search_person|get_company_pattern|predict_email", "args": {}}],
+  "reads": [{"tool": "search_contacts|list_companies|list_discovery_runs|get_discovery_run|recommend_companies|browse_register|search_person|get_company_pattern|predict_email", "args": {}}],
   "ask": [{"id": "titles|company_domain", "label": "field label", "value": "prefill if they already said it", "required": true, "placeholder": "hint"}],
   "propose": [{"tool": "start_find_people|import_run_to_contacts|set_company_pattern", "args": {}, "summary": "short confirm label"}],
   "open": [{"path": "/scraper?view=company&company=Name|/outreach|/studio|/yucgoutreach|/campaigns|/documents|/projects|/analytics|/profile|/", "label": "button label"}]
@@ -84,6 +85,7 @@ Rules:
 - Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, title_hints, max_prospects (default 250, max 800).
 - For Find people: always emit ask fields for titles (required) and company_domain. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain when known).
 - Propose start_find_people for a named company. Do not run it yourself. "Companies like X" / "similar to X" means Find people at X.
+- browse_register searches the bulk public register (args: q, tier us_public|us_private|uk, sector, with_officers, limit) - SEC listed companies, SEC Form D filers (recently funded private companies, tier us_private), Companies House. Use it when the member wants companies beyond the curated list: "startups", "recently funded", "public companies in <sector>", "more like these". recommend_companies is the curated club sheet and stays the first choice for a plain sector ask.
 - "Companies in <sector>" / "reach out to <industry>" / "who should we target in <area>": read recommend_companies with args {"sector": "<their words>", "n": 5}, then name the companies in the answer and propose start_find_people ONCE PER COMPANY (up to 5), each with company_name and title_hints set to that company's target_role_title. Also emit the titles ask prefilled with the first company's target_role_title so the member can override. Never leave a sector request with no proposals and a bare /scraper open.
 - "What format/pattern does X use" is get_company_pattern (args: domain). With no domain it lists known companies.
 - "What is <person>'s email at X" is predict_email (args: name, domain). Guesses are derived from learned patterns, never proof of a mailbox.
@@ -294,6 +296,32 @@ async def execute_read(user: dict, tool: str, args: dict[str, Any]) -> Any:
             return {"sector": sector, "matched_sector": False,
                     "companies": [_recommended_company(item) for item in items]}
         return [_recommended_company(item) for item in items]
+    if tool == "browse_register":
+        from app.services.company_register import search_register
+        try:
+            limit = max(1, min(int(args.get("limit") or 8), 20))
+        except (TypeError, ValueError):
+            limit = 8
+        found = await search_register(
+            q=str(args.get("q") or "").strip() or None,
+            tier=str(args.get("tier") or "").strip() or None,
+            country=str(args.get("country") or "").strip() or None,
+            sector=str(args.get("sector") or "").strip() or None,
+            with_officers=bool(args.get("with_officers")),
+            limit=limit,
+        )
+        return {
+            "total": found["total"],
+            "companies": [{
+                "company": item["company_name"],
+                "tier": item["tier"],
+                "sector": item.get("sector_label"),
+                "region": item.get("region"),
+                "officers_on_file": item.get("officer_count") or 0,
+                "last_raise_usd": item.get("last_event_amount"),
+                "last_raise_at": item.get("last_event_at"),
+            } for item in found["items"]],
+        }
     if tool == "search_person":
         from app.models import SearchPersonRequest
         from app.routers.contacts import search_person

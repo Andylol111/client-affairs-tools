@@ -4,13 +4,14 @@ import { api, type Contact, type EmailPatternRow, type DiscoveryLogEntry } from 
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import CompanyDiscovery from '../components/discovery/CompanyDiscovery';
+import CompanyRegister from '../components/discovery/CompanyRegister';
 import CompanyAutocomplete from '../components/CompanyAutocomplete';
 import EmailPrediction from '../components/EmailPrediction';
 import { Notice } from '../components/ui/Primitives';
 import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
 import { useProjects } from '../lib/useProjects';
 import { useUrlTab } from '../lib/useUrlTab';
-type ScraperTab = 'research' | 'company' | 'formats' | 'find' | 'import';
+type ScraperTab = 'research' | 'company' | 'formats' | 'find' | 'import' | 'register';
 
 
 function aiVerdictClass(v?: string | null): string {
@@ -95,7 +96,7 @@ function ResearchTab() {
 export default function Scraper() {
   const [params] = useSearchParams();
   // Default to the crawl: it is the one door that turns a company name into people.
-  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'formats', 'find', 'import'], 'company');
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'formats', 'find', 'import', 'register'], 'company');
   const discoveryKey = [
     params.get('company') || '',
     params.get('domain') || '',
@@ -280,6 +281,7 @@ export default function Scraper() {
         className="mb-8"
         items={[
           { id: 'company', label: 'Find people' },
+          { id: 'register', label: 'Company register' },
           { id: 'find', label: 'One person' },
           { id: 'formats', label: 'Email formats' },
         ]}
@@ -290,6 +292,8 @@ export default function Scraper() {
           if (id !== 'find') setFindResult(null);
         }}
       />
+
+      {activeTab === 'register' && <CompanyRegister />}
 
       {activeTab === 'company' && (
         <>
