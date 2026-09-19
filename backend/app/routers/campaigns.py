@@ -201,12 +201,26 @@ async def _campaign_readiness(db, campaign_id: int) -> dict:
         issues.append(f"Complete the email address, subject, and body for {incomplete} recipient(s).")
     if counts.get("failed", 0):
         issues.append(f"Retry or remove {counts['failed']} failed recipient(s).")
+    # Not an issue to fix: a statement of what release will do. Companies with
+    # no proven address are mailed one at a time first, so a wrong format
+    # costs one bounce instead of the whole company.
+    from app.services.send_gating import grace_minutes, mail_host, proven_hosts
+
+    hosts = {mail_host(row["email"]) for row in recipient_rows}
+    hosts.discard("")
+    unproven = sorted(hosts - await proven_hosts(db, hosts))
     return {
         "ready": not issues,
         "issues": issues,
         "counts": counts,
         "total": total,
         "status": campaign["status"],
+        "unproven_companies": unproven,
+        "mailbox_proof_note": (
+            f"No address has been proven at {', '.join(unproven)}. The first email to each goes alone; "
+            f"the rest follow about {grace_minutes()} minutes later unless it bounces."
+            if unproven else ""
+        ),
     }
 
 
@@ -380,9 +394,14 @@ async def add_contacts_to_campaign(
         await db.close()
 
 
-async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) -> list:
-    """Atomically recheck sender and campaign state, then claim immutable intent."""
+async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) -> tuple[list, list[dict]]:
+    """Atomically recheck sender and campaign state, then claim immutable intent.
+
+    Returns the claimed rows and the rows withheld because the company has no
+    proven mailbox yet, so the caller can report why a queue is not moving.
+    """
     from app.services.dispatch_service import begin_write, claim
+    from app.services.send_gating import select_sendable
     await begin_write(db)
     try:
         campaign = await (await db.execute("SELECT * FROM campaigns WHERE id=?", (campaign_id,))).fetchone()
@@ -402,7 +421,7 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
                 (campaign_id,),
             )
             await db.commit()
-            return []
+            return [], []
         from app.services.settings_service import member_daily_send_limit
         daily_limit = await member_daily_send_limit(sender)
         reserved_today = await (await db.execute(
@@ -414,11 +433,22 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
         remaining = max(0, daily_limit - int(reserved_today["n"] or 0))
         if remaining == 0:
             await db.commit()
-            return []
-        rows = await (await db.execute(
-            "SELECT * FROM campaign_contacts WHERE campaign_id=? AND status='pending' ORDER BY id LIMIT ?",
-            (campaign_id, min(limit, remaining)),
+            return [], []
+        # Gate before claiming: a claim marks the row sending and snapshots an
+        # immutable intent, so a held row must never reach that point. Scan
+        # further than this tick can send, or one held company at the head of
+        # the queue would stall every other company behind it.
+        window = await (await db.execute(
+            """SELECT cc.*, c.email AS recipient_email
+               FROM campaign_contacts cc JOIN contacts c ON c.id = cc.contact_id
+               WHERE cc.campaign_id=? AND cc.status='pending' ORDER BY cc.id LIMIT ?""",
+            (campaign_id, max(min(limit, remaining) * 10, 50)),
         )).fetchall()
+        window = [dict(row) for row in window]
+        for row in window:
+            row["email"] = row.get("recipient_email")
+        sendable, held = await select_sendable(db, campaign_id, window)
+        rows = sendable[: min(limit, remaining)]
         claimed = []
         for row in rows:
             intent = await claim(db, f"initial:{row['id']}", sender)
@@ -433,7 +463,7 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
                         signature=intent["signature"], signature_image_url=intent["signature_image_url"])
             claimed.append(item)
         await db.commit()
-        return claimed
+        return claimed, held
     except Exception:
         await db.rollback()
         raise
@@ -454,7 +484,7 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
             raise HTTPException(404, "Campaign not found")
         if campaign["status"] != "releasing":
             raise HTTPException(409, "Campaign must be released before it can send")
-        pending = await _claim_pending_rows(db, campaign_id, limit, user_id)
+        pending, held = await _claim_pending_rows(db, campaign_id, limit, user_id)
         signature = await get_member_setting(user_id, "signature")
         signature_image_url = await get_member_setting(user_id, "signature_image_url") or None
         send_delay = float(os.getenv("CAMPAIGN_SEND_DELAY_SEC", "2.0") or 0)
@@ -524,7 +554,19 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
         left = counts.get("pending", 0)
         sending = counts.get("sending", 0)
         failed = counts.get("failed", 0)
-        status = "releasing" if left or sending else "needs_attention" if failed else "sent"
+        from app.services.send_gating import HELD_PROBE_BOUNCED, describe_hold
+
+        hold_note = describe_hold(held)
+        # A queue waiting on a probe is still working and stays releasing. A
+        # queue whose probe bounced is not: every address behind it was built
+        # from a format that just failed, so it needs a member, not another
+        # tick.
+        stopped = any(item["reason"] == HELD_PROBE_BOUNCED for item in held)
+        status = (
+            "needs_attention" if stopped or (not left and not sending and failed)
+            else "releasing" if left or sending
+            else "sent"
+        )
         await db.execute(
             "UPDATE campaigns SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'releasing'",
             (status, campaign_id),
@@ -537,6 +579,8 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
             "pending_left": left,
             "failed": failed,
             "status": status,
+            "held": len(held),
+            "hold_reason": hold_note,
         }
     finally:
         await db.close()
