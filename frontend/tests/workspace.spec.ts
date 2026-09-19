@@ -277,6 +277,27 @@ test('checking an uncertain dispatch never calls a send endpoint', async ({ page
   expect(mutations).toEqual(['/api/campaigns/1/dispatches/reconcile']);
 });
 
+test('a campaign warns that an unproven company is mailed one address first', async ({ page }) => {
+  await page.route('**/api/campaigns/1/dispatches', route => route.fulfill({ json: [] }));
+  await page.route('**/api/campaigns/1', async route => route.fulfill({ json: {
+    ...campaigns[0],
+    counts: { pending: 6 },
+    readiness: {
+      ready: true,
+      issues: [],
+      unproven_companies: ['acme.com'],
+      mailbox_proof_note: 'No address has been proven at acme.com. The first email to each goes alone; the rest follow about 45 minutes later unless it bounces.',
+    },
+    contacts: [],
+  } }));
+  await page.goto('/campaigns/1');
+
+  // Release stays available: this is what will happen, not a blocker.
+  await expect(page.getByText('First email proves the address.')).toBeVisible();
+  await expect(page.getByText(/No address has been proven at acme\.com/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review & release' })).toBeEnabled();
+});
+
 test('campaign review exposes the exact recipient message for repair before release', async ({ page }) => {
   let updateBody = '';
   await page.route('**/api/campaigns/1/dispatches', route => route.fulfill({ json: [] }));
