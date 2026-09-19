@@ -25,7 +25,6 @@ ANGLE_INSTRUCTIONS = {
     "pain_point": "Connect the request to a plausible role priority without claiming the recipient has a problem.",
     "social_proof": "Use supplied proof only. If the brief contains none, use a direct relevance opening instead.",
     "case_study": "Use a supplied case study only. If the brief contains none, use a direct relevance opening instead.",
-    "question_hook": "Open with a thought-provoking question that resonates with their situation.",
     "compliment": "Use a specific supplied fact. If the brief contains none, do not invent a compliment.",
 }
 

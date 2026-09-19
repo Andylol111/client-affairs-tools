@@ -17,7 +17,7 @@ class OutreachFlowCreate(BaseModel):
     company_name: str
     company_domain: Optional[str] = None
     title_hints: Optional[str] = None
-    angle: Optional[str] = None  # pain_point, social_proof, case_study, question_hook, compliment
+    angle: Optional[str] = None  # pain_point, social_proof, case_study, compliment
     max_contacts: int = 25
 
 
