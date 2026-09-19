@@ -108,3 +108,15 @@ test('role bubbles translate asked roles into the company vocabulary and fill th
   await expect(bubbles.getByRole('button', { name: /^Product Lead/ })).toBeDisabled();
   await page.screenshot({ path: 'test-results/role-bubbles.png', fullPage: true });
 });
+
+test('a malformed role-suggestions payload never breaks the Find people page', async ({ page }) => {
+  // The endpoint is advisory; an empty or partial body (proxy hiccup, older
+  // deploy) must degrade to no chips, not white-screen the form.
+  await mockFlow(page);
+  await page.route('**/api/yucgoutreach/role-suggestions*', route => route.fulfill({ json: {} }));
+  await page.goto('/scraper');
+  await page.getByLabel('Company', { exact: true }).fill('OpenAI');
+  await page.getByLabel('Titles to prioritize').fill('PMs');
+  await expect(page.getByTestId('outreach-this-company')).toBeEnabled();
+  await expect(page.getByLabel('Titles to prioritize')).toHaveValue('PMs');
+});

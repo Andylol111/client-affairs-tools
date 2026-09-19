@@ -114,6 +114,50 @@ async def role_suggestions(
     return await suggest_roles(user_id=user["id"], company=company, domain=domain, hints=hints)
 
 
+@router.get("/register")
+async def browse_register(
+    q: str | None = None,
+    tier: str | None = None,
+    country: str | None = None,
+    sector: str | None = None,
+    min_amount: float | None = None,
+    with_officers: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    user: dict = Depends(get_current_user),
+):
+    """Browse the bulk company register (SEC listed, SEC Form D filers,
+    Companies House) that Find people and the recommender draw from."""
+    from app.services.company_register import search_register
+
+    return await search_register(
+        q=q, tier=tier, country=country, sector=sector, min_amount=min_amount,
+        with_officers=with_officers, limit=limit, offset=offset,
+    )
+
+
+@router.get("/register/summary")
+async def register_stats(user: dict = Depends(get_current_user)):
+    from app.services.company_register import register_summary
+
+    return await register_summary()
+
+
+@router.get("/register/{register_id}/people")
+async def register_people(register_id: int, user: dict = Depends(get_current_user)):
+    """Officers named on this company's own filings - evidence, not guesses."""
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            """SELECT full_name, relationship, observed_at, source_url
+               FROM company_register_people WHERE register_id = ? ORDER BY full_name""",
+            (register_id,),
+        )).fetchall()
+        return [row_to_dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
 @router.get("/runs/{run_id}")
 async def get_run(run_id: int, user: dict = Depends(get_current_user)):
     row = await _get_run_for_user(run_id, user["id"])

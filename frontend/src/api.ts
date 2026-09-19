@@ -113,6 +113,30 @@ export type RoleSuggestions = {
   sources: { run: number; roster: number; catalog: number; search: number; jobs: number };
 };
 
+export type RegisterCompany = {
+  id: number;
+  source: string;
+  tier: 'us_public' | 'us_private' | 'uk';
+  country: string;
+  company_name: string;
+  company_domain?: string | null;
+  sector_code?: string | null;
+  sector_label?: string | null;
+  region?: string | null;
+  employees?: number | null;
+  employees_source?: string | null;
+  last_event_at?: string | null;
+  last_event_amount?: number | null;
+  last_event_kind?: string | null;
+  officer_count: number;
+  metadata?: { revenue_range?: string | null; ticker?: string | null; city?: string | null; year_of_inc?: string | null };
+};
+export type RegisterSummary = {
+  tiers: { tier: string; country: string; n: number; with_officers: number }[];
+  sectors: { sector: string; n: number }[];
+  recent_ingests: { source: string; batch_key: string; rows_written: number; status: string; detail?: string | null; completed_at?: string }[];
+};
+
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
 export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
 export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
@@ -1292,6 +1316,13 @@ export const api = {
     releaseInbox: (releaseId: number) => fetchApi<InboxItem[]>(`/api/yucg/releases/${releaseId}/inbox`),
   },
   yucgoutreach: {
+    register: (params: { q?: string; tier?: string; country?: string; sector?: string; min_amount?: number; with_officers?: boolean; limit?: number; offset?: number }, signal?: AbortSignal) => {
+      const search = new URLSearchParams();
+      Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== '') search.set(key, String(value)); });
+      return fetchApi<{ items: RegisterCompany[]; total: number; limit: number; offset: number }>(`/api/yucgoutreach/register?${search.toString()}`, signal ? { signal } : undefined);
+    },
+    registerSummary: () => fetchApi<RegisterSummary>('/api/yucgoutreach/register/summary'),
+    registerPeople: (id: number) => fetchApi<{ full_name: string; relationship?: string | null; observed_at?: string | null; source_url?: string | null }[]>(`/api/yucgoutreach/register/${id}/people`),
     roleSuggestions: (params: { company: string; domain?: string; hints?: string }, signal?: AbortSignal) => {
       const q = new URLSearchParams({ company: params.company });
       if (params.domain) q.set('domain', params.domain);

@@ -691,6 +691,61 @@ async def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_outreach_flows_user ON outreach_flows(user_id);
             CREATE INDEX IF NOT EXISTS idx_outreach_flows_status ON outreach_flows(status);
+
+            -- Bulk company register: the browsable pool Find people and the
+            -- recommender draw from, ingested from free public registers.
+            -- Tiers: us_public (SEC tickers), us_private (Form D filers),
+            -- uk (Companies House). No paid provider feeds this table.
+            CREATE TABLE IF NOT EXISTS company_register (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                tier TEXT NOT NULL,
+                country TEXT NOT NULL DEFAULT 'US',
+                company_name TEXT NOT NULL,
+                company_domain TEXT,
+                sector_code TEXT,
+                sector_label TEXT,
+                region TEXT,
+                employees INTEGER,
+                employees_source TEXT,
+                last_event_at TEXT,
+                last_event_amount REAL,
+                last_event_kind TEXT,
+                officer_count INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT,
+                first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (source, source_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_company_register_tier ON company_register(tier, country);
+            CREATE INDEX IF NOT EXISTS idx_company_register_sector ON company_register(sector_label);
+            CREATE INDEX IF NOT EXISTS idx_company_register_name ON company_register(company_name);
+            CREATE INDEX IF NOT EXISTS idx_company_register_event ON company_register(last_event_at DESC);
+
+            -- Officers named on a Form D filing: real, dated, company-reported.
+            CREATE TABLE IF NOT EXISTS company_register_people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                register_id INTEGER NOT NULL REFERENCES company_register(id) ON DELETE CASCADE,
+                full_name TEXT NOT NULL,
+                relationship TEXT,
+                observed_at TEXT,
+                source_url TEXT,
+                UNIQUE (register_id, full_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_company_register_people ON company_register_people(register_id);
+
+            CREATE TABLE IF NOT EXISTS company_register_ingests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                batch_key TEXT NOT NULL,
+                rows_seen INTEGER NOT NULL DEFAULT 0,
+                rows_written INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'ok',
+                detail TEXT,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (source, batch_key)
+            );
         """)
         await db.commit()
 
