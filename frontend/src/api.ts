@@ -1302,7 +1302,7 @@ export const api = {
     },
     listReleases: () => fetchApi<Release[]>('/api/yucg/releases'),
     getRelease: (id: number) => fetchApi<Release>(`/api/yucg/releases/${id}`),
-    createRelease: (data: { name: string; row_indexes: number[]; notes?: string }) =>
+    createRelease: (data: { name: string; row_indexes?: number[]; register_ids?: number[]; notes?: string }) =>
       fetchApi<{ id: number; status: string; targets: number }>('/api/yucg/releases', {
         method: 'POST',
         body: JSON.stringify(data),

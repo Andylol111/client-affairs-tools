@@ -36,6 +36,12 @@ export default function CompanyRegister() {
   const [error, setError] = useState('');
   const [people, setPeople] = useState<Record<number, { full_name: string; relationship?: string | null; source_url?: string | null }[]>>({});
   const [fetching, setFetching] = useState<Record<number, boolean>>({});
+  // Companies picked here become a target list, which is what the rest of the
+  // app already works from. Selection survives filter and tier changes, so a
+  // list can be assembled from several searches rather than one.
+  const [picked, setPicked] = useState<Map<number, string>>(new Map());
+  const [listBusy, setListBusy] = useState(false);
+  const [listed, setListed] = useState<{ id: number; targets: number } | null>(null);
 
   useEffect(() => {
     api.yucgoutreach.registerSummary().then(setSummary).catch(() => setSummary(null));
@@ -100,6 +106,28 @@ export default function CompanyRegister() {
       setFetching((current) => ({ ...current, [id]: false }));
     }
   }, []);
+
+  // One action, not a row of them: the selection becomes a target list, which
+  // is the object Find people, Studio and Campaigns already consume. Nothing
+  // here sends mail.
+  const createList = useCallback(async () => {
+    if (picked.size === 0) return;
+    setListBusy(true);
+    setError('');
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await api.yucg.createRelease({
+        name: `Register picks ${today}`,
+        register_ids: [...picked.keys()],
+      });
+      setListed({ id: result.id, targets: result.targets });
+      setPicked(new Map());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not create that target list.');
+    } finally {
+      setListBusy(false);
+    }
+  }, [picked]);
 
   const counts = Object.fromEntries((summary?.tiers || []).map((row) => [row.tier, row.n]));
 
@@ -176,6 +204,38 @@ export default function CompanyRegister() {
 
       {error && <p className="text-sm text-red-700">{error}</p>}
 
+      {listed && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          Target list created with {listed.targets} compan{listed.targets === 1 ? 'y' : 'ies'}.{' '}
+          <a className="font-semibold underline" href={`/yucgoutreach?view=slate&release_id=${listed.id}`}>
+            Open it to find people and write to them
+          </a>
+        </div>
+      )}
+
+      {picked.size > 0 && (
+        <div className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-2xl border border-deep-navy bg-white px-4 py-3 shadow-lg">
+          <span className="text-sm font-semibold text-deep-navy">
+            {picked.size} compan{picked.size === 1 ? 'y' : 'ies'} selected
+          </span>
+          <button
+            type="button"
+            className="rounded-xl bg-deep-navy px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={listBusy}
+            onClick={() => void createList()}
+          >
+            {listBusy ? 'Creating…' : 'Create target list'}
+          </button>
+          <button
+            type="button"
+            className="text-sm font-medium text-slate-600 hover:underline"
+            onClick={() => setPicked(new Map())}
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
         <div className="flex items-baseline justify-between mb-3">
           <h3 className="font-semibold text-deep-navy">{total.toLocaleString()} match{total === 1 ? '' : 'es'}</h3>
@@ -190,7 +250,20 @@ export default function CompanyRegister() {
         <ul className="divide-y divide-[var(--border)]">
           {items.map((item) => (
             <li key={item.id} className="py-3 flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
+              <div className="min-w-0 flex gap-3">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 shrink-0"
+                  aria-label={`Select ${item.company_name}`}
+                  checked={picked.has(item.id)}
+                  onChange={() => setPicked((current) => {
+                    const next = new Map(current);
+                    if (next.has(item.id)) next.delete(item.id);
+                    else next.set(item.id, item.company_name);
+                    return next;
+                  })}
+                />
+                <div className="min-w-0">
                 <div className="font-medium text-deep-navy">{item.company_name}</div>
                 <div className="text-xs text-slate-500">
                   {[item.sector_label, item.region,
@@ -227,6 +300,7 @@ export default function CompanyRegister() {
                       : people[item.id].map((person) => `${person.full_name}${person.relationship ? ` (${person.relationship})` : ''}`).join(', ')}
                   </div>
                 )}
+                </div>
               </div>
               <button
                 type="button"

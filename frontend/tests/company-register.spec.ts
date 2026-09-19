@@ -16,6 +16,7 @@ const ROWS = [
 async function mockRegister(page: Page) {
   const calls: string[] = [];
   const fetched: string[] = [];
+  const created: any[] = [];
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -42,6 +43,10 @@ async function mockRegister(page: Page) {
       { full_name: 'Ada Lovelace', relationship: 'Executive Officer', source_url: 'https://www.sec.gov/Archives/edgar/data/1/x/' },
       { full_name: 'Grace Hopper', relationship: 'Director' },
     ];
+    else if (path === '/api/yucg/releases' && route.request().method() === 'POST') {
+      created.push(route.request().postDataJSON());
+      body = { id: 77, status: 'draft', targets: (route.request().postDataJSON().register_ids || []).length };
+    }
     else if (path === '/api/yucgoutreach/runs') body = [];
     else if (path === '/api/outreach/flows') body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
@@ -52,7 +57,7 @@ async function mockRegister(page: Page) {
     else if (/\/companies\/summary$|\/sequences$|\/custom-formats$/.test(path)) body = [];
     await route.fulfill({ json: body });
   });
-  return { calls, fetched };
+  return { calls, fetched, created };
 }
 
 test('register browses the free public pool and hands a company to Find people', async ({ page }) => {
@@ -145,4 +150,34 @@ test('the nonprofit tier shows that the organisation already pays for outside ad
   await expect(row).toContainText('287 employees (form_990_w3_employee_count)');
   // Officers came from Part VII of the same return, so they are already on file.
   await expect(row.getByRole('button', { name: /12 officer\(s\) on file/ })).toBeVisible();
+});
+
+test('companies picked in the register become a target list the rest of the app can use', async ({ page }) => {
+  const { created } = await mockRegister(page);
+  await page.goto('/scraper');
+  await page.getByRole('tab', { name: 'Company register' }).click();
+
+  // Nothing to act on until something is picked.
+  await expect(page.getByRole('button', { name: 'Create target list' })).toHaveCount(0);
+
+  await page.getByRole('checkbox', { name: 'Select Gilgamesh Pharma Inc.' }).check();
+  await expect(page.getByText('1 company selected')).toBeVisible();
+
+  // A list can be assembled across searches, so the pick survives a tier change.
+  await page.getByRole('button', { name: 'UK' }).click();
+  await expect(page.getByText('1 company selected')).toBeVisible();
+  await page.getByRole('checkbox', { name: 'Select Hansford Sensors Limited' }).check();
+  await expect(page.getByText('2 companies selected')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Create target list' }).click();
+  await expect.poll(() => created.length).toBe(1);
+  // Register companies travel by register id, not by a spreadsheet row that
+  // does not exist for them.
+  expect(created[0].register_ids).toEqual([1, 3]);
+  expect(created[0].row_indexes).toBeUndefined();
+
+  await expect(page.getByText('Target list created with 2 companies.')).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open it to find people/ })).toHaveAttribute('href', /release_id=77/);
+  // The selection is consumed, so the next list starts clean.
+  await expect(page.getByText(/compan(y|ies) selected/)).toHaveCount(0);
 });
