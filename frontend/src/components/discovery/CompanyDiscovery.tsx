@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../../api';
+import { api, type OutreachFlow } from '../../api';
 import CompanyAutocomplete, { CompanySuggestions, type CompanyOption } from '../CompanyAutocomplete';
 import { legacyMailboxLabel } from '../../lib/contactEvidence';
+import OutreachFlowTracker from './OutreachFlowTracker';
 
 type RunRow = {
   id: number;
@@ -74,6 +75,50 @@ export default function CompanyDiscovery() {
       setError(e instanceof Error ? e.message : 'Failed to load runs');
     }
   }, []);
+  const [flowStarting, setFlowStarting] = useState(false);
+  const [flows, setFlows] = useState<OutreachFlow[]>([]);
+  const [activeFlowId, setActiveFlowId] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.outreach.flows.list(10).then((list) => {
+      setFlows(list);
+      const live = list.find((f) => f.status !== 'ready' && f.status !== 'failed');
+      if (live) setActiveFlowId(live.id);
+    }).catch(() => setFlows([]));
+  }, []);
+
+  const onFlowDone = useCallback((flow: OutreachFlow) => {
+    setFlows((prev) => [flow, ...prev.filter((f) => f.id !== flow.id)]);
+  }, []);
+
+  const startFlow = async () => {
+    setError(null);
+    setInfo(null);
+    if (!companyName.trim()) {
+      setError('Company name is required.');
+      return;
+    }
+    if (!titleHints.trim()) {
+      setError('Add titles to prioritize so the search knows who to collect.');
+      return;
+    }
+    setFlowStarting(true);
+    try {
+      const flow = await api.outreach.flows.create({
+        company_name: companyName.trim(),
+        company_domain: domain.trim() || undefined,
+        title_hints: titleHints.trim(),
+        max_contacts: Math.min(200, Math.max(1, Math.round(maxProspects / 10) || 25)),
+      });
+      setActiveFlowId(flow.id);
+      setFlows((prev) => [flow, ...prev]);
+      await loadRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start outreach');
+    } finally {
+      setFlowStarting(false);
+    }
+  };
 
   useEffect(() => {
     api.yucgoutreach.listRuns(40).then((list) => setRuns(list as RunRow[])).catch((e) => {
@@ -168,6 +213,8 @@ export default function CompanyDiscovery() {
   };
 
   const selected = selectedId != null ? runs.find((r) => r.id === selectedId) || null : null;
+  const flowLive = activeFlowId != null
+    && flows.some((f) => f.id === activeFlowId && f.status !== 'ready' && f.status !== 'failed');
 
   return (
     <div className="space-y-8" data-section="yucgoutreach-discovery">
@@ -250,16 +297,60 @@ export default function CompanyDiscovery() {
               onChange={(e) => setMaxProspects(Math.min(800, Math.max(25, Number(e.target.value) || 250)))}
             />
           </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-deep-navy text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
-          >
-            {submitting ? 'Starting…' : 'Find people'}
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+            <button
+              type="button"
+              disabled={flowStarting || submitting || flowLive}
+              onClick={() => void startFlow()}
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-deep-navy text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              data-testid="outreach-this-company"
+            >
+              {flowStarting ? 'Starting…' : 'Outreach this company'}
+            </button>
+            <button
+              type="submit"
+              disabled={submitting || flowStarting}
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-deep-navy text-deep-navy text-sm font-medium hover:bg-pale-sky/30 disabled:opacity-50"
+            >
+              {submitting ? 'Starting…' : 'Find people only'}
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">
+            Outreach this company finds people, saves them to your contacts, drafts an email to each, and
+            assembles a draft campaign for you to review. Nothing is sent until you release it.
+          </p>
         </form>
 
-        <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
+        <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4">
+          {(activeFlowId != null || flows.length > 0) && (
+            <div className="space-y-3">
+              <h2 className="text-lg font-semibold text-deep-navy">Outreach in progress</h2>
+              {activeFlowId != null && <OutreachFlowTracker flowId={activeFlowId} onDone={onFlowDone} />}
+              {flows.filter((f) => f.id !== activeFlowId).slice(0, 4).map((f) => (
+                <div key={f.id} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-medium text-deep-navy truncate">{f.company_name}</div>
+                    <div className="text-xs text-slate-500 truncate">
+                      {f.status === 'ready'
+                        ? `${f.imported_count ?? 0} people · ${f.drafted_count ?? 0} drafts`
+                        : f.status === 'failed'
+                          ? f.error_message || 'Stopped'
+                          : f.progress_message || f.status}
+                    </div>
+                  </div>
+                  {f.status === 'ready' && f.campaign_id ? (
+                    <Link to={`/campaigns/${f.campaign_id}`} className="shrink-0 text-xs font-semibold text-deep-navy underline">
+                      Review & release
+                    </Link>
+                  ) : (
+                    <button type="button" className="shrink-0 text-xs font-semibold text-slate-600 underline" onClick={() => setActiveFlowId(f.id)}>
+                      Open
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <h2 className="text-lg font-semibold text-deep-navy mb-3">Recent runs</h2>
           <div className="max-h-[420px] overflow-auto space-y-2">
             {runs.length === 0 && <p className="text-sm text-slate-500">No runs yet.</p>}
