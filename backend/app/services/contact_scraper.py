@@ -1351,9 +1351,18 @@ def _infer_title_from_context(text: str, email: str) -> Optional[str]:
 
 
 def _apply_custom_pattern(pattern: str, first: str, last: str) -> str:
-    """Apply custom format pattern. Placeholders: {first}, {last}, {first_initial}."""
-    first_initial = first[0] if first else ""
-    return pattern.replace("{first}", first).replace("{last}", last).replace("{first_initial}", first_initial)
+    """Apply custom format pattern.
+
+    Placeholders: {first}, {last}, {first_initial}, {last_initial}. Initials are
+    substituted before the full names so that neither {first_initial} nor
+    {last_initial} can be partly consumed by the {first}/{last} replacement.
+    """
+    return (
+        pattern.replace("{first_initial}", first[:1])
+        .replace("{last_initial}", last[:1])
+        .replace("{first}", first)
+        .replace("{last}", last)
+    )
 
 
 def infer_email_from_name(

@@ -164,6 +164,39 @@ def _split_name(full_name: str) -> tuple[str, str]:
     return (parts[0], "") if parts else ("", "")
 
 
+# One table drives all three uses of a layout: recognising it in an observed
+# pair, rendering it into a guess, and crediting a send outcome to it. Adding
+# a layout here therefore teaches the learner, the generator and the feedback
+# loop at once - they previously shared a six-entry vocabulary, so any company
+# outside it could never learn a pattern no matter how many real addresses we
+# saw. Mapped in order: the first exact match wins, so separator-bearing
+# layouts are listed before the bare concatenations they could shadow.
+_PATTERN_LAYOUTS: tuple[tuple[str, str], ...] = (
+    ("first.last", "{first}.{last}"),
+    ("first_last", "{first}_{last}"),
+    ("fi.last", "{first_initial}.{last}"),
+    ("fi_last", "{first_initial}_{last}"),
+    ("last.first", "{last}.{first}"),
+    ("last_first", "{last}_{first}"),
+    ("firstlast", "{first}{last}"),
+    ("flast", "{first_initial}{last}"),
+    ("lastfi", "{last}{first_initial}"),
+    ("firstli", "{first}{last_initial}"),
+    ("first", "{first}"),
+)
+
+
+def _render_layout(template: str, first: str, last: str) -> str:
+    fi = first[:1]
+    li = last[:1]
+    return (
+        template.replace("{first_initial}", fi)
+        .replace("{last_initial}", li)
+        .replace("{first}", first)
+        .replace("{last}", last)
+    )
+
+
 def infer_pattern_from_pair(email: str, first: str, last: str) -> tuple[str, str] | None:
     """Return (pattern_key, template) e.g. ('first.last', '{first}.{last}')."""
     if not email or "@" not in email or not last:
@@ -171,40 +204,16 @@ def infer_pattern_from_pair(email: str, first: str, last: str) -> tuple[str, str
     local = email.split("@")[0].lower()
     f = first.lower()
     l = last.lower()
-    fi = f[0] if f else ""
-    candidates = [
-        ("first.last", f"{f}.{l}"),
-        ("firstlast", f"{f}{l}"),
-        ("flast", f"{fi}{l}"),
-        ("first_last", f"{f}_{l}"),
-        ("last.first", f"{l}.{f}"),
-        ("first", f),
-    ]
-    for key, expected in candidates:
-        if local == expected:
-            tpl = {
-                "first.last": "{first}.{last}",
-                "firstlast": "{first}{last}",
-                "flast": "{first_initial}{last}",
-                "first_last": "{first}_{last}",
-                "last.first": "{last}.{first}",
-                "first": "{first}",
-            }[key]
-            return key, tpl
+    for key, template in _PATTERN_LAYOUTS:
+        if local == _render_layout(template, f, l):
+            return key, template
     return None
 
 
 # The learner emits these keys from observed pairs. A member-stated format has
 # to canonicalise to the same key, or the identical layout is stored twice and
 # neither row accumulates evidence.
-_CANONICAL_TEMPLATES: dict[str, str] = {
-    "{first}.{last}": "first.last",
-    "{first}{last}": "firstlast",
-    "{first_initial}{last}": "flast",
-    "{first}_{last}": "first_last",
-    "{last}.{first}": "last.first",
-    "{first}": "first",
-}
+_CANONICAL_TEMPLATES: dict[str, str] = {template: key for key, template in _PATTERN_LAYOUTS}
 
 
 def canonical_pattern(template: str) -> tuple[str, str]:
