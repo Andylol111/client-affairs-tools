@@ -158,6 +158,20 @@ async def register_people(register_id: int, user: dict = Depends(get_current_use
         await db.close()
 
 
+@router.post("/register/{register_id}/people")
+async def fetch_register_people(register_id: int, user: dict = Depends(get_current_user)):
+    """Fetch this company's officers from its own register, on demand.
+
+    Listed companies and UK companies carry no people in the bulk files, so
+    they arrive empty and are filled in per company when a member asks for
+    one. Deliberately not a bulk job: it is one request per company against a
+    rate-limited public API, and the club works companies one at a time.
+    """
+    from app.services.company_register import fetch_officers_for
+
+    return await fetch_officers_for(register_id)
+
+
 @router.get("/runs/{run_id}")
 async def get_run(run_id: int, user: dict = Depends(get_current_user)):
     row = await _get_run_for_user(run_id, user["id"])

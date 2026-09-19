@@ -11,6 +11,7 @@ const ROWS = [
 
 async function mockRegister(page: Page) {
   const calls: string[] = [];
+  const fetched: string[] = [];
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -29,6 +30,10 @@ async function mockRegister(page: Page) {
       if (sector) items = items.filter(r => r.sector_label === sector);
       body = { items, total: items.length, limit: 40, offset: 0 };
     }
+    else if (/\/register\/\d+\/people$/.test(path) && route.request().method() === 'POST') {
+      fetched.push(path);
+      body = { ok: true, attached: 2, officer_count: 2 };
+    }
     else if (/\/register\/\d+\/people$/.test(path)) body = [
       { full_name: 'Ada Lovelace', relationship: 'Executive Officer', source_url: 'https://www.sec.gov/Archives/edgar/data/1/x/' },
       { full_name: 'Grace Hopper', relationship: 'Director' },
@@ -43,11 +48,11 @@ async function mockRegister(page: Page) {
     else if (/\/companies\/summary$|\/sequences$|\/custom-formats$/.test(path)) body = [];
     await route.fulfill({ json: body });
   });
-  return calls;
+  return { calls, fetched };
 }
 
 test('register browses the free public pool and hands a company to Find people', async ({ page }) => {
-  const calls = await mockRegister(page);
+  const { calls } = await mockRegister(page);
   await page.goto('/scraper');
   await page.getByRole('tab', { name: 'Company register' }).click();
 
@@ -85,4 +90,23 @@ test('register browses the free public pool and hands a company to Find people',
   await page.getByRole('button', { name: 'Find people here' }).first().click();
   await expect(page.getByLabel('Company', { exact: true })).toHaveValue('Gilgamesh Pharma Inc.');
   await page.screenshot({ path: 'test-results/company-register.png', fullPage: true });
+});
+
+test('a listed or UK company with no officers on file can be looked up on demand', async ({ page }) => {
+  const { fetched } = await mockRegister(page);
+  await page.goto('/scraper');
+  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('button', { name: 'UK' }).click();
+
+  // The bulk Companies House file carries no people, so the row arrives empty
+  // and offers to read the per-company register instead of showing nothing.
+  const row = page.getByRole('listitem').filter({ hasText: 'Hansford Sensors Limited' });
+  await expect(row.getByRole('button', { name: 'Look up officers' })).toBeVisible();
+  await row.getByRole('button', { name: 'Look up officers' }).click();
+
+  await expect.poll(() => fetched.length).toBe(1);
+  await expect(page.getByText('Ada Lovelace (Executive Officer), Grace Hopper (Director)')).toBeVisible();
+  // Once they are on file the offer is gone: no second call against a
+  // rate-limited public API.
+  await expect(row.getByRole('button', { name: 'Look up officers' })).toHaveCount(0);
 });

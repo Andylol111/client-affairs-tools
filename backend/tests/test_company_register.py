@@ -279,7 +279,92 @@ def uk_tests() -> None:
     assert cr._uk_date('') is None and cr._uk_date('31/12/2025') == '2025-12-31'
 
 
+def officer_backfill_tests() -> None:
+    """Listed and UK companies arrive with no people, because neither bulk
+    product ships them. Both registers publish them per company, keyed by the
+    identifier already stored, and the two fetchers describe a person with
+    title/role_type while the register stores relationship - so the mapping is
+    the part that has to be right."""
+    import asyncio as _asyncio
+    from unittest.mock import patch
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.database import get_db, init_db
+    from app.services import company_register as cr
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DATABASE_URL'] = 'sqlite:///' + tmp + '/officers.db'
+
+        async def scenario() -> None:
+            await init_db()
+            await cr.upsert_companies([
+                {'source': 'sec_public', 'source_key': '0000320193', 'tier': 'us_public',
+                 'country': 'US', 'company_name': 'Apple Inc.'},
+                {'source': 'companies_house', 'source_key': '13227665', 'tier': 'uk',
+                 'country': 'GB', 'company_name': 'Deliveroo Plc'},
+                {'source': 'sec_form_d', 'source_key': 'X1', 'tier': 'us_private',
+                 'country': 'US', 'company_name': 'Private Co'},
+            ])
+            db = await get_db()
+            rows = {r['company_name']: int(r['id']) for r in await (await db.execute(
+                'SELECT id, company_name FROM company_register')).fetchall()}
+            await db.close()
+
+            # SEC's submissions file is keyed by the padded CIK. Stripping the
+            # padding 404s, which is how this first failed against the live API.
+            seen_ciks: list[str] = []
+
+            async def fake_form4(cik, **kwargs):
+                seen_ciks.append(cik)
+                return [
+                    {'full_name': 'Kevan Parekh', 'title': 'Senior Vice President, CFO',
+                     'role_type': 'officer', 'source_url': 'https://www.sec.gov/x'},
+                    {'full_name': 'Arthur D. Levinson', 'title': '', 'role_type': 'director'},
+                    {'full_name': 'Gone Person', 'title': 'Former', 'role_type': 'officer',
+                     'employment': 'left'},
+                ]
+
+            with patch('app.services.roster_watch.fetch_form4_people', fake_form4):
+                out = await cr.fetch_officers_for(rows['Apple Inc.'])
+            assert seen_ciks == ['0000320193'], seen_ciks
+            assert out['ok'] and out['officer_count'] == 2, out
+
+            db = await get_db()
+            stored = {r['full_name']: r['relationship'] for r in await (await db.execute(
+                'SELECT full_name, relationship FROM company_register_people WHERE register_id=?',
+                (rows['Apple Inc.'],))).fetchall()}
+            count = int((await (await db.execute(
+                'SELECT officer_count FROM company_register WHERE id=?', (rows['Apple Inc.'],))).fetchone())['officer_count'])
+            await db.close()
+            # A title becomes the relationship; without one, the role does.
+            assert stored == {'Kevan Parekh': 'Senior Vice President, CFO',
+                              'Arthur D. Levinson': 'director'}, stored
+            # A resigned officer is evidence of departure, not a contact.
+            assert 'Gone Person' not in stored
+            assert count == 2
+
+            # Asking again never spends another request.
+            async def explode(*a, **k):
+                raise AssertionError('must not refetch a company that has officers')
+
+            with patch('app.services.roster_watch.fetch_form4_people', explode):
+                again = await cr.fetch_officers_for(rows['Apple Inc.'])
+            assert again['cached'] is True and again['officer_count'] == 2
+
+            # Form D rows already carry their officers from the bulk file, so
+            # there is no per-company register to call.
+            private = await cr.fetch_officers_for(rows['Private Co'])
+            assert private['ok'] is False and 'no officer list' in private['error']
+
+            # Companies House without a key makes no call at all.
+            os.environ.pop('COMPANIES_HOUSE_API_KEY', None)
+            uk = await cr.fetch_officers_for(rows['Deliveroo Plc'])
+            assert uk['ok'] is False and 'key' in uk['error'].lower(), uk
+
+        _asyncio.run(scenario())
+
+
 if __name__ == '__main__':
     tests()
     uk_tests()
+    officer_backfill_tests()
     print('company register: ok')
