@@ -103,6 +103,16 @@ export type OutreachFlow = {
   completed_at?: string | null;
 };
 
+export type RoleSuggestion = { title: string; count: number; source: 'roster' | 'run' | 'catalog' | 'jobs' | 'search' };
+export type RoleEquivalent = { asked: string; at_company: string[]; note: string };
+export type RoleSuggestions = {
+  company: string;
+  roles: RoleSuggestion[];
+  equivalents: RoleEquivalent[];
+  note?: string | null;
+  sources: { run: number; roster: number; catalog: number; search: number; jobs: number };
+};
+
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
 export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
 export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
@@ -1282,6 +1292,12 @@ export const api = {
     releaseInbox: (releaseId: number) => fetchApi<InboxItem[]>(`/api/yucg/releases/${releaseId}/inbox`),
   },
   yucgoutreach: {
+    roleSuggestions: (params: { company: string; domain?: string; hints?: string }, signal?: AbortSignal) => {
+      const q = new URLSearchParams({ company: params.company });
+      if (params.domain) q.set('domain', params.domain);
+      if (params.hints) q.set('hints', params.hints);
+      return fetchApi<RoleSuggestions>(`/api/yucgoutreach/role-suggestions?${q.toString()}`, signal ? { signal } : undefined);
+    },
     listRosters: (q: string, limit = 10) =>
       fetchApi<{ rosters: Record<string, unknown>[] }>(
         `/api/yucg/rosters?q=${encodeURIComponent(q)}&limit=${limit}`

@@ -95,6 +95,25 @@ async def list_runs(user: dict = Depends(get_current_user), limit: int = 50):
         await db.close()
 
 
+@router.get("/role-suggestions")
+async def role_suggestions(
+    company: str,
+    domain: str | None = None,
+    hints: str | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """Roles observed at this company (prior runs, SEC roster, shared
+    contacts, one LinkedIn search) and, when hints are given, the company's
+    equivalents for the roles the member asked for."""
+    from app.services.generation_policy import reserve_assistant_request
+    from app.services.role_suggestions import suggest_roles
+
+    if (hints or "").strip():
+        # The equivalence mapping is a model call; use the advisory allowance.
+        await reserve_assistant_request(user["id"])
+    return await suggest_roles(user_id=user["id"], company=company, domain=domain, hints=hints)
+
+
 @router.get("/runs/{run_id}")
 async def get_run(run_id: int, user: dict = Depends(get_current_user)):
     row = await _get_run_for_user(run_id, user["id"])
