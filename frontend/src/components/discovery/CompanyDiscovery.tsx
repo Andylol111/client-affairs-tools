@@ -4,6 +4,7 @@ import { api, type OutreachFlow } from '../../api';
 import CompanyAutocomplete, { CompanySuggestions, type CompanyOption } from '../CompanyAutocomplete';
 import { legacyMailboxLabel } from '../../lib/contactEvidence';
 import OutreachFlowTracker from './OutreachFlowTracker';
+import RoleSuggestionBubbles from './RoleSuggestionBubbles';
 
 type RunRow = {
   id: number;
@@ -276,6 +277,18 @@ export default function CompanyDiscovery() {
               placeholder="VPs, project managers"
               required
             />
+            <div className="mt-2">
+              <RoleSuggestionBubbles
+                company={companyName}
+                domain={domain}
+                hints={titleHints}
+                onAdd={(title) => setTitleHints((prev) => {
+                  const parts = prev.split(',').map((p) => p.trim()).filter(Boolean);
+                  if (parts.some((p) => p.toLowerCase() === title.toLowerCase())) return prev;
+                  return [...parts, title].join(', ');
+                })}
+              />
+            </div>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Company domain</label>

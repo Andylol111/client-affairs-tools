@@ -30,6 +30,24 @@ async function mockFlow(page: Page) {
     else if (path === '/api/yucgoutreach/runs') body = [];
     else if (path === '/api/yucg/prospects') body = { prospects: [], count: 0 };
     else if (path === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
+    else if (path === '/api/yucgoutreach/role-suggestions') {
+      const q = new URL(request.url()).searchParams;
+      body = {
+        company: q.get('company'),
+        roles: [
+          { title: 'Member of Technical Staff', count: 9, source: 'run' },
+          { title: 'Product Lead', count: 4, source: 'search' },
+          { title: 'Chief Operating Officer', count: 1, source: 'roster' },
+        ],
+        equivalents: q.get('hints')
+          ? [
+              { asked: 'healthcare PMs', at_company: ['Product Lead'], note: 'No PM title in use; product roles are Product Lead.' },
+              { asked: 'VPs', at_company: [], note: 'No VP titles observed.' },
+            ]
+          : [],
+        sources: { run: 1, roster: 1, catalog: 0, search: 1 },
+      };
+    }
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
     else if (path === '/api/ai/models') body = { groups: [] };
     else if (path === '/api/campaigns/44') body = { id: 44, name: 'Acme Corp — Sep 19', status: 'draft', owner_user_id: 1, sender_user_id: 1, contacts: [], readiness: { ready: true, issues: [] } };
@@ -68,4 +86,25 @@ test('one click starts the flow and the tracker hands off to Review & release', 
   // Nothing in the flow sends or releases: the only non-telemetry mutation was starting it.
   expect(mutations.map((m) => m.path).filter((p) => !p.startsWith('/api/telemetry/'))).toEqual(['/api/outreach/flows']);
   await page.screenshot({ path: 'test-results/outreach-flow-ready.png', fullPage: true });
+});
+
+test('role bubbles translate asked roles into the company vocabulary and fill the titles field', async ({ page }) => {
+  await mockFlow(page);
+  await page.goto('/scraper');
+
+  await page.getByLabel('Company', { exact: true }).fill('OpenAI');
+  const bubbles = page.getByTestId('role-suggestions');
+  await expect(bubbles.getByText('Roles seen at OpenAI')).toBeVisible({ timeout: 10_000 });
+  await expect(bubbles.getByRole('button', { name: /Member of Technical Staff/ })).toBeVisible();
+
+  // Typing hints triggers the equivalence strip.
+  await page.getByLabel('Titles to prioritize').fill('healthcare PMs, VPs');
+  await expect(bubbles.getByText('No PM title in use; product roles are Product Lead.')).toBeVisible({ timeout: 10_000 });
+  await expect(bubbles.getByText('no matching title seen at OpenAI')).toBeVisible();
+
+  // Clicking the company's equivalent appends it to the hints and disables that chip.
+  await bubbles.getByRole('button', { name: '+ Product Lead' }).click();
+  await expect(page.getByLabel('Titles to prioritize')).toHaveValue('healthcare PMs, VPs, Product Lead');
+  await expect(bubbles.getByRole('button', { name: /^Product Lead/ })).toBeDisabled();
+  await page.screenshot({ path: 'test-results/role-bubbles.png', fullPage: true });
 });
