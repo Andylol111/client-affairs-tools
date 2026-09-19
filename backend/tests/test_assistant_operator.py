@@ -342,13 +342,21 @@ async def run():
         assert other == {'error': 'Run not found'}
 
         with patch('app.services.prospect_coordinator.recommend_prospects', return_value=[
-            {'prospect': {'company': 'Acme', 'sector': 'Tech', 'recommended_message_angle': 'Alumni'}},
-        ]):
-            recs = await execute_read({'id': 1, 'role': 'standard'}, 'recommend_companies', {'n': 'bad'})
+            {'prospect': {'company': 'Acme', 'sector': 'Tech', 'recommended_message_angle': 'Alumni', 'target_role_title': 'VP Product'}},
+        ]) as rec:
+            recs = await execute_read({'id': 1, 'role': 'standard'}, 'recommend_companies', {'n': 'bad', 'sector': 'entertainment'})
         assert recs[0]['company'] == 'Acme'
+        assert recs[0]['target_role_title'] == 'VP Product'  # the sheet's own title hint, for a one-click Find people
+        assert rec.call_args.kwargs == {'n': 8, 'sector': 'entertainment'}  # sector is forwarded, not ignored
         with patch('app.services.prospect_coordinator.recommend_prospects', return_value=[]):
             empty = await execute_read({'id': 1, 'role': 'standard'}, 'recommend_companies', {'n': 3})
         assert empty == []
+        # A sector no sheet row matches falls back to the overall ranking and says so.
+        with patch('app.services.prospect_coordinator.recommend_prospects', side_effect=[[], [
+            {'prospect': {'company': 'Beta', 'sector': 'Retail', 'recommended_message_angle': '', 'target_role_title': 'COO'}},
+        ]]):
+            fallback = await execute_read({'id': 1, 'role': 'standard'}, 'recommend_companies', {'n': 3, 'sector': 'underwater basket weaving'})
+        assert fallback['matched_sector'] is False and fallback['companies'][0]['company'] == 'Beta'
 
         unnamed = await execute_read({'id': 1, 'role': 'standard'}, 'search_person', {})
         assert unnamed == {'error': 'name required'}

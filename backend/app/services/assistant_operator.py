@@ -84,6 +84,7 @@ Rules:
 - Use at most three reads. search_contacts is the saved warehouse only, not a live search. search_person is one named person (Person lookup). start_find_people is the company-wide live search. get_discovery_run args: run_id. start_find_people args: company_name, optional company_domain, title_hints, max_prospects (default 250, max 800).
 - For Find people: always emit ask fields for titles (required) and company_domain. Prefill value when the member already named it. Open /scraper?view=company with company (and titles/domain when known).
 - Propose start_find_people for a named company. Do not run it yourself. "Companies like X" / "similar to X" means Find people at X.
+- "Companies in <sector>" / "reach out to <industry>" / "who should we target in <area>": read recommend_companies with args {"sector": "<their words>", "n": 5}, then name the companies in the answer and propose start_find_people ONCE PER COMPANY (up to 5), each with company_name and title_hints set to that company's target_role_title. Also emit the titles ask prefilled with the first company's target_role_title so the member can override. Never leave a sector request with no proposals and a bare /scraper open.
 - "What format/pattern does X use" is get_company_pattern (args: domain). With no domain it lists known companies.
 - "What is <person>'s email at X" is predict_email (args: name, domain). Guesses are derived from learned patterns, never proof of a mailbox.
 - When the member states a company's format ("Bain uses first.last"), propose set_company_pattern (args: domain, pattern_template like {first}.{last}, optional company_name). Do not save it yourself.
@@ -158,7 +159,7 @@ def sanitize_propose(items: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     if not isinstance(items, list):
         return out
-    for item in items[:4]:
+    for item in items[:5]:  # a sector request proposes Find people once per recommended company
         if not isinstance(item, dict):
             continue
         tool = str(item.get("tool") or "").strip()
@@ -284,15 +285,15 @@ async def execute_read(user: dict, tool: str, args: dict[str, Any]) -> Any:
             n = max(1, min(int(args.get("n") or 8), 12))
         except (TypeError, ValueError):
             n = 8
-        items = recommend_prospects(n=n)
-        return [
-            {
-                "company": (item.get("prospect") or {}).get("company"),
-                "sector": (item.get("prospect") or {}).get("sector"),
-                "angle": (item.get("prospect") or {}).get("recommended_message_angle"),
-            }
-            for item in items
-        ]
+        sector = str(args.get("sector") or "").strip() or None
+        items = recommend_prospects(n=n, sector=sector)
+        if not items and sector:
+            # Unknown sector wording: fall back to the overall ranking rather
+            # than returning nothing, and say so.
+            items = recommend_prospects(n=n)
+            return {"sector": sector, "matched_sector": False,
+                    "companies": [_recommended_company(item) for item in items]}
+        return [_recommended_company(item) for item in items]
     if tool == "search_person":
         from app.models import SearchPersonRequest
         from app.routers.contacts import search_person
@@ -457,6 +458,16 @@ async def _list_companies(user: dict) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
     finally:
         await db.close()
+
+
+def _recommended_company(item: dict[str, Any]) -> dict[str, Any]:
+    prospect = item.get("prospect") or {}
+    return {
+        "company": prospect.get("company"),
+        "sector": prospect.get("sector"),
+        "angle": prospect.get("recommended_message_angle"),
+        "target_role_title": prospect.get("target_role_title"),
+    }
 
 
 async def _list_runs(user: dict) -> list[dict[str, Any]]:
