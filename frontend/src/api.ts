@@ -113,6 +113,18 @@ export type RoleSuggestions = {
   sources: { run: number; roster: number; catalog: number; search: number; jobs: number };
 };
 
+export type CompanySummaryRow = {
+  company: string;
+  company_domain?: string;
+  contact_count: number;
+  last_sent_at?: string | null;
+  campaign_count?: number;
+  mailed_count?: number;
+  replied_count?: number;
+  bounced_count?: number;
+  queued_count?: number;
+};
+
 export type RegisterCompany = {
   id: number;
   source: string;
@@ -529,9 +541,7 @@ export const api = {
   },
   contacts: {
     companiesSummary: () =>
-      fetchApi<{ company: string; company_domain?: string; contact_count: number }[]>(
-        '/api/contacts/companies/summary'
-      ),
+      fetchApi<CompanySummaryRow[]>('/api/contacts/companies/summary'),
     list: (opts?: {
       company?: string;
       companies?: string;
