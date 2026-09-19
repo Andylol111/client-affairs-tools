@@ -66,8 +66,12 @@ export default function RoleSuggestionBubbles({
 
   if (company.trim().length < 2) return null;
   // While a new company's request is in flight, the previous company's
-  // suggestions must not be shown under the new name.
-  const data = rawData && rawData.company.toLowerCase() === company.trim().toLowerCase() ? rawData : null;
+  // suggestions must not be shown under the new name. A payload missing
+  // these fields is treated as no data rather than crashing the page.
+  const usable = rawData && typeof rawData.company === 'string'
+    && rawData.company.toLowerCase() === company.trim().toLowerCase()
+    && Array.isArray(rawData.roles) && Array.isArray(rawData.equivalents);
+  const data = usable ? rawData : null;
 
   const present = new Set(
     hints.split(/[,;/]|\band\b|\bor\b/i).map((s) => s.trim().toLowerCase()).filter(Boolean),

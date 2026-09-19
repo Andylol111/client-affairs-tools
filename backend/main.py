@@ -37,6 +37,7 @@ from app.services.yucgoutreach_discovery import (
     recover_interrupted_yucgoutreach_runs,
 )
 from app.services.outreach_flow import drain_outreach_flows
+from app.services.company_register import drain_company_register
 from app.services.assistant_service import drain_document_index_queue,recover_document_indexes
 from app.routers import research, segments
 from app.services.research_service import recover_research_jobs, drain_research_queue
@@ -66,6 +67,16 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=10,
         id="company_discovery_queue",
+        max_instances=1,
+        coalesce=True,
+    )
+    # Bulk register ingest: one step per pass (ticker list, then a Form D
+    # quarter, then sector backfill), so no pass is long or bursty at SEC.
+    scheduler.add_job(
+        drain_company_register,
+        "interval",
+        minutes=int(os.getenv("REGISTER_INGEST_MINUTES", "20") or 20),
+        id="company_register_ingest",
         max_instances=1,
         coalesce=True,
     )
