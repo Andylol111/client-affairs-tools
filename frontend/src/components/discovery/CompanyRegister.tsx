@@ -6,7 +6,7 @@ const TIERS: { id: string; label: string; hint: string }[] = [
   { id: '', label: 'All', hint: 'Everything on record' },
   { id: 'us_private', label: 'Recently funded', hint: 'US companies that filed a Reg D raise — the startup pool' },
   { id: 'us_public', label: 'US listed', hint: 'Every SEC-registered public company' },
-  { id: 'uk', label: 'UK', hint: 'Companies House register' },
+  { id: 'uk', label: 'UK', hint: 'Companies House: active companies above the small-company accounts thresholds' },
 ];
 
 function money(value?: number | null): string {
@@ -81,9 +81,10 @@ export default function CompanyRegister() {
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-3">
         <h2 className="text-lg font-semibold text-deep-navy">Company register</h2>
         <p className="text-sm text-slate-600">
-          Every US listed company (SEC) and every US company that recently raised under Reg D
-          (SEC Form D), with the executives named on their own filings. Free public registers —
-          no paid data provider. Pick a company to start Find people there.
+          Every US listed company (SEC), every US company that recently raised under Reg D
+          (SEC Form D) with the executives named on their own filings, and every active UK
+          company filing above the small-company accounts thresholds (Companies House).
+          Free public registers — no paid data provider. Pick a company to start Find people there.
         </p>
         {summary && (
           <p className="text-[13px] text-slate-500">
@@ -165,6 +166,7 @@ export default function CompanyRegister() {
                   {[item.sector_label, item.region,
                     item.last_event_amount ? `raised ${money(item.last_event_amount)}${item.last_event_at ? ` · ${item.last_event_at}` : ''}` : null,
                     item.employees ? `${item.employees} employees (${item.employees_source})` : null,
+                    item.metadata?.size_band || null,
                     item.metadata?.revenue_range || null,
                   ].filter(Boolean).join(' · ')}
                 </div>
