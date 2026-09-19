@@ -385,6 +385,147 @@ async def ingest_form_d(quarter: str, *, force: bool = False) -> dict[str, Any]:
 
 
 
+# Form 5500 carries the sponsor's NAICS business code. The two-digit sector is
+# the only part with a stable published name, and it is the level the register
+# filters on, so the full code is kept for evidence and the sector is labelled
+# from its prefix rather than shipping a 1,000-row NAICS table.
+_NAICS_SECTORS: dict[str, str] = {
+    "11": "Agriculture, Forestry, Fishing and Hunting",
+    "21": "Mining, Quarrying, and Oil and Gas Extraction",
+    "22": "Utilities",
+    "23": "Construction",
+    "31": "Manufacturing", "32": "Manufacturing", "33": "Manufacturing",
+    "42": "Wholesale Trade",
+    "44": "Retail Trade", "45": "Retail Trade",
+    "48": "Transportation and Warehousing", "49": "Transportation and Warehousing",
+    "51": "Information",
+    "52": "Finance and Insurance",
+    "53": "Real Estate and Rental and Leasing",
+    "54": "Professional, Scientific, and Technical Services",
+    "55": "Management of Companies and Enterprises",
+    "56": "Administrative and Support and Waste Management",
+    "61": "Educational Services",
+    "62": "Health Care and Social Assistance",
+    "71": "Arts, Entertainment, and Recreation",
+    "72": "Accommodation and Food Services",
+    "81": "Other Services (except Public Administration)",
+    "92": "Public Administration",
+}
+
+# A plan sponsor below this has too few employees to run a ten-week
+# engagement with a student team.
+_FORM_5500_MIN_PARTICIPANTS = 50
+
+# 525 is Funds, Trusts and Other Financial Vehicles: the pooled-vehicle
+# analogue of the Form D funds already excluded. They sponsor plans without
+# being an operating employer anyone can pitch.
+_FORM_5500_SKIP_SECTORS = {"525"}
+
+
+def parse_form_5500(handle: Any) -> tuple[list[dict[str, Any]], dict[tuple[str, str], list[dict[str, Any]]]]:
+    """Turn one year of Form 5500 filings into register rows keyed by EIN.
+
+    Every US employer sponsoring a benefit plan files this, which is the
+    closest thing the US has to the UK's universal register: the SEC only ever
+    sees companies that listed shares or raised under Reg D, while this sees
+    ordinary private employers. It also carries the one number no free US
+    source publishes - TOT_ACTIVE_PARTCP_CNT, the active participant count,
+    filed by the employer itself.
+
+    A sponsor files one row per plan and may file for several plan years at
+    once, so rows are folded to one company per EIN, keeping the filing with
+    the most recent plan year.
+    """
+    reader = csv.DictReader(io.TextIOWrapper(handle, encoding="latin-1", errors="replace"))
+    best: dict[str, dict[str, Any]] = {}
+    people: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+    for row in reader:
+        name = (row.get("SPONSOR_DFE_NAME") or "").strip()
+        ein = re.sub(r"\D", "", row.get("SPONS_DFE_EIN") or "")
+        if not name or not ein:
+            continue
+        # Line A of the form: 1 multiemployer, 2 single-employer,
+        # 3 multiple-employer, 4 direct filing entity. Only a single-employer
+        # plan means the participant count describes this company's own staff.
+        # The others are union and association trusts whose participants come
+        # from many employers - the National Education Association's 2.5M, for
+        # instance, which would otherwise top the register as one "company".
+        if (row.get("TYPE_PLAN_ENTITY_CD") or "").strip() != "2":
+            continue
+        count = (row.get("TOT_ACTIVE_PARTCP_CNT") or "").strip()
+        participants = int(count) if count.isdigit() else 0
+        if participants < _FORM_5500_MIN_PARTICIPANTS:
+            continue
+        code = re.sub(r"\D", "", row.get("BUSINESS_CODE") or "")
+        if code[:3] in _FORM_5500_SKIP_SECTORS:
+            continue
+        plan_year = (row.get("FORM_PLAN_YEAR_BEGIN_DATE") or "").strip()[:10] or None
+        prior = best.get(ein)
+        if prior and (prior.get("last_event_at") or "") >= (plan_year or ""):
+            continue
+        state = (row.get("SPONS_DFE_MAIL_US_STATE") or "").strip().upper() or None
+        city = _title_case((row.get("SPONS_DFE_MAIL_US_CITY") or "").strip())
+        best[ein] = {
+            "source": "dol_5500",
+            "source_key": ein,
+            "tier": "us_employer",
+            "country": "US",
+            "company_name": _title_case(name),
+            "sector_code": code or None,
+            "sector_label": _NAICS_SECTORS.get(code[:2]),
+            "region": state,
+            # Filed by the employer under penalty of perjury, so it is
+            # evidence rather than an estimate - but it counts plan
+            # participants, not staff, which employees_source records.
+            "employees": participants,
+            "employees_source": "form_5500_active_participants",
+            "last_event_at": plan_year,
+            "last_event_kind": "benefit_plan_filed",
+            "metadata": {
+                "city": city or None,
+                "plan_name": (row.get("PLAN_NAME") or "").strip()[:120] or None,
+                "ein": ein,
+            },
+        }
+        signer = (row.get("SPONS_SIGNED_NAME") or "").strip()
+        if signer and len(signer.split()) >= 2:
+            people[("dol_5500", ein)] = [{
+                "full_name": _title_case(signer),
+                "relationship": "Signed the plan filing",
+                "observed_at": (row.get("SPONS_SIGNED_DATE") or "").strip()[:10] or None,
+                "source_url": "https://www.efast.dol.gov/5500Search/",
+            }]
+    return list(best.values()), people
+
+
+async def ingest_form_5500(year: int, *, force: bool = False) -> dict[str, Any]:
+    """One year of Form 5500 filings. The file is ~10 MB zipped."""
+    batch = f"{year}"
+    if not force and await _already_ingested("dol_5500", batch):
+        return {"ok": True, "source": "dol_5500", "batch": batch, "skipped": "already ingested"}
+    url = f"https://askebsa.dol.gov/FOIA%20Files/{year}/Latest/F_5500_{year}_latest.zip"
+    try:
+        payload = await _http_get(url, timeout=300.0)
+    except Exception as exc:
+        # The current year is published as it is filed; a year with nothing
+        # yet simply is not there, exactly like an unpublished Form D quarter.
+        await _record_ingest("dol_5500", batch, 0, 0, "unpublished", str(exc)[:200])
+        return {"ok": False, "source": "dol_5500", "batch": batch, "error": str(exc)[:200]}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = [n for n in archive.namelist() if n.lower().endswith(".csv")]
+        if not names:
+            await _record_ingest("dol_5500", batch, 0, 0, "empty", "no csv in archive")
+            return {"ok": False, "source": "dol_5500", "batch": batch, "error": "no csv in archive"}
+        with archive.open(names[0]) as handle:
+            rows, people = parse_form_5500(handle)
+    written = await upsert_companies(rows)
+    attached = await _attach_people(people)
+    await _record_ingest("dol_5500", batch, len(rows), written, "ok")
+    return {"ok": True, "source": "dol_5500", "batch": batch, "seen": len(rows),
+            "written": written, "officers": attached}
+
+
 def parse_uk_bulk(handle: Any) -> Iterable[dict[str, Any]]:
     """Stream the Companies House one-file CSV (2.8 GB uncompressed, 5.7M
     rows) and yield only active companies above the small-company accounts
@@ -651,6 +792,18 @@ async def drain_company_register() -> dict[str, Any]:
         # A quarter SEC has not published (or a transient failure) must not
         # block the older quarters behind it; try the next one this pass.
         continue
+    # Form 5500 is the widest US source the register has: the SEC only sees
+    # listed companies and Reg D filers, while every employer with a benefit
+    # plan files this one. Two years, because a sponsor that filed last year
+    # and not yet this one is still a company.
+    now_year = datetime.now(timezone.utc).year
+    for year in (now_year, now_year - 1):
+        if not await _already_ingested("dol_5500", str(year)):
+            outcome = await ingest_form_5500(year)
+            result["form_5500"] = outcome
+            if outcome.get("ok"):
+                return result
+            continue
     if (os.getenv("REGISTER_UK_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes"}:
         month = datetime.now(timezone.utc).strftime("%Y-%m-01")
         if not await _already_ingested("companies_house", month):

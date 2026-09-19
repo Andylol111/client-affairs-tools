@@ -128,7 +128,7 @@ export type CompanySummaryRow = {
 export type RegisterCompany = {
   id: number;
   source: string;
-  tier: 'us_public' | 'us_private' | 'uk';
+  tier: 'us_public' | 'us_private' | 'us_employer' | 'uk';
   country: string;
   company_name: string;
   company_domain?: string | null;

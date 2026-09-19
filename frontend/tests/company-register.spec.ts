@@ -4,6 +4,8 @@ const user = { id: 1, email: 'alice@yale.edu', name: 'Alice', role: 'admin', is_
 
 const UK_ROW = { id: 3, source: 'companies_house', tier: 'uk', country: 'GB', company_name: 'Hansford Sensors Limited', sector_label: 'Manufacture of electronic industrial process control equipment', region: 'High Wycombe', employees: null, employees_source: 'companies_house_account_category', last_event_at: '2025-12-31', last_event_amount: null, last_event_kind: 'accounts_filed', officer_count: 0, metadata: { size_band: 'group (consolidated accounts)' } };
 
+const EMPLOYER_ROW = { id: 4, source: 'dol_5500', tier: 'us_employer', country: 'US', company_name: 'Wikoff Color Corporation', sector_label: 'Manufacturing', region: 'SC', employees: 406, employees_source: 'form_5500_active_participants', last_event_at: '2025-01-01', last_event_amount: null, last_event_kind: 'benefit_plan_filed', officer_count: 0, metadata: { city: 'Chester' } };
+
 const ROWS = [
   { id: 1, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Gilgamesh Pharma Inc.', sector_label: 'Pharmaceuticals', region: 'New York', employees: null, employees_source: null, last_event_at: '2026-03-27', last_event_amount: 15000000, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: { revenue_range: 'No Revenues' } },
   { id: 2, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Lucem Health, Inc.', sector_label: 'Other Technology', region: 'North Carolina', employees: null, employees_source: null, last_event_at: '2026-03-26', last_event_amount: 8397541, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: {} },
@@ -18,7 +20,7 @@ async function mockRegister(page: Page) {
     let body: unknown = {};
     if (path === '/api/auth/me') body = { authenticated: true, user };
     else if (path === '/api/yucgoutreach/register/summary') body = {
-      tiers: [{ tier: 'us_public', country: 'US', n: 8031, with_officers: 0 }, { tier: 'us_private', country: 'US', n: 1563, with_officers: 1556 }, { tier: 'uk', country: 'GB', n: 82819, with_officers: 0 }],
+      tiers: [{ tier: 'us_public', country: 'US', n: 8031, with_officers: 0 }, { tier: 'us_private', country: 'US', n: 1563, with_officers: 1556 }, { tier: 'us_employer', country: 'US', n: 84822, with_officers: 11927 }, { tier: 'uk', country: 'GB', n: 82819, with_officers: 0 }],
       sectors: [{ sector: 'Other Technology', n: 505 }, { sector: 'Biotechnology', n: 108 }],
       recent_ingests: [],
     };
@@ -26,7 +28,7 @@ async function mockRegister(page: Page) {
       calls.push(url.search);
       const tier = url.searchParams.get('tier');
       const sector = url.searchParams.get('sector');
-      let items = [...ROWS, UK_ROW].filter(r => !tier || r.tier === tier);
+      let items = [...ROWS, UK_ROW, EMPLOYER_ROW].filter(r => !tier || r.tier === tier);
       if (sector) items = items.filter(r => r.sector_label === sector);
       body = { items, total: items.length, limit: 40, offset: 0 };
     }
@@ -57,7 +59,7 @@ test('register browses the free public pool and hands a company to Find people',
   await page.getByRole('tab', { name: 'Company register' }).click();
 
   // Defaults to the startup pool and states what is on record.
-  await expect(page.getByText('8,031 listed · 1,563 recently funded · 82,819 UK · 1,556 with named officers')).toBeVisible();
+  await expect(page.getByText('8,031 listed · 84,822 US employers · 1,563 recently funded · 82,819 UK · 13,483 with named officers')).toBeVisible();
   await expect(page.getByText('Gilgamesh Pharma Inc.')).toBeVisible();
   await expect(page.getByText(/Pharmaceuticals · New York · raised \$15M · 2026-03-27/)).toBeVisible();
 
@@ -109,4 +111,20 @@ test('a listed or UK company with no officers on file can be looked up on demand
   // Once they are on file the offer is gone: no second call against a
   // rate-limited public API.
   await expect(row.getByRole('button', { name: 'Look up officers' })).toHaveCount(0);
+});
+
+test('the US employer tier shows the headcount the company filed, and offers no officer lookup', async ({ page }) => {
+  const { fetched } = await mockRegister(page);
+  await page.goto('/scraper');
+  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('button', { name: 'US employers' }).click();
+
+  const row = page.getByRole('listitem').filter({ hasText: 'Wikoff Color Corporation' });
+  await expect(row).toContainText('406 employees (form_5500_active_participants)');
+  await expect(row).toContainText('Manufacturing');
+
+  // Form 5500 has no per-company officer register to call, unlike SEC and
+  // Companies House, so the row must not offer a lookup that cannot work.
+  await expect(row.getByRole('button', { name: 'Look up officers' })).toHaveCount(0);
+  expect(fetched).toEqual([]);
 });

@@ -363,8 +363,84 @@ def officer_backfill_tests() -> None:
         _asyncio.run(scenario())
 
 
+F5500_COLS = ['SPONSOR_DFE_NAME', 'SPONS_DFE_EIN', 'TYPE_PLAN_ENTITY_CD', 'TOT_ACTIVE_PARTCP_CNT',
+              'BUSINESS_CODE', 'SPONS_DFE_MAIL_US_STATE', 'SPONS_DFE_MAIL_US_CITY',
+              'FORM_PLAN_YEAR_BEGIN_DATE', 'PLAN_NAME', 'SPONS_SIGNED_NAME', 'SPONS_SIGNED_DATE']
+
+
+def _f5500_csv(rows):
+    import csv as _csv
+    buf = io.StringIO()
+    writer = _csv.DictWriter(buf, fieldnames=F5500_COLS)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({col: row.get(col, '') for col in F5500_COLS})
+    return buf.getvalue().encode('latin-1')
+
+
+def form_5500_tests() -> None:
+    """Form 5500 is the widest US source available: the SEC sees only listed
+    companies and Reg D filers, while every employer sponsoring a benefit plan
+    files this. It also reports the one number no free US source publishes -
+    the active participant count the employer filed itself."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services import company_register as cr
+
+    rows = [
+        {'SPONSOR_DFE_NAME': 'THE HOME DEPOT, INC.', 'SPONS_DFE_EIN': '95-3261426',
+         'TYPE_PLAN_ENTITY_CD': '2', 'TOT_ACTIVE_PARTCP_CNT': '419778', 'BUSINESS_CODE': '444110',
+         'SPONS_DFE_MAIL_US_STATE': 'ga', 'SPONS_DFE_MAIL_US_CITY': 'ATLANTA',
+         'FORM_PLAN_YEAR_BEGIN_DATE': '2025-01-01', 'PLAN_NAME': 'FUTUREBUILDER',
+         'SPONS_SIGNED_NAME': 'JANE ROE', 'SPONS_SIGNED_DATE': '2026-07-14'},
+        # An earlier plan year for the same sponsor: one company, latest filing wins.
+        {'SPONSOR_DFE_NAME': 'THE HOME DEPOT, INC.', 'SPONS_DFE_EIN': '953261426',
+         'TYPE_PLAN_ENTITY_CD': '2', 'TOT_ACTIVE_PARTCP_CNT': '390000', 'BUSINESS_CODE': '444110',
+         'FORM_PLAN_YEAR_BEGIN_DATE': '2022-01-01', 'PLAN_NAME': 'OLDER FILING'},
+        {'SPONSOR_DFE_NAME': 'WIKOFF COLOR CORPORATION', 'SPONS_DFE_EIN': '570123456',
+         'TYPE_PLAN_ENTITY_CD': '2', 'TOT_ACTIVE_PARTCP_CNT': '406', 'BUSINESS_CODE': '325910',
+         'SPONS_DFE_MAIL_US_STATE': 'SC', 'FORM_PLAN_YEAR_BEGIN_DATE': '2025-01-01'},
+        # Too small to host a ten-week student team.
+        {'SPONSOR_DFE_NAME': 'TINY SHOP LLC', 'SPONS_DFE_EIN': '111111111',
+         'TYPE_PLAN_ENTITY_CD': '2', 'TOT_ACTIVE_PARTCP_CNT': '12', 'BUSINESS_CODE': '448140'},
+        # Multiemployer union trust: its participants work for many employers,
+        # so the count is not one company's staff.
+        {'SPONSOR_DFE_NAME': 'NATIONAL EDUCATION ASSOCIATION', 'SPONS_DFE_EIN': '222222222',
+         'TYPE_PLAN_ENTITY_CD': '1', 'TOT_ACTIVE_PARTCP_CNT': '2484299', 'BUSINESS_CODE': '813930'},
+        # Direct filing entity, same reasoning.
+        {'SPONSOR_DFE_NAME': 'SOME BENEFITS TRUST', 'SPONS_DFE_EIN': '333333333',
+         'TYPE_PLAN_ENTITY_CD': '4', 'TOT_ACTIVE_PARTCP_CNT': '477594', 'BUSINESS_CODE': '525990'},
+        # Right size and a single-employer plan, wrong kind: a pooled vehicle.
+        {'SPONSOR_DFE_NAME': 'POOLED VEHICLE LP', 'SPONS_DFE_EIN': '444444444',
+         'TYPE_PLAN_ENTITY_CD': '2', 'TOT_ACTIVE_PARTCP_CNT': '900', 'BUSINESS_CODE': '525920'},
+    ]
+    companies, people = cr.parse_form_5500(io.BytesIO(_f5500_csv(rows)))
+    names = sorted(c['company_name'] for c in companies)
+    assert names == ['The Home Depot, Inc.', 'Wikoff Color Corporation'], names
+
+    depot = next(c for c in companies if c['company_name'].startswith('The Home Depot'))
+    # The EIN is the key, with punctuation stripped, so the two filings above
+    # are one company rather than two.
+    assert depot['source_key'] == '953261426'
+    assert depot['tier'] == 'us_employer' and depot['country'] == 'US'
+    assert depot['employees'] == 419778, 'the latest plan year must win'
+    assert depot['employees_source'] == 'form_5500_active_participants'
+    assert depot['sector_code'] == '444110' and depot['sector_label'] == 'Retail Trade'
+    assert depot['region'] == 'GA' and depot['metadata']['city'] == 'Atlanta'
+    assert depot['last_event_at'] == '2025-01-01' and depot['last_event_kind'] == 'benefit_plan_filed'
+
+    # The person who signed the filing is a named contact from the company's
+    # own document.
+    signer = people[('dol_5500', '953261426')]
+    assert signer[0]['full_name'] == 'Jane Roe'
+    assert signer[0]['relationship'] == 'Signed the plan filing'
+    assert signer[0]['observed_at'] == '2026-07-14'
+    # A filing with no signature contributes no person rather than a blank one.
+    assert ('dol_5500', '570123456') not in people
+
+
 if __name__ == '__main__':
     tests()
     uk_tests()
     officer_backfill_tests()
+    form_5500_tests()
     print('company register: ok')
