@@ -153,6 +153,31 @@ def tests() -> None:
             results = asyncio.run(web_fetch.web_search('Acme CEO', max_results=1, user_id=1))
             assert results == [{"title": "Acme - Wikipedia", "url": "https://en.wikipedia.org/wiki/Acme", "content": "Acme is a company."}]
 
+        # --- Requesting more results than one page holds (~8 observed live)
+        # fetches additional pages, deduped by URL, rather than silently
+        # capping every search at one page regardless of what was asked
+        # for. ---
+        page_calls: list[int] = []
+
+        def paginated_handler(request: httpx.Request) -> httpx.Response:
+            import json
+            body = json.loads(request.content)
+            page = body["input"]["queryParams"].get("page", 0)
+            page_calls.append(page)
+            if page == 0:
+                assert "page" not in body["input"]["queryParams"]
+                results = [{"title": f"Result {i}", "url": f"https://acme.com/{i}", "snippet": "x"} for i in range(8)]
+            elif page == 1:
+                results = [{"title": f"Result {i}", "url": f"https://acme.com/{i}", "snippet": "x"} for i in range(8, 15)]
+            else:
+                results = []
+            return httpx.Response(200, json={"runId": "01TEST", "status": "COMPLETED", "output": {"results": results}})
+
+        with patch('app.services.web_fetch.httpx.AsyncClient', client_for(paginated_handler)):
+            results = asyncio.run(web_fetch.web_search('Acme leadership', max_results=15, user_id=1))
+            assert len(results) == 15, f'Expected 15 results across two pages, got {len(results)}'
+            assert page_calls == [0, 1], f'Expected exactly two page fetches, got {page_calls}'
+
         # --- site:/-site: operators (how every discovery query in this
         # codebase restricts to a domain, e.g. site:linkedin.com/in) are
         # translated to TinyFish's include_domains/exclude_domains params

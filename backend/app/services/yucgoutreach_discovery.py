@@ -161,12 +161,12 @@ async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_
     role = (title_hints or "employees OR leadership").strip()
     results = await _tavily_search(
         f'{company_name} {role} site:linkedin.com/in',
-        max_results=12,
+        max_results=25,
     )
     if not results:
         return []
     snippet = "\n".join(
-        f"{r.get('title')}\n{r.get('url')}\n{r.get('content', '')[:400]}" for r in results[:8]
+        f"{r.get('title')}\n{r.get('url')}\n{r.get('content', '')[:400]}" for r in results[:20]
     )
     try:
         data = await _llm_json(
