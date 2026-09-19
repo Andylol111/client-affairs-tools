@@ -86,4 +86,12 @@ docker run -d --name yucg --restart unless-stopped --env-file /etc/yucg/app.env 
   --log-opt awslogs-stream=api "$(cat /etc/yucg/current-image)"
 RUNNER
 chmod 0755 /usr/local/bin/yucg-run.sh
+# Each release leaves the previous 455 MB image behind; forty of them filled
+# the 20 GB root disk and a pull failed with "no space left on device". Keep
+# only the image now serving and the one it replaced (the rollback target
+# above); everything older is reclaimable. Never fails the release.
+NEW_ID=$(docker inspect --format '{{.Id}}' "${IMAGE}")
+docker images -q --no-trunc | sort -u \
+  | grep -vx -e "${NEW_ID}" -e "${OLD_IMAGE}" \
+  | xargs -r docker rmi -f >/dev/null 2>&1 || true
 printf 'Healthy release; backup retained at %s\n' "$BACKUP"
