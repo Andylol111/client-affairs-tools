@@ -877,7 +877,11 @@ async def companies_summary(user: dict | None = Depends(get_current_user_optiona
             f"""SELECT TRIM(c.company) AS company, c.company_domain,
                        COUNT(DISTINCT c.id) AS contact_count,
                        MAX(cc.sent_at) AS last_sent_at,
-                       COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN cc.campaign_id END) AS campaign_count
+                       COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN cc.campaign_id END) AS campaign_count,
+                       COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN c.id END) AS mailed_count,
+                       COUNT(DISTINCT CASE WHEN cc.replied_at IS NOT NULL THEN c.id END) AS replied_count,
+                       COUNT(DISTINCT CASE WHEN cc.status = 'bounced' THEN c.id END) AS bounced_count,
+                       COUNT(DISTINCT CASE WHEN cc.status IN ('pending','sending') THEN c.id END) AS queued_count
                 FROM contacts c
                 LEFT JOIN campaign_contacts cc ON cc.contact_id = c.id {campaign_join}
                 WHERE ({vis})
@@ -894,6 +898,13 @@ async def companies_summary(user: dict | None = Depends(get_current_user_optiona
                 "contact_count": r["contact_count"],
                 "last_sent_at": r["last_sent_at"],
                 "campaign_count": r["campaign_count"],
+                # Outcomes come from the send ledger, not from a field on the
+                # contact: a contact row says who we know, campaign_contacts
+                # says what actually happened to them.
+                "mailed_count": r["mailed_count"],
+                "replied_count": r["replied_count"],
+                "bounced_count": r["bounced_count"],
+                "queued_count": r["queued_count"],
             }
             for r in rows
         ]
