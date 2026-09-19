@@ -21,7 +21,7 @@ def tests() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ['DATABASE_URL'] = f'sqlite:///{Path(tmp) / "t.db"}'
         os.environ['LLM_PROVIDER'] = 'bedrock'
-        os.environ['DRAFTS_PER_MEMBER_PER_HOUR'] = '2'  # force the quota path on the 3rd draft
+        os.environ['DRAFTS_PER_MEMBER_PER_HOUR'] = '4'  # Ada 2 attempts + Grace 2 attempts; Alan hits the quota
         for mod in [m for m in list(sys.modules) if m.startswith('app.')]:
             del sys.modules[mod]
 
@@ -85,11 +85,21 @@ def tests() -> None:
 
         asyncio.run(complete_run())
 
-        generated: list[str] = []
+        generated: list[tuple[str, str, str | None]] = []
 
         def fake_generate(**kwargs):
-            generated.append(kwargs['contact_name'])
-            return f"Hello {kwargs['contact_name']}", f"Body for {kwargs['contact_name']} ({kwargs['angle']})"
+            """Studio's validator rejects with a 502 HTTPException. Ada is
+            rejected once then accepted on the retry; Grace is rejected on both
+            attempts; Alan never gets an attempt because the quota (4/hour)
+            is spent by then: Ada 2 + Grace 2."""
+            name = kwargs['contact_name']
+            generated.append((name, kwargs['angle'], kwargs['custom_instructions']))
+            attempts = sum(1 for g in generated if g[0] == name)
+            if name == 'Ada Lovelace' and attempts == 1:
+                raise HTTPException(502, 'Draft generation failed. Your existing draft is unchanged; please retry.')
+            if name == 'Grace Hopper':
+                raise HTTPException(502, 'Draft generation failed. Your existing draft is unchanged; please retry.')
+            return f"Hello {name}", f"Body for {name} ({kwargs['angle']})"
 
         async def fake_evidence(db, contact, actor_id):
             return {"facts": []}
@@ -106,11 +116,14 @@ def tests() -> None:
         done = asyncio.run(outreach_flow.get_flow(flow['id'], 1))
         assert done['status'] == 'ready', done
         assert done['imported_count'] == 3
-        # Quota of 2/hour: two drafts, third contact still added with an empty draft.
-        assert done['drafted_count'] == 2, done
+        assert done['drafted_count'] == 1, done
+        assert 'did not pass the draft rules' in (done['progress_message'] or '')
         assert 'hourly draft limit' in (done['progress_message'] or '')
         assert done['campaign_id']
-        assert generated == ['Ada Lovelace', 'Grace Hopper']
+        # Retry uses the validator-aligned angle + instruction; the first try keeps the member's angle.
+        assert [g[0] for g in generated] == ['Ada Lovelace', 'Ada Lovelace', 'Grace Hopper', 'Grace Hopper']
+        assert generated[0][1] == 'question_hook' and generated[0][2] is None
+        assert generated[1][1] == 'pain_point' and 'exactly one thing' in (generated[1][2] or '')
 
         async def inspect() -> None:
             db = await get_db()
@@ -125,6 +138,7 @@ def tests() -> None:
                 assert len(rows) == 3
                 by_email = {r['email']: r for r in rows}
                 assert by_email['ada.lovelace@acme.com']['email_subject'] == 'Hello Ada Lovelace'
+                assert by_email['grace.hopper@acme.com']['email_subject'] == ''  # rejected twice, still attached
                 assert by_email['alan.turing@acme.com']['email_subject'] == ''  # quota-hit contact, still attached
                 assert all(r['status'] == 'pending' for r in rows)
                 owners = await (await db.execute("SELECT DISTINCT owner_id FROM contacts")).fetchall()
@@ -132,7 +146,7 @@ def tests() -> None:
                 bound = await (await db.execute(
                     "SELECT COUNT(*) AS n FROM generated_emails WHERE campaign_id=?", (done['campaign_id'],)
                 )).fetchone()
-                assert bound['n'] == 2
+                assert bound['n'] == 1
             finally:
                 await db.close()
 
