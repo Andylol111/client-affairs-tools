@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import html
 import io
 import json
 import logging
@@ -32,6 +33,7 @@ import os
 import re
 import zipfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Iterable
 
 from app.database import get_db
@@ -622,6 +624,335 @@ async def ingest_companies_house(*, force: bool = False, batch_rows: int = 2000)
     return {"ok": True, "source": "companies_house", "batch": batch_key, "seen": seen, "written": written}
 
 
+# NTEE major group. The letter is the only part of the code with a published
+# name, and it is the level a member filters on.
+_NTEE_GROUPS: dict[str, str] = {
+    "A": "Arts, Culture and Humanities", "B": "Education", "C": "Environment",
+    "D": "Animal Related", "E": "Health Care", "F": "Mental Health",
+    "G": "Disease and Disorders", "H": "Medical Research", "I": "Crime and Legal",
+    "J": "Employment", "K": "Food and Agriculture", "L": "Housing and Shelter",
+    "M": "Public Safety and Disaster Relief", "N": "Recreation and Sports",
+    "O": "Youth Development", "P": "Human Services", "Q": "International Affairs",
+    "R": "Civil Rights and Advocacy", "S": "Community Improvement",
+    "T": "Philanthropy and Grantmaking", "U": "Science and Technology",
+    "V": "Social Science", "W": "Public and Societal Benefit", "X": "Religion",
+    "Y": "Mutual Benefit", "Z": "Unknown",
+}
+
+IRS_EXTRACT_URL = "https://www.irs.gov/pub/irs-soi/{yy}eoextract990.zip"
+IRS_BMF_URLS = [f"https://www.irs.gov/pub/irs-soi/eo{n}.csv" for n in (1, 2, 3, 4)]
+
+# Being large is not the same as being able to buy anything. These three
+# thresholds together say: big enough to fund a project, already in the habit
+# of paying outside firms for advice, and not a pass-through whose "fees" are
+# really programme costs.
+_IRS_MIN_REVENUE = 5_000_000
+_IRS_MIN_ADVICE_SPEND = 50_000
+_IRS_MAX_ADVICE_SHARE = 0.25
+
+
+def _irs_money(row: dict[str, str], key: str) -> int:
+    value = (row.get(key) or "0").strip()
+    try:
+        return int(float(value))
+    except ValueError:
+        return 0
+
+
+def qualifying_990_filers(handle: Any) -> dict[str, dict[str, int]]:
+    """EINs that can pay for advice and already do, from the IRS 990 extract.
+
+    The extract carries the money but no names, so this returns a lookup the
+    Business Master File is then joined onto.
+
+    Spend counts management, legal and accounting fees only.
+    feesforsrvcothr is deliberately excluded: at health plans and insurers it
+    absorbs medical claims, and including it put UCare Minnesota at $5.8bn of
+    "consulting" - a pass-through, not a buyer of advice.
+    """
+    out: dict[str, dict[str, int]] = {}
+    reader = csv.DictReader(io.TextIOWrapper(handle, encoding="latin-1", errors="replace"))
+    for row in reader:
+        ein = re.sub(r"\D", "", row.get("EIN") or "").zfill(9)
+        if len(ein) != 9:
+            continue
+        revenue = _irs_money(row, "totrevenue")
+        if revenue < _IRS_MIN_REVENUE:
+            continue
+        advice = (_irs_money(row, "feesforsrvcmgmt")
+                  + _irs_money(row, "legalfees")
+                  + _irs_money(row, "accntingfees"))
+        if advice < _IRS_MIN_ADVICE_SPEND or advice > revenue * _IRS_MAX_ADVICE_SHARE:
+            continue
+        out[ein] = {
+            "revenue": revenue,
+            "advice": advice,
+            # Part V line 2a: employees on the organisation's own W-3s.
+            "employees": _irs_money(row, "noemplyeesw3cnt"),
+        }
+    return out
+
+
+def _bmf_rows_for(handle: Any, wanted: dict[str, dict[str, int]]) -> Iterable[dict[str, Any]]:
+    """Join Business Master File names onto the qualifying EINs, streamed."""
+    reader = csv.DictReader(io.TextIOWrapper(handle, encoding="latin-1", errors="replace"))
+    for row in reader:
+        ein = re.sub(r"\D", "", row.get("EIN") or "").zfill(9)
+        money = wanted.get(ein)
+        if not money:
+            continue
+        name = (row.get("NAME") or "").strip()
+        if not name:
+            continue
+        ntee = (row.get("NTEE_CD") or "").strip().upper()
+        period = (row.get("TAX_PERIOD") or "").strip()
+        filed = f"{period[:4]}-{period[4:6]}-01" if len(period) >= 6 and period.isdigit() else None
+        revenue, advice = money["revenue"], money["advice"]
+        yield {
+            "source": "irs_990",
+            "source_key": ein,
+            "tier": "us_nonprofit",
+            "country": "US",
+            "company_name": _title_case(name),
+            "sector_code": ntee or None,
+            "sector_label": _NTEE_GROUPS.get(ntee[:1]) if ntee else None,
+            "region": (row.get("STATE") or "").strip().upper() or None,
+            "employees": money["employees"] or None,
+            "employees_source": "form_990_w3_employee_count" if money["employees"] else None,
+            "last_event_at": filed,
+            "last_event_kind": "form_990_filed",
+            "metadata": {
+                "city": _title_case((row.get("CITY") or "").strip()) or None,
+                "revenue_range": f"${revenue / 1_000_000:,.1f}M revenue",
+                "buys_outside_advice": (
+                    f"${advice / 1_000_000:,.1f}M/yr on management, legal and accounting fees"
+                    if advice >= 1_000_000 else f"${advice / 1_000:,.0f}k/yr on outside professional fees"
+                ),
+                "ein": ein,
+            },
+        }
+
+
+async def _stream_to_temp(url: str, suffix: str):
+    """Download a large file to a temp handle without holding it in memory."""
+    import tempfile
+
+    import httpx
+
+    handle = tempfile.NamedTemporaryFile(suffix=suffix)
+    async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+        async with client.stream("GET", url, headers={"User-Agent": _sec_headers()["User-Agent"]}) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes(1 << 20):
+                handle.write(chunk)
+    handle.flush()
+    return handle
+
+
+async def ingest_irs_990(year: int | None = None, *, force: bool = False,
+                         batch_rows: int = 2000) -> dict[str, Any]:
+    """US nonprofits that can pay for outside advice and demonstrably do.
+
+    Two free IRS files joined on EIN: the 990 financial extract, which has the
+    money but no names, and the Exempt Organizations Business Master File,
+    which has the names. Both are streamed to temp files, so peak memory is
+    the qualifying set rather than the 330 MB of source data.
+    """
+    target = year or (datetime.now(timezone.utc).year - 1)
+    batch_key = str(target)
+    if not force and await _already_ingested("irs_990", batch_key):
+        return {"ok": True, "source": "irs_990", "batch": batch_key, "skipped": "already ingested"}
+    seen = written = 0
+    try:
+        extract = await _stream_to_temp(IRS_EXTRACT_URL.format(yy=f"{target % 100:02d}"), ".zip")
+        try:
+            with zipfile.ZipFile(extract.name) as archive:
+                member = next(n for n in archive.namelist() if n.lower().endswith(".csv"))
+                with archive.open(member) as handle:
+                    qualifying = qualifying_990_filers(handle)
+        finally:
+            extract.close()
+        if not qualifying:
+            await _record_ingest("irs_990", batch_key, 0, 0, "empty", "no qualifying filers")
+            return {"ok": False, "source": "irs_990", "batch": batch_key, "error": "no qualifying filers"}
+
+        for url in IRS_BMF_URLS:
+            bmf = await _stream_to_temp(url, ".csv")
+            try:
+                with open(bmf.name, "rb") as handle:
+                    batch: list[dict[str, Any]] = []
+                    for company in _bmf_rows_for(handle, qualifying):
+                        seen += 1
+                        batch.append(company)
+                        if len(batch) >= batch_rows:
+                            written += await upsert_companies(batch)
+                            batch = []
+                            await asyncio.sleep(0)
+                    if batch:
+                        written += await upsert_companies(batch)
+            finally:
+                bmf.close()
+    except Exception as exc:
+        missing = "404" in str(exc)
+        await _record_ingest("irs_990", batch_key, seen, written,
+                             "unpublished" if missing else "failed", f"{type(exc).__name__}: {exc}")
+        return {"ok": False, "source": "irs_990", "batch": batch_key, "error": str(exc)[:200]}
+    await _record_ingest("irs_990", batch_key, seen, written, "ok")
+    return {"ok": True, "source": "irs_990", "batch": batch_key,
+            "qualifying": len(qualifying), "seen": seen, "written": written}
+
+
+# Part VII Section A of Form 990: the officers, directors, trustees and key
+# employees the organisation named on its own return, each with the title it
+# gave them. Parsed with regex rather than an XML tree because the batches
+# hold ~17,000 filings each and only a handful of fields are wanted.
+_PART_VII = re.compile(r"<Form990PartVIISectionAGrp>(.*?)</Form990PartVIISectionAGrp>", re.S)
+_PERSON_NM = re.compile(r"<PersonNm>(.*?)</PersonNm>")
+_TITLE_TXT = re.compile(r"<TitleTxt>(.*?)</TitleTxt>")
+_FILING_EIN = re.compile(r"<EIN>(\d{9})</EIN>")
+_IRS_XML_BATCH = "https://apps.irs.gov/pub/epostcard/990/xml/{year}/{year}_TEOS_XML_{month:02d}{letter}.zip"
+# stored, deflate, bzip2, lzma. Deflate64 (9) appears in some IRS batches and
+# the standard library cannot decompress it.
+_READABLE_ZIP_METHODS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED, zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA}
+
+
+def _clean_xml_text(value: str) -> str:
+    """XML escapes are not part of the text. "PRESIDENT &amp; CEO" is a title
+    nobody wrote and nobody should read."""
+    return re.sub(r"\s+", " ", html.unescape(value or "")).strip()
+
+
+def parse_part_vii(xml: str) -> tuple[str, list[dict[str, Any]]]:
+    """Return (EIN, named officers) for one filing."""
+    found = _FILING_EIN.search(xml)
+    if not found:
+        return "", []
+    people: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for block in _PART_VII.findall(xml):
+        name = _PERSON_NM.search(block)
+        if not name:
+            continue
+        full = _clean_xml_text(name.group(1))
+        key = full.casefold()
+        if not full or key in seen or len(full.split()) < 2:
+            continue
+        title = _TITLE_TXT.search(block)
+        role = _clean_xml_text(title.group(1))[:120] if title else ""
+        # "FORMER" is the organisation saying this person has left, the same
+        # evidence a Companies House resignation date gives.
+        if role.upper().startswith("FORMER"):
+            continue
+        seen.add(key)
+        people.append({
+            "full_name": _title_case(full),
+            "relationship": role or None,
+            "observed_at": None,
+            "source_url": "https://www.irs.gov/charities-non-profits/tax-exempt-organization-search",
+        })
+    return found.group(1), people[:40]
+
+
+def _batch_filings(archive_path: str) -> Iterable[str]:
+    """Yield every filing in one IRS batch, whatever it was compressed with.
+
+    About half of a year's filings are written with deflate64, which the
+    standard library cannot decompress - skipping them silently lost 243,823
+    filings on the first live run. The system unzip reads them, but spawning
+    it per filing meant a quarter of a million processes and the run timed
+    out. So a batch containing any unreadable member is extracted once, in a
+    single process, into a temp directory that is deleted immediately after.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    with zipfile.ZipFile(archive_path) as zf:
+        members = [i for i in zf.infolist() if i.filename.endswith(".xml")]
+        if all(i.compress_type in _READABLE_ZIP_METHODS for i in members):
+            for info in members:
+                yield zf.read(info.filename).decode("utf-8", "replace")
+            return
+
+    if not shutil.which("unzip"):
+        return
+    workdir = tempfile.mkdtemp(prefix="irs990-")
+    try:
+        done = subprocess.run(["unzip", "-q", "-o", archive_path, "-d", workdir],
+                              capture_output=True, timeout=900, check=False)
+        # unzip returns 1 for warnings it recovered from, which is still a
+        # usable extraction.
+        if done.returncode > 1:
+            return
+        for entry in sorted(Path(workdir).rglob("*.xml")):
+            try:
+                yield entry.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+    except (OSError, subprocess.SubprocessError):
+        return
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def ingest_990_officers(year: int | None = None, *, force: bool = False) -> dict[str, Any]:
+    """Name the people running every nonprofit already in the register.
+
+    Finding contacts is the slowest part of outreach, and Part VII is a list
+    of them with titles that the organisation filed itself. The IRS retired
+    per-filing XML downloads, so the only route is the annual batches - about
+    fifteen zips of 100 MB. Each is streamed to a temp file, scanned for the
+    EINs already in the register, and deleted, so nothing accumulates on the
+    data volume and only matching filings are parsed.
+    """
+    target = year or (datetime.now(timezone.utc).year - 1)
+    batch_key = f"officers-{target}"
+    if not force and await _already_ingested("irs_990", batch_key):
+        return {"ok": True, "source": "irs_990", "batch": batch_key, "skipped": "already ingested"}
+
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            "SELECT source_key FROM company_register WHERE source='irs_990' AND officer_count=0"
+        )).fetchall()
+    finally:
+        await db.close()
+    wanted = {row["source_key"] for row in rows}
+    if not wanted:
+        return {"ok": True, "source": "irs_990", "batch": batch_key, "skipped": "every filer already has officers"}
+
+    scanned = matched = attached = batches = 0
+    for month in range(1, 13):
+        for letter in ("A", "B", "C", "D"):
+            url = _IRS_XML_BATCH.format(year=target, month=month, letter=letter)
+            try:
+                archive = await _stream_to_temp(url, ".zip")
+            except Exception:
+                # Batches are not evenly numbered - some months have only an
+                # A, others run to D. A missing one is normal, not a failure.
+                break
+            batches += 1
+            try:
+                found: dict[tuple[str, str], list[dict[str, Any]]] = {}
+                for raw in _batch_filings(archive.name):
+                    scanned += 1
+                    ein, people = parse_part_vii(raw)
+                    if not people or ein not in wanted:
+                        continue
+                    found[("irs_990", ein)] = people
+                    matched += 1
+                if found:
+                    attached += await _attach_people(found)
+                    wanted -= {key[1] for key in found}
+            finally:
+                archive.close()
+            await asyncio.sleep(0)
+    await _record_ingest("irs_990", batch_key, scanned, matched, "ok",
+                         f"{batches} batches, {attached} officers")
+    return {"ok": True, "source": "irs_990", "batch": batch_key, "batches": batches,
+            "filings_scanned": scanned, "companies_named": matched, "officers": attached}
+
+
 async def backfill_sec_sectors(limit: int | None = None) -> dict[str, Any]:
     """Fill SIC sector for listed companies. SEC's fair-access limit is 10
     requests/second and each pass already pauses ROSTER_SEC_PAUSE_SEC
@@ -804,6 +1135,16 @@ async def drain_company_register() -> dict[str, Any]:
             if outcome.get("ok"):
                 return result
             continue
+    # Nonprofits that can pay and already buy outside advice, then the people
+    # they named on those same returns.
+    if not await _already_ingested("irs_990", str(now_year - 1)):
+        outcome = await ingest_irs_990(now_year - 1)
+        result["irs_990"] = outcome
+        if outcome.get("ok"):
+            return result
+    if not await _already_ingested("irs_990", f"officers-{now_year - 1}"):
+        result["irs_990_officers"] = await ingest_990_officers(now_year - 1)
+        return result
     if (os.getenv("REGISTER_UK_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes"}:
         month = datetime.now(timezone.utc).strftime("%Y-%m-01")
         if not await _already_ingested("companies_house", month):
