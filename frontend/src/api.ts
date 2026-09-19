@@ -232,7 +232,7 @@ export type Campaign = {
   sent_count?: number;
   pending_count?: number;
   failed_count?: number;
-  readiness?: { ready: boolean; issues: string[] };
+  readiness?: { ready: boolean; issues: string[]; unproven_companies?: string[]; mailbox_proof_note?: string };
   counts?: Record<string, number>;
   contacts?: CampaignContact[];
   created_at?: string;

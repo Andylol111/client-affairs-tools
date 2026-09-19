@@ -45,6 +45,16 @@ async def _seed(n: int = 10) -> int:
                    VALUES (?, ?, 'Hi', 'Body', 'pending')""",
                 (cid, contact_id),
             )
+        # This test is about two ticks never sending the same row twice, not
+        # about pacing. Give example.com a format with a delivery behind it so
+        # the mailbox-proof gate (which would otherwise release one probe and
+        # hold the other nine) does not stand in for the thing under test.
+        await db.execute(
+            """INSERT INTO company_email_patterns
+                   (company_domain, pattern_key, pattern_template, confidence,
+                    sample_count, verified_samples, sources_json)
+               VALUES ('example.com','first.last','{first}.{last}',0.9,4,3,'["gmail_reply"]')"""
+        )
         await db.commit()
         return int(cid)
     finally:

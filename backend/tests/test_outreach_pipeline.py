@@ -346,7 +346,7 @@ async def run() -> None:
             "UPDATE campaigns SET owner_user_id=1,sender_user_id=1,status='releasing' WHERE id=1"
         )
         await legacy_db.commit()
-        assert await _claim_pending_rows(legacy_db, 1, 5, 1) == []
+        assert await _claim_pending_rows(legacy_db, 1, 5, 1) == ([], [])
         quarantined = await (await legacy_db.execute(
             "SELECT status FROM campaigns WHERE id=1"
         )).fetchone()

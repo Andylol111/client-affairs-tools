@@ -94,4 +94,13 @@ NEW_ID=$(docker inspect --format '{{.Id}}' "${IMAGE}")
 docker images -q --no-trunc | sort -u \
   | grep -vx -e "${NEW_ID}" -e "${OLD_IMAGE}" \
   | xargs -r docker rmi -f >/dev/null 2>&1 || true
-printf 'Healthy release; backup retained at %s\n' "$BACKUP"
+# Same lesson as the images, on the data volume. The pre-deploy snapshot is a
+# full copy of the database, and the database grew from 1.3 MB to 70 MB the
+# day the public company register landed. Every release adds another 70 MB to
+# an 8 GB volume that also holds the live database, so a few days of releases
+# would fill it and the next write would fail. Keep the five most recent; the
+# nightly off-box copy in S3 is the long-term record, not this directory.
+# Runs only after the release is healthy, and never fails it.
+ls -1t /data/backups/predeploy-*.db 2>/dev/null | tail -n +6 | xargs -r rm -f || true
+printf 'Healthy release; backup retained at %s (%s kept on disk, older pruned)\n' \
+  "$BACKUP" "$(ls -1 /data/backups/predeploy-*.db 2>/dev/null | wc -l)"

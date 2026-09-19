@@ -186,6 +186,12 @@ export default function CampaignDetail() {
           </ul>
         </Notice>
       )}
+      {readiness.mailbox_proof_note && campaign.status !== 'sent' && (
+        <Notice tone="info" className="mb-4">
+          <strong>First email proves the address.</strong>{' '}
+          {readiness.mailbox_proof_note}
+        </Notice>
+      )}
       {canManage && campaign.status === 'releasing' && (
         <Notice tone="info" className="mb-4">The server is sending this campaign in paced batches. You can leave this page.</Notice>
       )}
