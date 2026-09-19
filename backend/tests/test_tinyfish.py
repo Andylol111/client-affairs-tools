@@ -153,6 +153,27 @@ def tests() -> None:
             results = asyncio.run(web_fetch.web_search('Acme CEO', max_results=1, user_id=1))
             assert results == [{"title": "Acme - Wikipedia", "url": "https://en.wikipedia.org/wiki/Acme", "content": "Acme is a company."}]
 
+        # --- site:/-site: operators (how every discovery query in this
+        # codebase restricts to a domain, e.g. site:linkedin.com/in) are
+        # translated to TinyFish's include_domains/exclude_domains params
+        # rather than sent as literal query text - live testing showed
+        # TinyFish silently ignores the literal operator despite its docs
+        # claiming to "honour" it, while include_domains returns real
+        # results for the identical intent. ---
+        def site_operator_handler(request: httpx.Request) -> httpx.Response:
+            import json
+            body = json.loads(request.content)
+            assert body["input"]["queryParams"] == {
+                "query": "Acme leadership OR executives",
+                "include_domains": "linkedin.com",
+                "exclude_domains": "pinterest.com",
+            }
+            return httpx.Response(200, json={"runId": "01TEST", "status": "COMPLETED", "output": {"results": []}})
+
+        with patch('app.services.web_fetch.httpx.AsyncClient', client_for(site_operator_handler)):
+            asyncio.run(web_fetch.web_search(
+                'Acme leadership OR executives site:linkedin.com/in -site:pinterest.com', user_id=1))
+
         # --- A genuine empty TinyFish search result is trusted, not treated
         # as a failure - it must NOT fall through to Firecrawl. ---
         os.environ['FIRECRAWL_URL'] = 'http://100.84.7.57:3002'
