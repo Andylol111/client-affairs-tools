@@ -36,6 +36,7 @@ from app.services.yucgoutreach_discovery import (
     drain_queued_yucgoutreach_runs,
     recover_interrupted_yucgoutreach_runs,
 )
+from app.services.outreach_flow import drain_outreach_flows
 from app.services.assistant_service import drain_document_index_queue,recover_document_indexes
 from app.routers import research, segments
 from app.services.research_service import recover_research_jobs, drain_research_queue
@@ -65,6 +66,14 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=10,
         id="company_discovery_queue",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        drain_outreach_flows,
+        "interval",
+        seconds=10,
+        id="outreach_flow_queue",
         max_instances=1,
         coalesce=True,
     )

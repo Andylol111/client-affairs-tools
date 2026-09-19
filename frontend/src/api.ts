@@ -79,6 +79,30 @@ export type FirecrawlStatus = {
   effective: { fetch: WebProbeResult; search: WebProbeResult; note: string };
 };
 
+export type OutreachFlowStatus = 'discovering' | 'importing' | 'drafting' | 'ready' | 'failed';
+export type OutreachFlow = {
+  id: number;
+  company_name: string;
+  company_domain?: string | null;
+  title_hints?: string | null;
+  angle?: string | null;
+  max_contacts?: number;
+  status: OutreachFlowStatus;
+  progress_pct: number;
+  progress_message?: string | null;
+  run_id?: number | null;
+  prospects_count?: number | null;
+  imported_count?: number | null;
+  drafted_count?: number | null;
+  campaign_id?: number | null;
+  campaign_name?: string | null;
+  campaign_status?: string | null;
+  error_message?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  completed_at?: string | null;
+};
+
 export type PersonIdentity = 'unreviewed' | 'plausible' | 'corroborated' | 'conflicted' | 'rejected';
 export type EmploymentEvidence = 'current_source_observed' | 'current_inferred' | 'stale' | 'former' | 'unknown';
 export type AddressOrigin = 'published_by_company' | 'published_by_independent_source' | 'inferred_from_published_pattern' | 'user_supplied' | 'imported_without_evidence';
@@ -1099,6 +1123,12 @@ export const api = {
     verifyEmail: (email: string) =>
       fetchApi<{ valid: boolean }>(`/api/outreach/verify-email?email=${encodeURIComponent(email)}`),
     pipelineMetrics: () => fetchApi<PipelineMetrics>('/api/outreach/metrics/pipeline'),
+    flows: {
+      create: (payload: { company_name: string; company_domain?: string; title_hints?: string; angle?: string; max_contacts?: number }) =>
+        fetchApi<OutreachFlow>('/api/outreach/flows', { method: 'POST', body: JSON.stringify(payload) }),
+      list: (limit = 20) => fetchApi<OutreachFlow[]>(`/api/outreach/flows?limit=${limit}`),
+      get: (id: number) => fetchApi<OutreachFlow>(`/api/outreach/flows/${id}`),
+    },
     campaigns: {
       list: () => fetchApi<Worklist[]>('/api/outreach/campaigns'),
       get: (id: number) => fetchApi<Worklist>(`/api/outreach/campaigns/${id}`),

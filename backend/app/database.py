@@ -667,6 +667,30 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_yucg_prospect_targets_sector ON yucg_prospect_targets(sector);
+
+            CREATE TABLE IF NOT EXISTS outreach_flows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                company_name TEXT NOT NULL,
+                company_domain TEXT,
+                title_hints TEXT,
+                angle TEXT,
+                max_contacts INTEGER NOT NULL DEFAULT 25,
+                run_id INTEGER REFERENCES yucgoutreach_discovery_runs(id),
+                campaign_id INTEGER REFERENCES campaigns(id),
+                status TEXT NOT NULL DEFAULT 'discovering',
+                progress_message TEXT,
+                imported_count INTEGER NOT NULL DEFAULT 0,
+                drafted_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                lease_token TEXT,
+                lease_expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_outreach_flows_user ON outreach_flows(user_id);
+            CREATE INDEX IF NOT EXISTS idx_outreach_flows_status ON outreach_flows(status);
         """)
         await db.commit()
 
