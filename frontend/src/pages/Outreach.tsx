@@ -1,4 +1,4 @@
-import type { Contact, Template, Sequence, PipelineMetrics, ContactNote, ContactActivity, ContactProfile, Worklist } from '../api';
+import type { Contact, Template, Sequence, PipelineMetrics, ContactNote, ContactActivity, ContactProfile, Worklist, CompanySummaryRow } from '../api';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
@@ -64,8 +64,23 @@ function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect
   );
 }
 
-function CompanyFolder({ company, contacts, selectedContact, selectedIds, onSelect, onToggleSelect, onUpdatePipeline, draggable }: {
-  company: string; contacts: Contact[]; selectedContact: Contact | null; selectedIds: Set<number>; onSelect: (c: Contact) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
+// What the send ledger says about a company, in the order a member asks it:
+// did we mail them, did anyone answer, did anything bounce. A bounce is shown
+// even when it is the only thing that happened, because it means the format
+// for this company is wrong and every other address here shares it.
+function outcomeLine(outcome?: CompanySummaryRow): string {
+  if (!outcome) return '';
+  const parts: string[] = [];
+  if (outcome.mailed_count) parts.push(`${outcome.mailed_count} mailed`);
+  if (outcome.replied_count) parts.push(`${outcome.replied_count} replied`);
+  if (outcome.bounced_count) parts.push(`${outcome.bounced_count} bounced`);
+  if (outcome.queued_count) parts.push(`${outcome.queued_count} queued`);
+  if (!parts.length) return 'not contacted yet';
+  return parts.join(' · ');
+}
+
+function CompanyFolder({ company, contacts, outcome, selectedContact, selectedIds, onSelect, onToggleSelect, onUpdatePipeline, draggable }: {
+  company: string; contacts: Contact[]; outcome?: CompanySummaryRow; selectedContact: Contact | null; selectedIds: Set<number>; onSelect: (c: Contact) => void; onToggleSelect: (id: number) => void; onUpdatePipeline: (id: number, status: string) => void; draggable: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   return (
@@ -74,7 +89,12 @@ function CompanyFolder({ company, contacts, selectedContact, selectedIds, onSele
         onClick={() => setExpanded((e) => !e)}
         className="w-full px-3 py-2 flex items-center justify-between bg-pale-sky/20 hover:bg-pale-sky/30 text-left text-sm font-medium text-deep-navy"
       >
-        <span className="truncate">{company}</span>
+        <span className="min-w-0 flex-1">
+          <span className="truncate block">{company}</span>
+          <span className={`block text-xs font-normal ${outcome?.bounced_count ? 'text-red-700' : 'text-slate-500'}`}>
+            {outcomeLine(outcome)}
+          </span>
+        </span>
         <span className="text-slate-500 text-xs shrink-0 ml-2">({contacts.length})</span>
         <span className="text-slate-500">{expanded ? '▼' : '▶'}</span>
       </button>
@@ -94,6 +114,7 @@ export default function Outreach() {
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [mobileStatus, setMobileStatus] = useState('cold');
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [companyOutcomes, setCompanyOutcomes] = useState<Record<string, CompanySummaryRow>>({});
   const [templates, setTemplates] = useState<Template[]>([]);
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [pipelineMetrics, setPipelineMetrics] = useState<PipelineMetrics | null>(null);
@@ -159,6 +180,12 @@ export default function Outreach() {
     api.outreach.sequences.list().then(setSequences).catch(() => setSequences([]));
     api.outreach.pipelineMetrics().then(setPipelineMetrics).catch(() => setPipelineMetrics(null));
     api.outreach.campaigns.list().then(setOutreachCampaigns).catch(() => setOutreachCampaigns([]));
+    // Grouped by company, the question is what already happened here, and the
+    // answer lives in the send ledger rather than on the contact rows.
+    api.contacts.companiesSummary()
+      .then((rows) => setCompanyOutcomes(Object.fromEntries(
+        rows.map((row) => [row.company.trim().toLowerCase(), row]))))
+      .catch(() => setCompanyOutcomes({}));
   }, []);
 
   useEffect(() => {
@@ -544,6 +571,7 @@ export default function Outreach() {
                               key={company}
                               company={company}
                               contacts={companyContacts}
+                              outcome={companyOutcomes[company.trim().toLowerCase()]}
                               selectedContact={selectedContact}
                               selectedIds={selectedContactIds}
                               onSelect={(c) => { setSelectedContact(c); setEmailVerified(null); }}
