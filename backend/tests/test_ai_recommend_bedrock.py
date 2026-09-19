@@ -84,7 +84,35 @@ def test_unset_provider_still_uses_bedrock_rank() -> None:
     assert complete.call_args.args[1] == rank_model_id()
 
 
+def test_large_corpus_and_candidates_stay_under_llm_char_limit() -> None:
+    """Real bug: once the corpus actually loaded (it never had before - see
+    yucg_ollama_recommender.py's docstring on _fit_prompt_budget), the
+    combined system+user prompt exceeded llm.py's hard 24,000-character
+    limit and the feature returned zero recommendations with a 413 error,
+    for every single call. Verify a large corpus and a full 30-candidate
+    list get trimmed to fit, and complete_json never receives an
+    oversized prompt."""
+    big_corpus = "=== Home ===\nSource: https://www.yaleconsulting.org/\n---\n" + ("Real YUCG content. " * 1000)
+    many_candidates = [dict(_CANDIDATE, row_index=i) for i in range(30)]
+    with patch(
+        "app.services.yucg_ollama_recommender.load_website_corpus",
+        return_value=big_corpus,
+    ), patch(
+        "app.services.yucg_ollama_recommender.top_prospects_for_ai",
+        return_value=many_candidates,
+    ), patch(
+        "app.services.llm.complete_json",
+        return_value=_PARSED,
+    ) as complete:
+        result = asyncio.run(ai_recommend_prospects(n=5, candidate_limit=30))
+    assert result.get("error") is None
+    assert result["count"] == 1
+    prompt, model, system = complete.call_args.args
+    assert len(prompt) + len(system) <= 24000
+
+
 if __name__ == "__main__":
     test_bedrock_refresh_uses_rank_model_not_ollama()
     test_unset_provider_still_uses_bedrock_rank()
+    test_large_corpus_and_candidates_stay_under_llm_char_limit()
     print("ok")

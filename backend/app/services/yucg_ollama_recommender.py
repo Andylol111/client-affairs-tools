@@ -167,6 +167,40 @@ def _row_by_index(candidates: list[dict[str, Any]]) -> dict[int, dict[str, Any]]
     return {int(c["row_index"]): c for c in candidates if c.get("row_index") is not None}
 
 
+_PROMPT_CHAR_BUDGET = 22000  # margin below llm.py's hard 24,000-char limit
+_CORPUS_PROMPT_CAP = 9000  # generous room for real citations without dominating the budget
+
+
+def _fit_prompt_budget(
+    corpus: str,
+    candidates: list[dict[str, Any]],
+    *,
+    sector: str | None,
+    contact_type: str | None,
+    n: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Trim the corpus and/or candidate list so the real system+user prompt
+    stays under llm.py's 24,000-character hard limit, with margin. Computed
+    from the actual prompt builders rather than fixed guesses, so this stays
+    correct if the corpus grows (build_yucg_ollama_context.py re-scrapes more
+    pages) or the candidate count changes - both silently broke this exact
+    call once the corpus started loading for real (previously
+    load_website_corpus() always raised first, hiding it). Candidates are
+    pre-sorted best-first by incentive_score, so dropping from the tail
+    drops the least useful ones first."""
+    trimmed_corpus = corpus[:_CORPUS_PROMPT_CAP]
+    trimmed_candidates = list(candidates)
+    while trimmed_candidates:
+        total = (
+            len(_build_system_prompt(trimmed_corpus))
+            + len(_build_user_prompt(trimmed_candidates, sector=sector, contact_type=contact_type, n=n))
+        )
+        if total <= _PROMPT_CHAR_BUDGET:
+            break
+        trimmed_candidates = trimmed_candidates[:-1]
+    return trimmed_corpus, trimmed_candidates
+
+
 async def ai_recommend_prospects(
     *,
     n: int = 5,
@@ -206,6 +240,16 @@ async def ai_recommend_prospects(
             "recommendations": [],
             "model": model,
             "error": "No prospects matched filters in spreadsheet.",
+        }
+
+    corpus, candidates = _fit_prompt_budget(corpus, candidates, sector=sector, contact_type=contact_type, n=n)
+    if not candidates:
+        return {
+            "mode": "ai",
+            "count": 0,
+            "recommendations": [],
+            "model": model,
+            "error": "The website corpus alone exceeds the model's input limit; shrink data/yucg_website_corpus.txt.",
         }
 
     import asyncio
