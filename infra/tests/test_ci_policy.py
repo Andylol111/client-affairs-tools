@@ -68,6 +68,25 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(scope['runtime'])
             self.assertFalse(scope['image'])
 
+    def test_dependency_audit_cannot_be_failed_by_a_registry_outage(self):
+        """npm's advisory endpoints have been intermittently unavailable for
+        months (quick endpoint retired July 2026; bulk returns 503 during
+        registry incidents). A raw `npm audit` call turns that into a failed
+        release, which blocked Production #107 with nothing wrong in the tree.
+        Both node actions must route through the gate that fails only on real
+        high/critical advisories."""
+        root = Path(__file__).parents[2]
+        gate = root / 'scripts/npm_audit_gate.sh'
+        self.assertTrue(gate.is_file())
+        for action in ('frontend', 'infra'):
+            text = root.joinpath('.github/actions', action, 'action.yml').read_text()
+            self.assertIn('npm_audit_gate.sh', text, action)
+            self.assertNotIn('run: npm audit', text, action)
+        body = gate.read_text()
+        # A real advisory still fails; an unreachable registry never does.
+        self.assertIn('exit 1', body)
+        self.assertIn('::warning::', body)
+
     def test_docs_keep_security_without_build(self):
         scope = policy.classify(['docs/readme.md'], 'intake')
         self.assertTrue(scope['security'])
