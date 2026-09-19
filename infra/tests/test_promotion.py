@@ -116,9 +116,16 @@ class PromotionTests(unittest.TestCase):
             self.assertEqual(api.call_count, 1)
 
     def test_push_opens_promotion_once_and_respects_closed_candidate(self):
-        for previous, expected in [([], True), ([{'state': 'open'}], False),
-                                   ([{'state': 'closed', 'merged_at': None, 'head': {'sha': 'verified'}}], False)]:
-            with self.subTest(previous=previous):
+        for open_prs, closed_prs, expected in [
+            ([], [], True),
+            ([{'state': 'open', 'head': {'sha': 'verified'}}], [], False),
+            ([], [{'state': 'closed', 'merged_at': None, 'head': {'sha': 'verified'}}], False),
+            # A closed candidate for a different revision must not block this one.
+            ([], [{'state': 'closed', 'merged_at': None, 'head': {'sha': 'older'}}], True),
+            # A merged candidate is history, not a veto.
+            ([], [{'state': 'closed', 'merged_at': '2026-01-01', 'head': {'sha': 'verified'}}], True),
+        ]:
+            with self.subTest(open_prs=open_prs, closed_prs=closed_prs):
                 def fake_api(path, method='GET', payload=None):
                     if '/branches/' in path:
                         return {'commit': {'sha': 'verified'}}
@@ -126,13 +133,43 @@ class PromotionTests(unittest.TestCase):
                         return {'behind_by': 0, 'ahead_by': 1, 'files': [{'filename': 'backend/main.py'}]}
                     if method == 'POST':
                         return {'number': 8}
-                    return previous
+                    if 'state=open' in path:
+                        return open_prs
+                    if 'state=closed' in path:
+                        return closed_prs
+                    raise AssertionError(f'unscoped pull request query: {path}')
                 with patch.object(promotion, 'api', side_effect=fake_api) as api:
                     promotion.process(self.event('Intake', 'push', 'develop'), self.repo)
-                    creates = [call for call in api.call_args_list if len(call.args) > 1 and call.args[1] == 'POST']
+                    creates = [call for call in api.call_args_list
+                               if len(call.args) > 1 and call.args[1] == 'POST' and call.args[0].endswith('/pulls')]
                     self.assertEqual(bool(creates), expected)
                     if creates:
                         self.assertEqual(creates[0].args[2]['base'], 'feature')
+
+    def test_long_promotion_history_does_not_stop_the_controller(self):
+        """A hundred past promotion PRs on this edge used to raise
+        'Promotion history needs review' and stop every future promotion.
+        Queries are now scoped by state, so history length is irrelevant."""
+        def fake_api(path, method='GET', payload=None):
+            if '/branches/' in path:
+                return {'commit': {'sha': 'verified'}}
+            if '/compare/' in path:
+                return {'behind_by': 0, 'ahead_by': 1, 'files': [{'filename': 'backend/main.py'}]}
+            if method == 'POST':
+                return {'number': 9}
+            if 'state=open' in path:
+                return []
+            if 'state=closed' in path:
+                # A full page of unrelated merged promotions.
+                return [{'state': 'closed', 'merged_at': '2026-01-01', 'head': {'sha': f'old{i}'}}
+                        for i in range(100)]
+            raise AssertionError(f'unscoped pull request query: {path}')
+
+        with patch.object(promotion, 'api', side_effect=fake_api) as api:
+            promotion.process(self.event('Intake', 'push', 'develop'), self.repo)
+        creates = [call for call in api.call_args_list
+                   if len(call.args) > 1 and call.args[1] == 'POST' and call.args[0].endswith('/pulls')]
+        self.assertEqual(len(creates), 1)
 
     def test_existing_promotion_pr_dispatches_verification_for_updated_source(self):
         previous = [{'state': 'open', 'head': {'sha': 'verified'}}]
