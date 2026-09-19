@@ -48,6 +48,11 @@ class PolicyTests(unittest.TestCase):
             git('init', '-q')
             git('config', 'user.name', 'CI fixture')
             git('config', 'user.email', 'fixture@example.invalid')
+            # Git may detach a background gc/maintenance after a commit; it
+            # would still be writing .git/objects/pack while the temporary
+            # directory is removed, failing cleanup with "Directory not empty".
+            git('config', 'gc.auto', '0')
+            git('config', 'maintenance.auto', 'false')
             (root / 'backend').mkdir()
             (root / 'backend/main.py').write_text('app = None\n')
             git('add', '.')
