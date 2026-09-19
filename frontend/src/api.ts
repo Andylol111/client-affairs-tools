@@ -1322,6 +1322,7 @@ export const api = {
       return fetchApi<{ items: RegisterCompany[]; total: number; limit: number; offset: number }>(`/api/yucgoutreach/register?${search.toString()}`, signal ? { signal } : undefined);
     },
     registerSummary: () => fetchApi<RegisterSummary>('/api/yucgoutreach/register/summary'),
+    fetchRegisterPeople: (id: number) => fetchApi<{ ok: boolean; attached?: number; officer_count?: number; cached?: boolean; note?: string; error?: string }>(`/api/yucgoutreach/register/${id}/people`, { method: 'POST' }),
     registerPeople: (id: number) => fetchApi<{ full_name: string; relationship?: string | null; observed_at?: string | null; source_url?: string | null }[]>(`/api/yucgoutreach/register/${id}/people`),
     roleSuggestions: (params: { company: string; domain?: string; hints?: string }, signal?: AbortSignal) => {
       const q = new URLSearchParams({ company: params.company });

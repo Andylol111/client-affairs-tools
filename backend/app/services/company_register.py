@@ -538,6 +538,99 @@ async def backfill_sec_sectors(limit: int | None = None) -> dict[str, Any]:
     return {"ok": True, "filled": filled, "remaining": remaining}
 
 
+async def fetch_officers_for(register_id: int) -> dict[str, Any]:
+    """Pull the officers a company filed itself, on demand for one row.
+
+    The bulk files carry officers only for Form D: the listed-company ticker
+    file and the Companies House bulk product do not include people, which is
+    why those two tiers show zero on file. Both publish them per company
+    instead, and the register already stores the identifier each one needs -
+    the padded CIK for a listed company, the company number for a UK one - so
+    this looks them up directly rather than searching by name, which is both
+    an extra request and a fuzzy match.
+
+    Nothing is fetched twice: a row that already has officers returns them.
+    """
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT id, source, source_key, tier, company_name, officer_count FROM company_register WHERE id=?",
+            (register_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    if not row:
+        return {"ok": False, "error": "Unknown company"}
+    if int(row["officer_count"] or 0) > 0:
+        return {"ok": True, "cached": True, "attached": 0, "officer_count": int(row["officer_count"])}
+
+    source = row["source"]
+    key = (row["source_key"] or "").strip()
+    people: list[dict[str, Any]] = []
+    try:
+        if source == "sec_public" and key:
+            from app.services.roster_watch import fetch_form4_people
+
+            # Form 4 names the insiders who actually file, with the date they
+            # last did, so a departed officer is visible. The 10-K parse is a
+            # fallback for companies whose insiders file rarely.
+            # SEC's submissions file is keyed by the zero-padded CIK, which is
+            # exactly how the register stores it: stripping the padding 404s.
+            cik = key.zfill(10)
+            people = await fetch_form4_people(cik)
+            if not people:
+                from app.services.roster_watch import fetch_10k_people
+
+                people = await fetch_10k_people(cik)
+        elif source == "companies_house" and key:
+            from app.services.roster_watch import ch_key, map_ch_officers, _http_get
+
+            if not ch_key():
+                return {"ok": False, "error": "Companies House key is not configured"}
+            items: list[dict[str, Any]] = []
+            page = 1
+            while page <= 3:
+                chunk = json.loads((await _http_get(
+                    f"https://api.company-information.service.gov.uk/company/{key}/officers"
+                    f"?items_per_page=100&page={page}",
+                    basic_auth=(ch_key(), ""),
+                )).decode("utf-8"))
+                items.extend(chunk.get("items") or [])
+                if not (chunk.get("links") or {}).get("next"):
+                    break
+                page += 1
+            people = map_ch_officers(items, key)
+        else:
+            return {"ok": False, "error": "This company's register publishes no officer list"}
+    except Exception as exc:  # network, rate limit, or a company with no filings
+        return {"ok": False, "error": str(exc)[:200]}
+
+    if not people:
+        return {"ok": True, "attached": 0, "officer_count": 0,
+                "note": "The register lists no current officers for this company."}
+    # The roster fetchers describe a person with title/role_type; the register
+    # stores that one description as relationship. Mapping it here is what
+    # keeps "Chief Financial Officer" from landing as a blank role - the same
+    # field-name mismatch that once dropped every UK officer.
+    mapped = [
+        {
+            "full_name": person["full_name"],
+            "relationship": (person.get("title") or "").strip() or person.get("role_type") or None,
+            "observed_at": person.get("observed_at"),
+            "source_url": person.get("source_url"),
+        }
+        for person in people
+        if person.get("full_name")
+        # A resigned officer is direct evidence of departure, not a contact.
+        and person.get("employment") != "left"
+    ]
+    if not mapped:
+        return {"ok": True, "attached": 0, "officer_count": 0,
+                "note": "Every officer on record has resigned."}
+    attached = await _attach_people({(source, row["source_key"]): mapped})
+    return {"ok": True, "attached": attached, "officer_count": len(mapped)}
+
+
 async def drain_company_register() -> dict[str, Any]:
     """One scheduler pass: refresh the listed-company list monthly, pull any
     Form D quarter not yet ingested, then trickle sector backfill."""

@@ -33,6 +33,7 @@ export default function CompanyRegister() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [people, setPeople] = useState<Record<number, { full_name: string; relationship?: string | null; source_url?: string | null }[]>>({});
+  const [fetching, setFetching] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     api.yucgoutreach.registerSummary().then(setSummary).catch(() => setSummary(null));
@@ -73,6 +74,30 @@ export default function CompanyRegister() {
       setPeople((current) => ({ ...current, [id]: [] }));
     }
   }, [people]);
+
+  // Listed and UK companies arrive with no people: neither bulk file carries
+  // them, and both registers publish them per company instead. Fetching is a
+  // request against a rate-limited public API, so it happens when a member
+  // asks for one company, never as a sweep.
+  const fetchPeople = useCallback(async (id: number) => {
+    setFetching((current) => ({ ...current, [id]: true }));
+    try {
+      const result = await api.yucgoutreach.fetchRegisterPeople(id);
+      if (!result.ok) {
+        setError(result.error || 'Could not read that register.');
+        return;
+      }
+      setError('');
+      const rows = await api.yucgoutreach.registerPeople(id);
+      setPeople((current) => ({ ...current, [id]: rows }));
+      setItems((current) => current.map((row) =>
+        row.id === id ? { ...row, officer_count: result.officer_count ?? rows.length } : row));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read that register.');
+    } finally {
+      setFetching((current) => ({ ...current, [id]: false }));
+    }
+  }, []);
 
   const counts = Object.fromEntries((summary?.tiers || []).map((row) => [row.tier, row.n]));
 
@@ -170,6 +195,16 @@ export default function CompanyRegister() {
                     item.metadata?.revenue_range || null,
                   ].filter(Boolean).join(' · ')}
                 </div>
+                {item.officer_count === 0 && item.tier !== 'us_private' && (
+                  <button
+                    type="button"
+                    className="mt-1 text-xs font-semibold text-steel-blue hover:underline disabled:opacity-50"
+                    disabled={!!fetching[item.id]}
+                    onClick={() => void fetchPeople(item.id)}
+                  >
+                    {fetching[item.id] ? 'Reading the register…' : 'Look up officers'}
+                  </button>
+                )}
                 {item.officer_count > 0 && (
                   <button
                     type="button"
