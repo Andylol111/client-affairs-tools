@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -163,6 +164,32 @@ async def _tinyfish_fetch_page(url: str, *, user_id: int | None = None) -> Fetch
     return FetchedPage(url=str(doc.get("final_url") or doc.get("url") or url), content=content, links=links)
 
 
+_SITE_OPERATOR_RE = re.compile(r"(-)?\bsite:([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:/\S*)?", re.I)
+
+
+def _extract_site_operators(query: str) -> tuple[str, str, str]:
+    """Google-style site:/-site: operators are the established way every
+    caller in this codebase restricts a search to a domain (originally
+    written for Tavily/Firecrawl, which honour them as literal query text).
+    TinyFish's own docs say it "still honours" the operator, but live
+    testing showed it is actually ignored - a `site:linkedin.com/in` query
+    returns generic leadership-training pages, not LinkedIn profiles, while
+    the documented `include_domains` param returns real LinkedIn profiles
+    for the identical intent. Translate rather than requiring every caller
+    to be rewritten for one backend's quirk."""
+    include_domains: list[str] = []
+    exclude_domains: list[str] = []
+
+    def replace(match: "re.Match[str]") -> str:
+        domain = match.group(2).lower()
+        (exclude_domains if match.group(1) else include_domains).append(domain)
+        return " "
+
+    cleaned = _SITE_OPERATOR_RE.sub(replace, query)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned, ",".join(dict.fromkeys(include_domains)), ",".join(dict.fromkeys(exclude_domains))
+
+
 async def _tinyfish_web_search(query: str, max_results: int, *, user_id: int | None = None) -> list[dict[str, Any]] | None:
     """Returns None on failure (caller falls back to Firecrawl) and a list
     (possibly empty) on success - a real empty result is trusted, not
@@ -175,10 +202,19 @@ async def _tinyfish_web_search(query: str, max_results: int, *, user_id: int | N
     if user_id is not None:
         await reserve_tinyfish_call(user_id)
 
+    cleaned_query, include_domains, exclude_domains = _extract_site_operators(query)
+    if not cleaned_query:
+        return None
+    query_params: dict[str, Any] = {"query": cleaned_query}
+    if include_domains:
+        query_params["include_domains"] = include_domains
+    if exclude_domains:
+        query_params["exclude_domains"] = exclude_domains
+
     started = time.monotonic()
     async with httpx.AsyncClient(timeout=_MONID_SEARCH_TIMEOUT_S) as client:
         output = await _monid_run(
-            client, api_key, "/search", query_params={"query": query},
+            client, api_key, "/search", query_params=query_params,
             poll_attempts=_MONID_POLL_ATTEMPTS, poll_interval_s=_MONID_POLL_INTERVAL_S,
         )
 
