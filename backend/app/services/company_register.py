@@ -372,16 +372,19 @@ async def ingest_form_d(quarter: str, *, force: bool = False) -> dict[str, Any]:
             "seen": len(companies), "written": written, "officers": attached}
 
 
-async def backfill_sec_sectors(limit: int = 40) -> dict[str, Any]:
-    """Fill SIC sector for listed companies, a few per pass. SEC's fair
-    access policy caps requests, so this trickles rather than sweeps."""
+async def backfill_sec_sectors(limit: int | None = None) -> dict[str, Any]:
+    """Fill SIC sector for listed companies. SEC's fair-access limit is 10
+    requests/second and each pass already pauses ROSTER_SEC_PAUSE_SEC
+    (0.12s) between calls, so a few hundred per pass stays well inside it
+    and finishes the ~8k listed companies in hours, not days."""
+    limit = int(os.getenv("REGISTER_SECTOR_BATCH", "250") or 250) if limit is None else limit
     db = await get_db()
     try:
         rows = await (await db.execute(
             """SELECT id, source_key FROM company_register
                WHERE tier='us_public' AND sector_label IS NULL
                ORDER BY id LIMIT ?""",
-            (max(1, min(limit, 200)),),
+            (max(1, min(limit, 500)),),
         )).fetchall()
         targets = [(int(r["id"]), str(r["source_key"])) for r in rows]
     finally:

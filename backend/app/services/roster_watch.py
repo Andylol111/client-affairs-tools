@@ -264,7 +264,10 @@ def map_ch_officers(items: list[dict], company_number: str, *, limit: int = 60) 
         role = str(officer.get("officer_role") or "").lower()
         if "corporate" in role or officer.get("identification"):
             continue
-        raw = CH_HONORIFIC.sub(" ", str(officer.get("officer_name") or ""))
+        # The officers endpoint returns the person as "name" ("KUUSI, Mikko
+        # Akseli"); officer_name is not a field it sends, so reading only
+        # that dropped every officer of every UK company.
+        raw = CH_HONORIFIC.sub(" ", str(officer.get("name") or officer.get("officer_name") or ""))
         full = _form4_display_name(raw)
         norm = person_name_key(full)
         if not norm or norm in seen:

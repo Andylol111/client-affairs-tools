@@ -182,18 +182,25 @@ def process_branch(run, repo):
         return
     if comparison['ahead_by'] == 0 or (not comparison['files'] and source != 'develop'):
         return
-    existing = api(f'{prefix}/pulls?state=all&base={target}&head={repo.split("/")[0]}:{source}&per_page=100')
-    open_candidates = [p for p in existing if p['state'] == 'open']
+    # Ask two precise questions instead of paging the whole history. The old
+    # single state=all query stopped the controller permanently once this
+    # edge accumulated 100 promotion PRs, which an active week reaches.
+    open_candidates = api(f'{prefix}/pulls?state=open&base={target}&head={repo.split("/")[0]}:{source}&per_page=20')
     if open_candidates:
         # A long-lived develop→feature or feature→main PR follows its source
         # branch automatically. Verify its new exact head instead of leaving a
         # stale candidate waiting with checks from the previous revision.
         dispatch_workflow(repo, WORKFLOW_FOR_BRANCH[target], source)
         return
-    if any(p['state'] == 'closed' and not p.get('merged_at') and p['head']['sha'] == run['head_sha'] for p in existing):
+    # A candidate someone deliberately closed without merging must not be
+    # recreated. Only a recently closed PR can carry this exact head, so the
+    # newest page answers it without reading years of history.
+    recent_closed = api(
+        f'{prefix}/pulls?state=closed&base={target}&head={repo.split("/")[0]}:{source}'
+        '&sort=updated&direction=desc&per_page=30'
+    )
+    if any(not pr.get('merged_at') and pr['head']['sha'] == run['head_sha'] for pr in recent_closed):
         return
-    if len(existing) == 100:
-        raise RuntimeError('Promotion history needs review before continuing')
     api(f'{prefix}/pulls', 'POST', {
         'head': source, 'base': target,
         'title': f'Promote verified {source} to {target}',
