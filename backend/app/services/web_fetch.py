@@ -190,51 +190,80 @@ def _extract_site_operators(query: str) -> tuple[str, str, str]:
     return cleaned, ",".join(dict.fromkeys(include_domains)), ",".join(dict.fromkeys(exclude_domains))
 
 
+_TINYFISH_SEARCH_PAGE_SIZE = 8  # observed results per page across every live call this session
+
+
 async def _tinyfish_web_search(query: str, max_results: int, *, user_id: int | None = None) -> list[dict[str, Any]] | None:
     """Returns None on failure (caller falls back to Firecrawl) and a list
     (possibly empty) on success - a real empty result is trusted, not
     treated as a failure to fall back from. TinyFish's search API has no
-    result-count parameter; max_results only truncates the response it
-    returns (observed at ~8 results per call)."""
+    result-count parameter, only pagination (page: 0-10, ~8 results/page
+    observed) - fetch additional pages when a caller asks for more than one
+    page holds, deduping by URL, rather than silently capping every search
+    at one page's worth of results regardless of what was requested."""
     api_key = (os.getenv("MONID_API_KEY") or "").strip()
     if not api_key or not query:
         return None
-    if user_id is not None:
-        await reserve_tinyfish_call(user_id)
 
     cleaned_query, include_domains, exclude_domains = _extract_site_operators(query)
     if not cleaned_query:
         return None
-    query_params: dict[str, Any] = {"query": cleaned_query}
+    base_params: dict[str, Any] = {"query": cleaned_query}
     if include_domains:
-        query_params["include_domains"] = include_domains
+        base_params["include_domains"] = include_domains
     if exclude_domains:
-        query_params["exclude_domains"] = exclude_domains
+        base_params["exclude_domains"] = exclude_domains
 
+    max_pages = min(11, max(1, -(-max(1, max_results) // _TINYFISH_SEARCH_PAGE_SIZE)))
     started = time.monotonic()
-    async with httpx.AsyncClient(timeout=_MONID_SEARCH_TIMEOUT_S) as client:
-        output = await _monid_run(
-            client, api_key, "/search", query_params=query_params,
-            poll_attempts=_MONID_POLL_ATTEMPTS, poll_interval_s=_MONID_POLL_INTERVAL_S,
-        )
-
-    if output is None:
-        return None
-    results = output.get("results")
-    if not isinstance(results, list):
-        logger.warning("tinyfish web_search malformed response for %r: %r", query, output)
-        return None
     out: list[dict[str, Any]] = []
-    for item in results[:max(1, max_results)]:
-        if not isinstance(item, dict):
-            continue
-        out.append({
-            "title": str(item.get("title") or ""),
-            "url": str(item.get("url") or ""),
-            "content": str(item.get("snippet") or "")[:1500],
-        })
-    logger.info("tinyfish web_search %d results for %r in %.2fs", len(out), query, time.monotonic() - started)
+    seen_urls: set[str] = set()
+    async with httpx.AsyncClient(timeout=_MONID_SEARCH_TIMEOUT_S) as client:
+        for page in range(max_pages):
+            if user_id is not None:
+                await reserve_tinyfish_call(user_id)
+            params = dict(base_params)
+            if page:
+                params["page"] = page
+            output = await _monid_run(
+                client, api_key, "/search", query_params=params,
+                poll_attempts=_MONID_POLL_ATTEMPTS, poll_interval_s=_MONID_POLL_INTERVAL_S,
+            )
+            if output is None:
+                if page == 0:
+                    return None
+                break
+            results = output.get("results")
+            if not isinstance(results, list):
+                if page == 0:
+                    logger.warning("tinyfish web_search malformed response for %r: %r", query, output)
+                    return None
+                break
+            if not results:
+                break
+            added = False
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("url") or "")
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
+                added = True
+                out.append({
+                    "title": str(item.get("title") or ""),
+                    "url": url,
+                    "content": str(item.get("snippet") or "")[:1500],
+                })
+                if len(out) >= max_results:
+                    break
+            if len(out) >= max_results or not added:
+                break
+    logger.info("tinyfish web_search %d results for %r in %.2fs (%d page(s))",
+                 len(out), query, time.monotonic() - started, page + 1)
     return out
+
 
 
 # --- Firecrawl ---------------------------------------------------------

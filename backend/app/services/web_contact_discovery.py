@@ -238,7 +238,7 @@ async def discover_contacts_from_web(
         )
 
     await emit(f"Running {len(queries)} web searches in parallel…", 15)
-    all_results = await _tavily_parallel(queries, max_results=10)
+    all_results = await _tavily_parallel(queries, max_results=25)
     if cancel_event and cancel_event.is_set():
         return []
 
