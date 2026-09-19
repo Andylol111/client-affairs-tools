@@ -102,12 +102,26 @@ def _find_corpus_citation(
     return "https://www.yaleconsulting.org/", (excerpt_hint or "")[:500]
 
 
-def _build_system_prompt(corpus: str) -> str:
+# Bedrock caps a reply at 4096 tokens, and the reply is JSON that must parse
+# whole: one recommendation over the line truncates the object mid-string and
+# the entire response is lost, which is what "Model returned no parseable
+# JSON" was reporting. Roughly 4 chars per token, so the per-field limits
+# below keep a full set of MAX_RECOMMENDATIONS inside the budget with room to
+# spare, rather than relying on the model to be brief unprompted.
+MAX_RECOMMENDATIONS = 10
+_REPLY_TOKEN_BUDGET = 4096
+
+
+def _build_system_prompt(corpus: str, n: int = 5) -> str:
     return f"""You are the YUCG (Yale Undergraduate Consulting Group) outreach coordinator AI.
-Recommend exactly 5 companies from the candidate spreadsheet summary for this week's outreach.
+Recommend exactly {n} companies from the candidate spreadsheet summary for this week's outreach.
 
 Use ONLY facts from the YUCG website corpus below when citing services, clients, or positioning.
 Every recommendation MUST cite a real spreadsheet row_index and a corpus URL with a short excerpt.
+
+Keep the reply short enough to finish: rationale at most 200 characters, each
+reasoning step at most 120 characters, exactly 3 steps, excerpt at most 200
+characters. A truncated reply is discarded in full, so brevity is required.
 
 YUCG WEBSITE CORPUS (verified sources):
 {corpus[:14000]}
@@ -214,6 +228,8 @@ async def ai_recommend_prospects(
 
     explicit = (model_id or "").strip()
     model = explicit if is_bedrock_model(explicit) else rank_model_id()
+    # More than this cannot be returned inside one parseable reply.
+    n = max(1, min(int(n or 5), MAX_RECOMMENDATIONS))
 
     try:
         corpus = load_website_corpus()
@@ -260,7 +276,8 @@ async def ai_recommend_prospects(
             complete_json,
             _build_user_prompt(candidates, sector=sector, contact_type=contact_type, n=n),
             model,
-            _build_system_prompt(corpus),
+            _build_system_prompt(corpus, n),
+            _REPLY_TOKEN_BUDGET,
         )
     except HTTPException as exc:
         return {

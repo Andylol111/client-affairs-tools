@@ -202,6 +202,54 @@ def tests() -> None:
             'a repeatedly bouncing format must not outrank an untested stated one'
 
 
+def layout_vocabulary_tests() -> None:
+    """A company only ever learns a format the vocabulary can name. The six
+    original layouts covered US-style first.last shops and silently discarded
+    every observed pair outside them, so those domains stayed on a guess
+    forever. Layouts below are the ones real employers actually use; the names
+    here are synthetic, the shapes are not."""
+    from app.services.company_email_cache import (
+        canonical_pattern,
+        infer_pattern_from_pair,
+        _split_name,
+    )
+    from app.services.contact_scraper import _apply_custom_pattern
+
+    observed = {
+        'jane.doe@x.com': 'first.last',
+        'jane_doe@x.com': 'first_last',
+        'j.doe@x.com': 'fi.last',
+        'j_doe@x.com': 'fi_last',
+        'jdoe@x.com': 'flast',
+        'janedoe@x.com': 'firstlast',
+        'doe.jane@x.com': 'last.first',
+        'doe_jane@x.com': 'last_first',
+        'doej@x.com': 'lastfi',
+        'janed@x.com': 'firstli',
+        'jane@x.com': 'first',
+    }
+    for email, expected_key in observed.items():
+        first, last = _split_name('Jane Doe')
+        pair = infer_pattern_from_pair(email, first, last)
+        assert pair, f'{email} produced no layout'
+        key, template = pair
+        assert key == expected_key, (email, key, expected_key)
+        # Whatever the learner recognises, the generator must be able to render
+        # back, or a learned pattern yields no candidate address.
+        assert f"{_apply_custom_pattern(template, 'jane', 'doe')}@x.com" == email
+        # A member typing the same format must land on the learner's key, so
+        # the two sources of evidence accumulate on one row.
+        assert canonical_pattern(template) == (key, template)
+
+    # An address matching no layout still returns None rather than inventing one.
+    assert infer_pattern_from_pair('info@x.com', 'Jane', 'Doe') is None
+    assert infer_pattern_from_pair('jane.doe@x.com', 'Jane', '') is None
+
+    # Initial placeholders must not be eaten by the full-name substitution.
+    assert _apply_custom_pattern('{first_initial}{last_initial}', 'jane', 'doe') == 'jd'
+
+
 if __name__ == '__main__':
     tests()
+    layout_vocabulary_tests()
     print('email pattern registry: ok')

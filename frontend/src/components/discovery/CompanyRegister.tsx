@@ -190,7 +190,14 @@ export default function CompanyRegister() {
               <button
                 type="button"
                 className="shrink-0 rounded-xl border border-deep-navy px-3 py-1.5 text-xs font-semibold text-deep-navy hover:bg-pale-sky/30"
-                onClick={() => navigate(`/scraper?view=company&company=${encodeURIComponent(item.company_name)}`)}
+                onClick={() => {
+                  // Carry the domain the register already holds. Without it the
+                  // search re-derives a domain it was just handed, and can
+                  // resolve a different one for a common company name.
+                  const query = new URLSearchParams({ view: 'company', company: item.company_name });
+                  if (item.company_domain) query.set('domain', item.company_domain);
+                  navigate(`/scraper?${query.toString()}`);
+                }}
               >
                 Find people here
               </button>

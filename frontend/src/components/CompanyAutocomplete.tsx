@@ -4,10 +4,11 @@ import { api, type YucgRecommendation } from '../api';
 export type CompanyOption = {
   name: string;
   domain?: string;
-  source: 'pipeline' | 'targets';
+  source: 'pipeline' | 'targets' | 'register';
   contactCount?: number;
   sector?: string;
   angle?: string;
+  hint?: string;
 };
 
 function norm(value: string): string {
@@ -56,6 +57,7 @@ export default function CompanyAutocomplete({
   const listId = `${inputId}-list`;
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<CompanyOption[]>([]);
+  const [registerOptions, setRegisterOptions] = useState<CompanyOption[]>([]);
   const [highlight, setHighlight] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -83,6 +85,34 @@ export default function CompanyAutocomplete({
     return () => { cancelled = true; };
   }, []);
 
+  // The club's own companies live in memory, but the public register holds
+  // 100k+ and cannot. Query it as the member types so a company nobody has
+  // worked yet is reachable from this field instead of only from the register
+  // tab. Debounced, and the in-flight request is aborted on the next keystroke.
+  useEffect(() => {
+    const q = value.trim();
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      if (q.length < 3) {
+        setRegisterOptions([]);
+        return;
+      }
+      api.yucgoutreach.register({ q, limit: 8 }, controller.signal)
+        .then((res) => {
+          setRegisterOptions((res.items || []).map((row) => ({
+            name: row.company_name,
+            domain: row.company_domain || undefined,
+            source: 'register' as const,
+            sector: row.sector_label || undefined,
+            hint: [row.region, row.officer_count ? `${row.officer_count} officers on file` : null]
+              .filter(Boolean).join(' · ') || undefined,
+          })));
+        })
+        .catch(() => { /* abort or offline: the local lists still answer */ });
+    }, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [value]);
+
   useEffect(() => {
     const onPointer = (event: PointerEvent) => {
       if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
@@ -94,10 +124,16 @@ export default function CompanyAutocomplete({
   const filtered = useMemo(() => {
     const q = norm(value);
     if (!q) return options.slice(0, 12);
-    return options.filter((option) =>
+    const local = options.filter((option) =>
       norm(option.name).includes(q) || (option.domain && norm(option.domain).includes(q))
-    ).slice(0, 12);
-  }, [options, value]);
+    );
+    // Companies the club already works come first and are never displaced by
+    // the public register; register rows only fill the remaining slots, minus
+    // any the club already has.
+    const known = new Set(local.map((option) => norm(option.name)));
+    const fromRegister = registerOptions.filter((option) => !known.has(norm(option.name)));
+    return [...local, ...fromRegister].slice(0, 12);
+  }, [options, registerOptions, value]);
 
   const pick = (option: CompanyOption) => {
     onChange(option.name, option);
@@ -156,7 +192,10 @@ export default function CompanyAutocomplete({
             >
               <div className="font-medium text-deep-navy">{option.name}</div>
               <div className="text-xs text-slate-500">
-                {option.domain || option.sector || (option.source === 'pipeline' ? 'In pipeline' : 'Target list')}
+                {option.domain || option.sector
+                  || (option.source === 'pipeline' ? 'In pipeline'
+                    : option.source === 'register' ? 'Public register' : 'Target list')}
+                {option.source === 'register' && option.hint ? ` · ${option.hint}` : ''}
                 {option.contactCount != null ? ` · ${option.contactCount} saved` : ''}
               </div>
             </li>
@@ -173,52 +212,24 @@ export function CompanySuggestions({
   onPick: (option: CompanyOption) => void;
 }) {
   const [recs, setRecs] = useState<YucgRecommendation[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const loadRules = () => {
-    api.yucg.recommend({ n: 12 }).then((res) => {
-      setRecs(Array.isArray(res.recommendations) ? res.recommendations : []);
-    }).catch(() => setRecs([]));
-  };
+  // Deliberately no AI call here. These render as bare name chips, so an
+  // LLM ranking pass produced a rationale and reasoning chain that this view
+  // threw away - and it asked for more output than the model's reply limit
+  // allows, so the call truncated mid-JSON and the button only ever reported
+  // "Model returned no parseable JSON". The reasoned, cited version of this
+  // list is the Outreach page, which actually renders the reasoning.
+  useEffect(() => {
+    api.yucg.recommend({ n: 12 })
+      .then((res) => setRecs(Array.isArray(res.recommendations) ? res.recommendations : []))
+      .catch(() => setRecs([]));
+  }, []);
 
-  useEffect(() => { loadRules(); }, []);
-
-  const refreshAi = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api.yucg.aiRecommend({ n: 10 });
-      const next = Array.isArray(res.recommendations) ? res.recommendations : [];
-      if (next.length) setRecs(next);
-      if (res.error) setError(res.error);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'AI suggestions are unavailable right now.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!recs.length && !error) {
-    return (
-      <div className="flex items-center justify-between gap-3 text-sm text-slate-600">
-        <p>Suggestions appear from the outreach company list as they load.</p>
-        <button type="button" className="text-steel-blue font-semibold" onClick={() => void refreshAi()} disabled={busy}>
-          {busy ? 'Suggesting…' : 'Ask AI for companies'}
-        </button>
-      </div>
-    );
-  }
+  if (!recs.length) return null;
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-deep-navy">Live company recommendations</h2>
-        <button type="button" className="text-sm font-semibold text-steel-blue disabled:opacity-50" onClick={() => void refreshAi()} disabled={busy}>
-          {busy ? 'Updating…' : 'Refresh with AI'}
-        </button>
-      </div>
-      {error && <p className="text-xs text-amber-800">{error}</p>}
+      <h2 className="text-sm font-semibold text-deep-navy">Companies on the club target list</h2>
       <div className="flex flex-wrap gap-2">
         {recs.slice(0, 12).map((rec) => {
           const name = rec.prospect?.company;

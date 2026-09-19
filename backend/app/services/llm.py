@@ -129,8 +129,13 @@ def complete_text(
     return _bedrock_text(prompt, mid, system, user_id=user_id, purpose=purpose, max_tokens=max_tokens)
 
 
-def complete_json(prompt: str, model_id: str | None = None, system: str | None = None) -> dict[str, Any] | None:
-    raw = complete_text(prompt, model_id=model_id, system=system)
+def complete_json(
+    prompt: str,
+    model_id: str | None = None,
+    system: str | None = None,
+    max_tokens: int = 2048,
+) -> dict[str, Any] | None:
+    raw = complete_text(prompt, model_id=model_id, system=system, max_tokens=max_tokens)
     match = re.search(r"\{[\s\S]*\}", raw)
     if not match:
         return None
