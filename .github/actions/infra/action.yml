@@ -13,7 +13,7 @@ runs:
       run: npm ci
     - shell: bash
       working-directory: infra
-      run: npm audit --audit-level=high
+      run: bash "$GITHUB_WORKSPACE/scripts/npm_audit_gate.sh"
     - shell: bash
       working-directory: infra
       run: npx tsc --noEmit
