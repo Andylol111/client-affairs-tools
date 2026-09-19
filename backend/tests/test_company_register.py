@@ -6,6 +6,7 @@ names, same columns, same value shapes ('06b' date codes, shouty names,
 'Pooled Investment Fund' groups) as the 2025Q2 file inspected on the box.
 """
 import asyncio
+import csv
 import io
 import os
 import sys
@@ -438,9 +439,104 @@ def form_5500_tests() -> None:
     assert ('dol_5500', '570123456') not in people
 
 
+def nonprofit_buyer_tests() -> None:
+    """Existing is not the same as being able to buy. A nonprofit qualifies
+    only if it is large enough to fund a project and already pays outside
+    firms for advice - both filed on its own Form 990."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services import company_register as cr
+
+    extract_cols = ['EIN', 'totrevenue', 'feesforsrvcmgmt', 'legalfees', 'accntingfees',
+                    'feesforsrvcothr', 'noemplyeesw3cnt']
+    rows = [
+        # Buys advice, right size: qualifies.
+        {'EIN': '135562308', 'totrevenue': '18400000', 'feesforsrvcmgmt': '40000',
+         'legalfees': '10000', 'accntingfees': '6000', 'noemplyeesw3cnt': '287'},
+        # Large but spends nothing on outside advice: not a buyer.
+        {'EIN': '222222222', 'totrevenue': '90000000', 'feesforsrvcmgmt': '0',
+         'legalfees': '0', 'accntingfees': '1000', 'noemplyeesw3cnt': '500'},
+        # Buys advice but is too small to fund a project.
+        {'EIN': '333333333', 'totrevenue': '900000', 'feesforsrvcmgmt': '200000',
+         'legalfees': '0', 'accntingfees': '0', 'noemplyeesw3cnt': '9'},
+        # A health plan whose "other fees" are medical claims. Counting
+        # feesforsrvcothr put organisations like this at the top of the
+        # register with billions of imaginary consulting spend, so it is
+        # excluded and this row fails on advice alone.
+        {'EIN': '444444444', 'totrevenue': '6156000000', 'feesforsrvcmgmt': '0',
+         'legalfees': '0', 'accntingfees': '0', 'feesforsrvcothr': '5789900000',
+         'noemplyeesw3cnt': '1200'},
+        # Advice above a quarter of revenue is a pass-through, not a client.
+        {'EIN': '555555555', 'totrevenue': '10000000', 'feesforsrvcmgmt': '9000000',
+         'legalfees': '0', 'accntingfees': '0', 'noemplyeesw3cnt': '5'},
+    ]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=extract_cols)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({c: row.get(c, '') for c in extract_cols})
+    qualifying = cr.qualifying_990_filers(io.BytesIO(buf.getvalue().encode('latin-1')))
+    assert sorted(qualifying) == ['135562308'], sorted(qualifying)
+    assert qualifying['135562308']['advice'] == 56000
+    assert qualifying['135562308']['employees'] == 287
+
+    # The extract has the money and no names; the Business Master File has the
+    # names. The join is on EIN and drops anything unmatched.
+    bmf_cols = ['EIN', 'NAME', 'CITY', 'STATE', 'NTEE_CD', 'TAX_PERIOD']
+    bmf = io.StringIO()
+    writer = csv.DictWriter(bmf, fieldnames=bmf_cols)
+    writer.writeheader()
+    writer.writerow({'EIN': '135562308', 'NAME': 'CHEEKWOOD BOTANICAL GARDEN', 'CITY': 'NASHVILLE',
+                     'STATE': 'tn', 'NTEE_CD': 'A50', 'TAX_PERIOD': '202412'})
+    writer.writerow({'EIN': '999999999', 'NAME': 'NOT A QUALIFYING FILER', 'STATE': 'NY'})
+    out = list(cr._bmf_rows_for(io.BytesIO(bmf.getvalue().encode('latin-1')), qualifying))
+    assert len(out) == 1, out
+    org = out[0]
+    assert org['company_name'] == 'Cheekwood Botanical Garden'
+    assert org['tier'] == 'us_nonprofit' and org['source_key'] == '135562308'
+    assert org['sector_label'] == 'Arts, Culture and Humanities'
+    assert org['region'] == 'TN' and org['metadata']['city'] == 'Nashville'
+    assert org['employees'] == 287 and org['employees_source'] == 'form_990_w3_employee_count'
+    assert org['last_event_at'] == '2024-12-01' and org['last_event_kind'] == 'form_990_filed'
+    # The buying signal is the point of this tier, so it is shown, not implied.
+    assert '$56k/yr' in org['metadata']['buys_outside_advice']
+    assert org['metadata']['revenue_range'] == '$18.4M revenue'
+
+
+def part_vii_officer_tests() -> None:
+    """Part VII names the people running the organisation, with the titles it
+    gave them - the contacts that are otherwise the slowest thing to find."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services.company_register import parse_part_vii
+
+    xml = (
+        '<Return><EIN>135562308</EIN>'
+        '<Form990PartVIISectionAGrp><PersonNm>JANE   ROE</PersonNm>'
+        '<TitleTxt>PRESIDENT &amp; CEO</TitleTxt></Form990PartVIISectionAGrp>'
+        '<Form990PartVIISectionAGrp><PersonNm>JOHN DOE</PersonNm>'
+        '<TitleTxt>FORMER EXECUTIVE DIRECTOR</TitleTxt></Form990PartVIISectionAGrp>'
+        '<Form990PartVIISectionAGrp><PersonNm>Jane Roe</PersonNm>'
+        '<TitleTxt>TRUSTEE</TitleTxt></Form990PartVIISectionAGrp>'
+        '<Form990PartVIISectionAGrp><PersonNm>Reception</PersonNm>'
+        '<TitleTxt>DESK</TitleTxt></Form990PartVIISectionAGrp>'
+        '</Return>'
+    )
+    ein, people = parse_part_vii(xml)
+    assert ein == '135562308'
+    assert [p['full_name'] for p in people] == ['Jane Roe'], people
+    # XML escapes are not part of the title: "PRESIDENT &amp; CEO" is a string
+    # nobody wrote, and it reached the database on the first live run.
+    assert people[0]['relationship'] == 'PRESIDENT & CEO'
+    # "FORMER" is the organisation stating the person has left, and a
+    # single-word entry is a desk, not a person.
+    assert all('Doe' not in p['full_name'] for p in people)
+    assert parse_part_vii('<Return><Form990PartVIISectionAGrp/></Return>') == ('', [])
+
+
 if __name__ == '__main__':
     tests()
     uk_tests()
     officer_backfill_tests()
     form_5500_tests()
+    nonprofit_buyer_tests()
+    part_vii_officer_tests()
     print('company register: ok')
