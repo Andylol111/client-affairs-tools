@@ -90,8 +90,54 @@ def prompt_forbids_the_closing_the_validator_rejects():
         assert closing in lowered, f'prompt never names {closing!r} as forbidden'
 
 
+def every_offered_angle_can_produce_a_valid_draft():
+    """An angle the validator can never accept is a guaranteed failure.
+
+    question_hook told the model to open with a question. The validator
+    allows exactly one request sentence and counts a question mark as a
+    request, so the opener plus the closing ask was always two - the angle
+    could not produce a passing draft even when the actual call to action was
+    a single non-question phrase. It was offered in Studio and in the
+    two-click flow, where it burned a generation, failed, and burned the
+    retry. The rule is right: one ask per email. The angle was not.
+    """
+    from app.services.ollama_email_service import ANGLE_INSTRUCTIONS, validate_draft
+
+    assert 'question_hook' not in ANGLE_INSTRUCTIONS
+
+    brief = {'evidence': {'sources': []},
+             'message': {'member_supplied_facts_and_goal': '', 'relevant_capability_or_proof': ''}}
+    middle = (
+        'Yale Undergraduate Consulting Group runs ten-week engagements with undergraduate teams drawn '
+        'from across the university, and we scope the work with you before anything begins. Recent teams '
+        'have built market entry cases, customer research and operating reviews for organisations that '
+        'wanted a read from outside their own industry. The work is pro bono and the students are '
+        'supervised throughout the term by a project lead who has run engagements before.'
+    )
+    closing = 'Would you be open to a short call next week?'
+
+    # One closing ask is the shape every remaining angle can write.
+    subject, body = validate_draft(
+        {'subject': 'Ten week team on Q4 strategy', 'body': f'{middle}\n\n{closing}', 'source_ids': []},
+        brief, 'short')
+    assert closing in body
+
+    # Opening with a question is still rejected, which is why no angle asks
+    # for one. Guard the reason, not just the absence of the string above.
+    for opener in ('How is your team handling the shift in release windows?',):
+        try:
+            validate_draft(
+                {'subject': 'Ten week team on Q4 strategy',
+                 'body': f'{opener}\n\n{middle}\n\n{closing}', 'source_ids': []},
+                brief, 'short')
+            raise AssertionError('a second question was accepted as one ask')
+        except ValueError as exc:
+            assert 'one concrete call to action' in str(exc)
+
+
 if __name__ == '__main__':
     tests()
     benign_numbers_are_not_claims()
     prompt_forbids_the_closing_the_validator_rejects()
+    every_offered_angle_can_produce_a_valid_draft()
     print('email generation contract: ok')
