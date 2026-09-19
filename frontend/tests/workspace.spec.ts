@@ -415,3 +415,50 @@ test('signature load and rich clipboard paste strip active content before insert
   await expect(editor.locator('[onerror], [onload], script, svg, iframe, a[href^="javascript:"]')).toHaveCount(0);
   expect(await page.evaluate(() => '__xss' in window)).toBe(false);
 });
+
+test('assistant Fill Find people carries typed titles even when no company was proposed', async ({ page }) => {
+  // Reproduces: "help me reach out to companies in entertainment" -> the
+  // model asked for titles but proposed no start_find_people, and the button
+  // landed on a bare /scraper with the typed titles lost.
+  await page.route('**/api/assistant/ask', async route => route.fulfill({
+    json: {
+      answer: 'Which job titles should I target?',
+      thread_id: 9, model: 'haiku', grounded: false, sources: [],
+      pending_actions: [],
+      navigations: [{ path: '/scraper?view=company', label: 'Find people' }],
+      lookups: [],
+      asks: [{ id: 'titles', label: 'Titles to prioritize', value: '', required: true, placeholder: 'VPs, project managers' }],
+    },
+  }));
+  await page.goto('/outreach');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('help me reach out to companies in entertainment');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await page.getByLabel('Titles to prioritize *').fill('healthcare PMs, VPs');
+  await page.getByRole('button', { name: 'Fill Find people' }).click();
+  await expect(page).toHaveURL(/\/scraper\?.*titles=healthcare\+PMs%2C\+VPs/);
+  await expect(page.getByLabel('Titles to prioritize', { exact: true })).toHaveValue('healthcare PMs, VPs');
+});
+
+test('assistant Fill Find people uses the proposed company and its sheet title hint', async ({ page }) => {
+  await page.route('**/api/assistant/ask', async route => route.fulfill({
+    json: {
+      answer: 'Top entertainment targets: The Walt Disney Company (Studios), A24.',
+      thread_id: 9, model: 'haiku', grounded: false, sources: [],
+      pending_actions: [
+        { tool: 'start_find_people', args: { company_name: 'The Walt Disney Company (Studios)', title_hints: 'SVP Franchise Marketing or VP Consumer Insights', max_prospects: 250 }, summary: 'Find people at Disney Studios' },
+        { tool: 'start_find_people', args: { company_name: 'A24', title_hints: 'Head of Acquisitions', max_prospects: 250 }, summary: 'Find people at A24' },
+      ],
+      navigations: [{ path: '/scraper?view=company', label: 'Find people' }],
+      lookups: [],
+      asks: [{ id: 'titles', label: 'Titles to prioritize', value: 'SVP Franchise Marketing or VP Consumer Insights', required: true, placeholder: 'VPs' }],
+    },
+  }));
+  await page.goto('/outreach');
+  await page.getByRole('button', { name: 'Open assistant' }).click();
+  await page.getByLabel('Question or task').fill('companies in entertainment');
+  await page.getByRole('button', { name: 'Send' }).click();
+  await page.getByRole('button', { name: 'Fill Find people' }).click();
+  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('The Walt Disney Company (Studios)');
+  await expect(page.getByLabel('Titles to prioritize', { exact: true })).toHaveValue('SVP Franchise Marketing or VP Consumer Insights');
+});
