@@ -4,6 +4,7 @@ import { api, type RegisterCompany, type RegisterSummary } from '../../api';
 
 const TIERS: { id: string; label: string; hint: string }[] = [
   { id: '', label: 'All', hint: 'Everything on record' },
+  { id: 'us_employer', label: 'US employers', hint: 'US companies that file a benefit plan for their own staff (DOL Form 5500), with the headcount they reported' },
   { id: 'us_private', label: 'Recently funded', hint: 'US companies that filed a Reg D raise — the startup pool' },
   { id: 'us_public', label: 'US listed', hint: 'Every SEC-registered public company' },
   { id: 'uk', label: 'UK', hint: 'Companies House: active companies above the small-company accounts thresholds' },
@@ -106,14 +107,16 @@ export default function CompanyRegister() {
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-3">
         <h2 className="text-lg font-semibold text-deep-navy">Company register</h2>
         <p className="text-sm text-slate-600">
-          Every US listed company (SEC), every US company that recently raised under Reg D
-          (SEC Form D) with the executives named on their own filings, and every active UK
-          company filing above the small-company accounts thresholds (Companies House).
-          Free public registers — no paid data provider. Pick a company to start Find people there.
+          US listed companies (SEC), US companies that recently raised under Reg D (SEC Form D),
+          US employers that file a benefit plan for their own staff (DOL Form 5500, which reports
+          the headcount they filed), and active UK companies above the small-company accounts
+          thresholds (Companies House). Free public registers — no paid data provider. Pick a
+          company to start Find people there.
         </p>
         {summary && (
           <p className="text-[13px] text-slate-500">
             On record: {(counts.us_public || 0).toLocaleString()} listed ·{' '}
+            {(counts.us_employer || 0).toLocaleString()} US employers ·{' '}
             {(counts.us_private || 0).toLocaleString()} recently funded
             {counts.uk ? ` · ${counts.uk.toLocaleString()} UK` : ''} ·{' '}
             {(summary.tiers.reduce((sum, row) => sum + (row.with_officers || 0), 0)).toLocaleString()} with named officers
@@ -195,7 +198,7 @@ export default function CompanyRegister() {
                     item.metadata?.revenue_range || null,
                   ].filter(Boolean).join(' · ')}
                 </div>
-                {item.officer_count === 0 && item.tier !== 'us_private' && (
+                {item.officer_count === 0 && (item.tier === 'us_public' || item.tier === 'uk') && (
                   <button
                     type="button"
                     className="mt-1 text-xs font-semibold text-steel-blue hover:underline disabled:opacity-50"
