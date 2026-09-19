@@ -296,9 +296,11 @@ async def _advance(flow_id: int, lease_token: str) -> None:
     # --- drafting ----------------------------------------------------------
     if flow["status"] == "drafting":
         contact_ids = flow.get("_contact_ids") or await _flow_contact_ids(flow, run, user_id)
-        drafted, quota_hit = await _draft_all(flow, contact_ids, user_id, lease_token)
+        drafted, rejected, quota_hit = await _draft_all(flow, contact_ids, user_id, lease_token)
         await _attach_to_campaign(int(flow["campaign_id"]), contact_ids, user_id)
         note = f"{drafted} draft(s) ready for {len(contact_ids)} people."
+        if rejected:
+            note += f" {rejected} draft(s) did not pass the draft rules; write those in the campaign."
         if quota_hit:
             note += " Your hourly draft limit was reached; draft the rest from the campaign."
         await _update(flow_id, lease_token, status="ready", drafted_count=drafted,
@@ -335,10 +337,51 @@ async def _create_campaign(user_id: int, company: str) -> int:
         await db.close()
 
 
-async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int, lease_token: str) -> tuple[int, bool]:
+_ONE_ASK_INSTRUCTION = (
+    "Ask exactly one thing in the whole email: a single closing request for a short call next week. "
+    "Do not open with a question and do not include any other question marks."
+)
+
+
+async def _generate_with_retry(generate_email, *, contact: dict[str, Any], angle: str, evidence: dict[str, Any],
+                               user_id: int, reserve_generation, normalize_domain) -> tuple[str, str] | None:
+    """Studio's validator accepts exactly one ask sentence. Some angles
+    (question_hook opens with a question and closes with another) fail that
+    rule most of the time, so a rejected draft gets one more attempt with an
+    angle and instruction that match the rule. Each attempt spends one quota
+    unit, same as a member clicking Generate twice. Returns None when both
+    attempts are rejected; raises 429 up to the caller when quota runs out."""
+    attempts = [(angle, None), ("pain_point", _ONE_ASK_INSTRUCTION)]
+    if angle == "pain_point":
+        attempts = [("pain_point", None), ("pain_point", _ONE_ASK_INSTRUCTION)]
+    for attempt_angle, instruction in attempts:
+        await reserve_generation(user_id, None)
+        try:
+            return await run_in_threadpool(
+                generate_email,
+                contact_name=contact.get("name"),
+                contact_title=contact.get("title"),
+                company_name=contact.get("company"),
+                company_domain=normalize_domain(contact.get("company_domain") or ""),
+                tone="professional",
+                length="short",
+                angle=attempt_angle,
+                custom_instructions=instruction,
+                value_proposition=None,
+                model=None,
+                evidence=evidence,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 502:
+                raise
+    return None
+
+
+async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int, lease_token: str) -> tuple[int, int, bool]:
     """Generate one grounded draft per contact through the same path as
     Studio (evidence, quota, generated_emails row). Stops at the member's
-    hourly quota and reports it instead of failing the flow."""
+    hourly quota and reports it instead of failing the flow. Returns
+    (drafted, rejected, quota_hit)."""
     from app.services.contact_scraper import normalize_domain
     from app.services.generation_policy import draft_evidence, reserve_generation
     from app.services.ollama_email_service import generate_email
@@ -346,6 +389,7 @@ async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int,
 
     angle = flow.get("angle") or "pain_point"
     drafted = 0
+    rejected = 0
     quota_hit = False
     signature = await get_member_setting(user_id, "signature") or ""
     for idx, cid in enumerate(contact_ids):
@@ -364,26 +408,20 @@ async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int,
             contact = dict(contact)
             evidence = await draft_evidence(db, contact, user_id)
             try:
-                await reserve_generation(user_id, None)
+                result = await _generate_with_retry(
+                    generate_email, contact=contact, angle=angle, evidence=evidence,
+                    user_id=user_id, reserve_generation=reserve_generation, normalize_domain=normalize_domain,
+                )
             except HTTPException as exc:
                 if exc.status_code == 429:
                     quota_hit = True
                     break
                 raise
-            subject, body = await run_in_threadpool(
-                generate_email,
-                contact_name=contact.get("name"),
-                contact_title=contact.get("title"),
-                company_name=contact.get("company"),
-                company_domain=normalize_domain(contact.get("company_domain") or ""),
-                tone="professional",
-                length="short",
-                angle=angle,
-                custom_instructions=None,
-                value_proposition=None,
-                model=None,
-                evidence=evidence,
-            )
+            if result is None:
+                rejected += 1
+                logger.info("flow %s: draft for contact %s rejected twice by the draft validator", flow["id"], cid)
+                continue
+            subject, body = result
             await db.execute(
                 """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature, evidence_json)
                    VALUES (?, ?, ?, ?, ?, ?)""",
@@ -400,9 +438,9 @@ async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int,
         if idx % 3 == 0:
             if not await _update(int(flow["id"]), lease_token, drafted_count=drafted,
                                  progress_message=f"Drafting {drafted}/{len(contact_ids)}…"):
-                return drafted, quota_hit
+                return drafted, rejected, quota_hit
         await asyncio.sleep(0)
-    return drafted, quota_hit
+    return drafted, rejected, quota_hit
 
 
 async def _attach_to_campaign(campaign_id: int, contact_ids: list[int], user_id: int) -> None:
