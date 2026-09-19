@@ -11,7 +11,7 @@ import { Notice } from '../components/ui/Primitives';
 import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
 import { useProjects } from '../lib/useProjects';
 import { useUrlTab } from '../lib/useUrlTab';
-type ScraperTab = 'research' | 'company' | 'formats' | 'find' | 'import' | 'register';
+type ScraperTab = 'research' | 'company' | 'import' | 'register';
 
 
 function aiVerdictClass(v?: string | null): string {
@@ -96,7 +96,7 @@ function ResearchTab() {
 export default function Scraper() {
   const [params] = useSearchParams();
   // Default to the crawl: it is the one door that turns a company name into people.
-  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'formats', 'find', 'import', 'register'], 'company');
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'import', 'register'], 'company');
   const discoveryKey = [
     params.get('company') || '',
     params.get('domain') || '',
@@ -282,14 +282,11 @@ export default function Scraper() {
         items={[
           { id: 'company', label: 'Find people' },
           { id: 'register', label: 'Company register' },
-          { id: 'find', label: 'One person' },
-          { id: 'formats', label: 'Email formats' },
         ]}
-        active={activeTab === 'import' || activeTab === 'research' ? 'company' : activeTab}
+        active={activeTab === 'register' ? 'register' : 'company'}
         onChange={(id) => {
           setActiveTab(id as ScraperTab);
           setError('');
-          if (id !== 'find') setFindResult(null);
         }}
       />
 
@@ -321,14 +318,15 @@ export default function Scraper() {
 
       {activeTab === 'research' && <ResearchTab />}
 
-      {activeTab === 'find' && (
-      <>
-      <div className="mt-8 surface-card rounded-2xl overflow-hidden shadow-sm">
-        <div className="px-5 py-4 border-b border-pale-sky">
-          <h2 className="text-[15px] font-semibold text-deep-navy">Find one person</h2>
-          <p className="text-[13px] text-slate-500 mt-0.5">Search the web for one named person. To collect a company roster with inbox checks, use Find people.</p>
-        </div>
-        <div className="p-4 space-y-3">
+      {activeTab === 'company' && (
+      <details className="mt-8 surface-card rounded-2xl overflow-hidden shadow-sm">
+        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">
+          Look up one named person
+        </summary>
+        <div className="p-4 space-y-3 border-t border-pale-sky">
+          <p className="text-[13px] text-slate-500">
+            For a single person you already know of. The company search above collects a whole roster and checks inboxes.
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <input
               type="text"
@@ -379,7 +377,6 @@ export default function Scraper() {
             {findLoading ? 'Searching…' : 'Search for this person'}
           </button>
         </div>
-      </div>
       {findResult && (
         <div className="mt-6 surface-card rounded-2xl overflow-hidden shadow-sm p-5">
           <h3 className="text-[15px] font-semibold text-deep-navy mb-3">Results for “{findResult.query}”</h3>
@@ -406,11 +403,11 @@ export default function Scraper() {
           )}
         </div>
       )}
-      </>
+      </details>
       )}
 
-      {activeTab === 'formats' && (
-      <details className="mt-0 surface-card rounded-2xl border border-pale-sky overflow-hidden" open>
+      {activeTab === 'company' && (
+      <details className="mt-4 surface-card rounded-2xl border border-pale-sky overflow-hidden">
         <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Company email formats</summary>
         <div className="px-5 pb-5 space-y-4 border-t border-pale-sky">
           <p className="text-[13px] text-slate-500 pt-3">

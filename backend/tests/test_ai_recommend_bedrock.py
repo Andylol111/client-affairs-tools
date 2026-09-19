@@ -107,8 +107,12 @@ def test_large_corpus_and_candidates_stay_under_llm_char_limit() -> None:
         result = asyncio.run(ai_recommend_prospects(n=5, candidate_limit=30))
     assert result.get("error") is None
     assert result["count"] == 1
-    prompt, model, system = complete.call_args.args
+    prompt, model, system, max_tokens = complete.call_args.args
     assert len(prompt) + len(system) <= 24000
+    # The input fitting is only half of it: the reply is JSON that must parse
+    # whole, so a truncated answer is discarded entirely. Asking for the full
+    # reply budget is what stopped "Model returned no parseable JSON".
+    assert max_tokens == 4096
 
 
 if __name__ == "__main__":
