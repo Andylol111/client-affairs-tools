@@ -8,7 +8,10 @@
 frontend/dist
 infra/cdk.out
 infra/node_modules
-data
+data/.cache/
+data/.yucg_cache/
+data/releases/
+data/YUCG_Outreach_Pack.xlsx
 *.db
 backend/clientreach.db
 backend/attachments

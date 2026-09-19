@@ -16,8 +16,25 @@ from app.services.prospect_coordinator import (
     top_prospects_for_ai,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CORPUS_PATH = _REPO_ROOT / "data" / "yucg_website_corpus.txt"
+
+def _resolve_data_dir() -> Path:
+    """The corpus ships as a git-tracked file at <repo_root>/data/ in local
+    dev (backend/app/services/file.py -> backend -> repo_root, 3 levels up).
+    The Docker image's WORKDIR (/app) does not preserve a "backend/"
+    wrapper - docker/app.Dockerfile's `COPY backend .` flattens backend's
+    contents directly into /app, so the equivalent file in the image is one
+    level shallower (/app/app/services/file.py -> /app, 2 levels up). Check
+    both rather than hard-coding one depth, so this keeps working if either
+    layout changes independently."""
+    here = Path(__file__).resolve()
+    for candidate in (here.parents[3] / "data", here.parents[2] / "data"):
+        if (candidate / "yucg_website_corpus.txt").is_file():
+            return candidate
+    return here.parents[3] / "data"
+
+
+_REPO_ROOT = _resolve_data_dir().parent
+DEFAULT_CORPUS_PATH = _resolve_data_dir() / "yucg_website_corpus.txt"
 YUCG_CORPUS_PATH = Path(
     os.getenv("YUCG_CORPUS_PATH", str(DEFAULT_CORPUS_PATH))
 )
