@@ -44,7 +44,7 @@ def tests() -> None:
         # Start: enqueues a discovery run and records the flow.
         flow = asyncio.run(outreach_flow.start_outreach_flow(
             user_id=1, company_name='Acme Corp', company_domain='acme.com',
-            title_hints='VPs', angle='question_hook', max_contacts=10,
+            title_hints='VPs', angle='case_study', max_contacts=10,
         ))
         assert flow['status'] == 'discovering'
         assert flow['run_id']
@@ -122,7 +122,7 @@ def tests() -> None:
         assert done['campaign_id']
         # Retry uses the validator-aligned angle + instruction; the first try keeps the member's angle.
         assert [g[0] for g in generated] == ['Ada Lovelace', 'Ada Lovelace', 'Grace Hopper', 'Grace Hopper']
-        assert generated[0][1] == 'question_hook' and generated[0][2] is None
+        assert generated[0][1] == 'case_study' and generated[0][2] is None
         assert generated[1][1] == 'pain_point' and 'exactly one thing' in (generated[1][2] or '')
 
         async def inspect() -> None:

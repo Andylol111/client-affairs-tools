@@ -1079,7 +1079,7 @@ export default function EmailStudio() {
                   onChange={(e) => setAngle(e.target.value)}
                   className="w-full min-w-0 px-3 py-2 rounded-lg bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-deep-navy dark:text-slate-200"
                 >
-                  {['pain_point', 'social_proof', 'case_study', 'question_hook', 'compliment'].map((a) => (
+                  {['pain_point', 'social_proof', 'case_study', 'compliment'].map((a) => (
                     <option key={a} value={a}>{a.replace('_', ' ')}</option>
                   ))}
                 </select>

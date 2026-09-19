@@ -345,12 +345,13 @@ _ONE_ASK_INSTRUCTION = (
 
 async def _generate_with_retry(generate_email, *, contact: dict[str, Any], angle: str, evidence: dict[str, Any],
                                user_id: int, reserve_generation, normalize_domain) -> tuple[str, str] | None:
-    """Studio's validator accepts exactly one ask sentence. Some angles
-    (question_hook opens with a question and closes with another) fail that
-    rule most of the time, so a rejected draft gets one more attempt with an
-    angle and instruction that match the rule. Each attempt spends one quota
-    unit, same as a member clicking Generate twice. Returns None when both
-    attempts are rejected; raises 429 up to the caller when quota runs out."""
+    """Studio's validator accepts exactly one ask sentence, and rejects a
+    draft outright rather than repairing it - an unsupported figure or a
+    second question is enough. A rejected draft therefore gets one more
+    attempt, with an instruction that states the rule the first draft broke.
+    Each attempt spends one quota unit, the same as a member clicking
+    Generate twice. Returns None when both attempts are rejected; raises 429
+    up to the caller when quota runs out."""
     attempts = [(angle, None), ("pain_point", _ONE_ASK_INSTRUCTION)]
     if angle == "pain_point":
         attempts = [("pain_point", None), ("pain_point", _ONE_ASK_INSTRUCTION)]
