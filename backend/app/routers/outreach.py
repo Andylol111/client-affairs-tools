@@ -11,6 +11,46 @@ from app.services.profile_analyzer import analyze_contact_profile
 
 router = APIRouter()
 
+
+# --- One-click outreach flow: company -> ready-to-review campaign ---------
+class OutreachFlowCreate(BaseModel):
+    company_name: str
+    company_domain: Optional[str] = None
+    title_hints: Optional[str] = None
+    angle: Optional[str] = None  # pain_point, social_proof, case_study, question_hook, compliment
+    max_contacts: int = 25
+
+
+@router.post("/flows")
+async def create_outreach_flow(payload: OutreachFlowCreate, user: dict = Depends(get_current_user)):
+    """Start the whole pipeline for one company: find people, save them to your
+    contacts, draft an email to each, and assemble a draft campaign. Nothing
+    is sent - the campaign waits for Review & release."""
+    from app.services.outreach_flow import start_outreach_flow
+    return await start_outreach_flow(
+        user_id=user["id"],
+        company_name=payload.company_name,
+        company_domain=payload.company_domain,
+        title_hints=payload.title_hints,
+        angle=payload.angle,
+        max_contacts=payload.max_contacts,
+    )
+
+
+@router.get("/flows")
+async def list_outreach_flows(limit: int = 20, user: dict = Depends(get_current_user)):
+    from app.services.outreach_flow import list_flows
+    return await list_flows(user["id"], limit=limit)
+
+
+@router.get("/flows/{flow_id}")
+async def get_outreach_flow(flow_id: int, user: dict = Depends(get_current_user)):
+    from app.services.outreach_flow import get_flow
+    flow = await get_flow(flow_id, user["id"])
+    if not flow:
+        raise HTTPException(404, "Flow not found")
+    return flow
+
 # --- Models ---
 class NoteCreate(BaseModel):
     contact_id: int

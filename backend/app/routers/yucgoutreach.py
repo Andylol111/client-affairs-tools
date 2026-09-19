@@ -3,17 +3,12 @@ YUCGoutreach company discovery: SQL-backed runs, parallel enrichment, Excel expo
 """
 from __future__ import annotations
 
-import json
-import os
-
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.auth_deps import get_current_user
 from app.database import get_db, row_to_dict
-from app.services.contact_scraper import sanitize_email, normalize_domain, is_valid_person_contact
-from app.services.contact_intelligence import ingest_contact, assess_address
 from app.services.yucgoutreach_discovery import (
     YUCG_MAX_PROSPECTS,
     build_yucgoutreach_excel_bytes,
@@ -64,44 +59,24 @@ async def _get_run_for_user(run_id: int, user_id: int) -> dict | None:
 
 @router.post("/runs")
 async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_current_user)):
-    cap = min(body.max_prospects, YUCG_MAX_PROSPECTS)
     db = await get_db()
     try:
         from app.services.dispatch_service import begin_write
+        from app.services.yucgoutreach_import import enqueue_discovery_run
         await begin_write(db)
-        active = await (await db.execute(
-            "SELECT COUNT(*) AS n FROM yucgoutreach_discovery_runs WHERE user_id = ? AND status IN ('queued','running')",
-            (user["id"],),
-        )).fetchone()
-        if int(active["n"] or 0):
-            raise HTTPException(409, "You already have a company search queued or running")
-        club_limit = max(1, int(os.getenv("DISCOVERY_QUEUE_LIMIT", "20") or 20))
-        club = await (await db.execute(
-            "SELECT COUNT(*) AS n FROM yucgoutreach_discovery_runs WHERE status IN ('queued','running')"
-        )).fetchone()
-        if int(club["n"] or 0) >= club_limit:
-            raise HTTPException(429, "The club search queue is full; try again after a current search finishes")
-        hints = (body.title_hints or "").strip()[:500]
-        research = json.dumps({"title_hints": hints}) if hints else None
-        cur = await db.execute(
-            """INSERT INTO yucgoutreach_discovery_runs (
-                user_id, company_name, company_domain,
-                max_prospects, worker_concurrency, status, progress_message, research_json
-            ) VALUES (?, ?, ?, ?, ?, 'queued', 'Queued', ?)""",
-            (
-                user["id"],
-                body.company_name.strip(),
-                (body.company_domain or "").strip() or None,
-                cap,
-                body.worker_concurrency,
-                research,
-            ),
+        run_id = await enqueue_discovery_run(
+            db,
+            user_id=user["id"],
+            company_name=body.company_name,
+            company_domain=body.company_domain,
+            title_hints=body.title_hints,
+            max_prospects=body.max_prospects,
+            worker_concurrency=body.worker_concurrency,
         )
         await db.commit()
-        run_id = cur.lastrowid
     finally:
         await db.close()
-    return {"id": run_id, "status": "queued", "max_prospects": cap}
+    return {"id": run_id, "status": "queued", "max_prospects": min(body.max_prospects, YUCG_MAX_PROSPECTS)}
 
 
 @router.get("/runs")
@@ -151,134 +126,13 @@ async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_u
     run = await _get_run_for_user(run_id, user["id"])
     if not run:
         raise HTTPException(404, "Run not found")
+    from app.services.yucgoutreach_import import import_run_prospects
     db = await get_db()
     try:
-        cur = await db.execute(
-            """SELECT * FROM yucgoutreach_prospects
-               WHERE run_id = ? AND email IS NOT NULL AND email != ''
-               AND (ai_verdict IS NULL OR ai_verdict != 'junk')
-               ORDER BY score DESC""",
-            (run_id,),
-        )
-        rows = [row_to_dict(r) for r in await cur.fetchall()]
-        created = updated = skipped = 0
-        for pr in rows:
-            pr["mailbox_assessment"] = await assess_address(pr.get("email") or "", actor_id=user["id"])
-        company = run.get("company_name") or ""
-        domain = normalize_domain(run.get("company_domain") or "")
-        for pr in rows:
-            email = sanitize_email(pr.get("email") or "")
-            name = " ".join(p for p in [pr.get("first_name"), pr.get("last_name")] if p).strip()
-            sources = []
-            source_url = (pr.get("contact_profile_url") or pr.get("contact_url") or "").strip()
-            if source_url:
-                sources.append({
-                    "url": source_url,
-                    "excerpt": (pr.get("qualification_notes") or "")[:500] or None,
-                    "observed_at": None,
-                })
-            if pr.get("linkedin_url"):
-                sources.append({"url": pr["linkedin_url"], "excerpt": None, "observed_at": None})
-            row = {
-                "name": name,
-                "email": email,
-                "title": pr.get("title"),
-                "company": pr.get("company") or company,
-                "company_domain": domain,
-                "linkedin_url": pr.get("linkedin_url"),
-                "contact_source": pr.get("contact_source") or "yucgoutreach",
-                "mailbox_assessment": pr.get("mailbox_assessment"),
-            }
-            if not email or not is_valid_person_contact(row, company_name=company, domain=domain):
-                skipped += 1
-                continue
-            existing = await db.execute("SELECT id, owner_id FROM contacts WHERE email = ?", (email,))
-            ex = await existing.fetchone()
-            if ex:
-                if ex["owner_id"] is not None and int(ex["owner_id"]) != user["id"]:
-                    skipped += 1
-                    continue
-                await db.execute(
-                    """UPDATE contacts SET name = COALESCE(NULLIF(name, ''), ?),
-                       title = COALESCE(NULLIF(title, ''), ?),
-                       company = COALESCE(NULLIF(company, ''), ?),
-                       company_domain = COALESCE(NULLIF(company_domain, ''), ?),
-                       linkedin_url = COALESCE(NULLIF(linkedin_url, ''), ?),
-                       contact_source = COALESCE(NULLIF(contact_source, ''), ?),
-                       email_verification_status = COALESCE(NULLIF(email_verification_status, ''), ?),
-                       ai_verdict = COALESCE(NULLIF(ai_verdict, ''), ?),
-                       ai_reason = COALESCE(NULLIF(ai_reason, ''), ?)
-                       WHERE id = ?""",
-                    (
-                        name or None,
-                        pr.get("title"),
-                        pr.get("company") or company or None,
-                        domain or None,
-                        pr.get("linkedin_url"),
-                        pr.get("contact_source") or "yucgoutreach",
-                        pr.get("email_verification_status"),
-                        pr.get("ai_verdict"),
-                        pr.get("ai_reason"),
-                        ex["id"],
-                    ),
-                )
-                updated += 1
-            else:
-                cursor = await db.execute(
-                    """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url,
-                       contact_source, email_verification_status, ai_verdict, ai_reason, confidence, owner_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        name,
-                        email,
-                        pr.get("title"),
-                        pr.get("company") or company,
-                        domain or None,
-                        pr.get("linkedin_url"),
-                        pr.get("contact_source") or "yucgoutreach",
-                        pr.get("email_verification_status"),
-                        pr.get("ai_verdict"),
-                        pr.get("ai_reason"),
-                        "medium",
-                        user["id"],
-                    ),
-                )
-                created += 1
-                row_id = cursor.lastrowid
-        evidence_rows = []
-        for pr in rows:
-            email = sanitize_email(pr.get("email") or "")
-            if not email:
-                continue
-            row = {
-                "name": " ".join(p for p in [pr.get("first_name"), pr.get("last_name")] if p).strip(),
-                "email": email,
-                "title": pr.get("title"),
-                "company": pr.get("company") or company,
-                "company_domain": domain,
-                "linkedin_url": pr.get("linkedin_url"),
-                "contact_source": pr.get("contact_source") or "yucgoutreach",
-                "mailbox_assessment": pr.get("mailbox_assessment"),
-            }
-            sources = []
-            source_url = (pr.get("contact_profile_url") or pr.get("contact_url") or "").strip()
-            if source_url:
-                sources.append({
-                    "url": source_url,
-                    "excerpt": (pr.get("qualification_notes") or "")[:500] or None,
-                    "observed_at": None,
-                })
-            if pr.get("linkedin_url"):
-                sources.append({"url": pr["linkedin_url"], "excerpt": None, "observed_at": None})
-            existing = await (await db.execute("SELECT id, owner_id FROM contacts WHERE email = ?", (email,))).fetchone()
-            if existing and (existing["owner_id"] is None or int(existing["owner_id"]) == user["id"]):
-                evidence_rows.append(await ingest_contact(
-                    db, contact={**row, "id": existing["id"]}, actor_id=user["id"],
-                    origin="published_by_independent_source" if source_url else None,
-                    sources=sources,
-                ))
+        result = await import_run_prospects(db, run=run, user_id=user["id"])
         await db.commit()
-        return {"created": created, "updated": updated, "skipped": skipped, "evidence": evidence_rows}
+        return {"created": result["created"], "updated": result["updated"],
+                "skipped": result["skipped"], "evidence": result["evidence"]}
     finally:
         await db.close()
 
