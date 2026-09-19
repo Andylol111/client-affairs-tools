@@ -40,7 +40,19 @@ logger = logging.getLogger(__name__)
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 FORM_D_URL = "https://www.sec.gov/files/structureddata/data/form-d-data-sets/{quarter}_d.zip"
-UK_BULK_URL = "http://download.companieshouse.gov.uk/BasicCompanyDataAsOneFile-{date}.zip"
+UK_BULK_URL = "https://download.companieshouse.gov.uk/BasicCompanyDataAsOneFile-{date}.zip"
+
+# Companies House files no headcount in this product, but AccountCategory is
+# the statutory size band a company filed under: SMALL/MICRO sit below the
+# small-company thresholds, so FULL, GROUP and MEDIUM are the companies above
+# them (medium is >50 employees or >GBP 10.2M turnover; full/group larger).
+# That is the honest version of "above a certain employee count" from a free
+# source - 112,450 active companies of 5.69M rows in the 2026-09 file.
+UK_SIZE_BANDS = frozenset({"FULL", "GROUP", "MEDIUM"})
+UK_BAND_LABEL = {"MEDIUM": "medium (>50 staff or >£10.2M turnover)", "FULL": "large (full accounts)", "GROUP": "group (consolidated accounts)"}
+# SIC divisions that are holding, financing or property vehicles rather than
+# operating companies - the same reason Form D pooled funds are excluded.
+UK_SKIP_SIC_PREFIXES = ("64", "65", "66", "68", "74990", "99999", "98000", "98100", "98200")
 
 # A Form D filing this small is usually a single-property LLC or a friends
 # and family round, not a company with a consulting budget.
@@ -372,6 +384,103 @@ async def ingest_form_d(quarter: str, *, force: bool = False) -> dict[str, Any]:
             "seen": len(companies), "written": written, "officers": attached}
 
 
+
+def parse_uk_bulk(handle: Any) -> Iterable[dict[str, Any]]:
+    """Stream the Companies House one-file CSV (2.8 GB uncompressed, 5.7M
+    rows) and yield only active companies above the small-company accounts
+    thresholds that are operating businesses. Streaming keeps peak memory at
+    one row on a t3.small."""
+    reader = csv.DictReader(io.TextIOWrapper(handle, encoding="utf-8", errors="replace"))
+    columns = {name.strip(): name for name in (reader.fieldnames or [])}
+
+    def field(row: dict[str, str], key: str) -> str:
+        return (row.get(columns.get(key, key)) or "").strip()
+
+    for row in reader:
+        if field(row, "CompanyStatus") != "Active":
+            continue
+        band = field(row, "Accounts.AccountCategory").upper()
+        if band not in UK_SIZE_BANDS:
+            continue
+        sic = field(row, "SICCode.SicText_1")
+        code = sic.split(" - ", 1)[0].strip()
+        if any(code.startswith(prefix) for prefix in UK_SKIP_SIC_PREFIXES):
+            continue
+        number = field(row, "CompanyNumber")
+        name = _title_case(field(row, "CompanyName"))
+        if not number or not name:
+            continue
+        yield {
+            "source": "companies_house", "source_key": number, "tier": "uk", "country": "GB",
+            "company_name": name,
+            "sector_code": code or None,
+            "sector_label": (sic.split(" - ", 1)[1].strip() if " - " in sic else sic) or None,
+            "region": field(row, "RegAddress.PostTown").title() or None,
+            "employees_source": "companies_house_account_category",
+            "last_event_at": _uk_date(field(row, "Accounts.LastMadeUpDate")),
+            "last_event_kind": "accounts_filed",
+            "metadata": {
+                "size_band": UK_BAND_LABEL.get(band, band.lower()),
+                "account_category": band,
+                "company_category": field(row, "CompanyCategory"),
+                "incorporated": _uk_date(field(row, "IncorporationDate")),
+                "uri": field(row, "URI") or None,
+            },
+        }
+
+
+def _uk_date(value: str) -> str | None:
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value.strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+async def ingest_companies_house(*, force: bool = False, batch_rows: int = 2000) -> dict[str, Any]:
+    """Monthly Companies House bulk file. Downloaded to a temp file and
+    streamed out of the zip, never held in memory or left on disk."""
+    import tempfile
+
+    import httpx
+
+    batch_key = datetime.now(timezone.utc).strftime("%Y-%m-01")
+    if not force and await _already_ingested("companies_house", batch_key):
+        return {"ok": True, "source": "companies_house", "batch": batch_key, "skipped": "already ingested"}
+    url = UK_BULK_URL.format(date=batch_key)
+    seen = written = 0
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zip") as archive:
+            async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+                async with client.stream("GET", url, headers={"User-Agent": _sec_headers()["User-Agent"]}) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes(1 << 20):
+                        archive.write(chunk)
+            archive.flush()
+            with zipfile.ZipFile(archive.name) as zf:
+                member = zf.namelist()[0]
+                with zf.open(member) as handle:
+                    batch: list[dict[str, Any]] = []
+                    for company in parse_uk_bulk(handle):
+                        seen += 1
+                        batch.append(company)
+                        if len(batch) >= batch_rows:
+                            written += await upsert_companies(batch)
+                            batch = []
+                            await asyncio.sleep(0)
+                    if batch:
+                        written += await upsert_companies(batch)
+    except Exception as exc:
+        missing = "404" in str(exc)
+        await _record_ingest("companies_house", batch_key, seen, written,
+                             "unpublished" if missing else "failed", f"{type(exc).__name__}: {exc}")
+        return {"ok": False, "source": "companies_house", "batch": batch_key,
+                "unpublished": missing, "error": str(exc)}
+    await _record_ingest("companies_house", batch_key, seen, written, "ok")
+    return {"ok": True, "source": "companies_house", "batch": batch_key, "seen": seen, "written": written}
+
+
 async def backfill_sec_sectors(limit: int | None = None) -> dict[str, Any]:
     """Fill SIC sector for listed companies. SEC's fair-access limit is 10
     requests/second and each pass already pauses ROSTER_SEC_PAUSE_SEC
@@ -449,6 +558,11 @@ async def drain_company_register() -> dict[str, Any]:
         # A quarter SEC has not published (or a transient failure) must not
         # block the older quarters behind it; try the next one this pass.
         continue
+    if (os.getenv("REGISTER_UK_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes"}:
+        month = datetime.now(timezone.utc).strftime("%Y-%m-01")
+        if not await _already_ingested("companies_house", month):
+            result["companies_house"] = await ingest_companies_house()
+            return result
     result["sectors"] = await backfill_sec_sectors()
     return result
 

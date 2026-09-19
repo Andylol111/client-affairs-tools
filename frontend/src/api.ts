@@ -129,7 +129,7 @@ export type RegisterCompany = {
   last_event_amount?: number | null;
   last_event_kind?: string | null;
   officer_count: number;
-  metadata?: { revenue_range?: string | null; ticker?: string | null; city?: string | null; year_of_inc?: string | null };
+  metadata?: { revenue_range?: string | null; ticker?: string | null; city?: string | null; year_of_inc?: string | null; size_band?: string | null; account_category?: string | null; incorporated?: string | null };
 };
 export type RegisterSummary = {
   tiers: { tier: string; country: string; n: number; with_officers: number }[];
