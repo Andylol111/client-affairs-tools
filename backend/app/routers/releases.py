@@ -23,6 +23,11 @@ async def require_release_owner(db, release_id: int, user_id: int):
 class ReleaseCreate(BaseModel):
     name: str
     row_indexes: list[int] = Field(default_factory=list)
+    # The register is the club's full company index - 200k+ companies from
+    # SEC, DOL, IRS and Companies House - while row_indexes only ever meant
+    # the legacy target spreadsheet. A target list built by picking companies
+    # in the register was impossible until these two could both feed it.
+    register_ids: list[int] = Field(default_factory=list)
     notes: str | None = None
 
 
@@ -62,16 +67,51 @@ async def get_release(release_id: int, user: dict = Depends(get_current_user)):
         await db.close()
 
 
+async def _register_targets(register_ids: list[int]) -> list[dict]:
+    """Shape register companies like spreadsheet rows so one release can hold
+    both. row_index stays null for these: they have no spreadsheet line, and
+    inventing one would collide with a real row."""
+    ids = [int(i) for i in register_ids][:500]
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            f"""SELECT company_name, company_domain, sector_label, source, tier, employees
+                FROM company_register WHERE id IN ({placeholders})""",
+            ids,
+        )).fetchall()
+    finally:
+        await db.close()
+    return [{
+        "row_index": None,
+        "company": row["company_name"],
+        "company_domain": row["company_domain"],
+        "sector": row["sector_label"],
+        # The register knows what kind of organisation this is, which is the
+        # closest thing it has to the spreadsheet's contact type.
+        "contact_type": row["tier"],
+        "incentive_score": None,
+        "verification_source_url": None,
+        "_register_source": row["source"],
+    } for row in rows]
+
+
 @router.post("")
 async def create_release(body: ReleaseCreate, user: dict = Depends(get_current_user)):
-    try:
-        prospects = load_prospects()
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e)) from e
-    by_idx = {r.get("row_index"): r for r in prospects}
-    picked = [by_idx[i] for i in body.row_indexes if i in by_idx]
+    picked: list[dict] = []
+    if body.row_indexes:
+        try:
+            prospects = load_prospects()
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        by_idx = {r.get("row_index"): r for r in prospects}
+        picked.extend(by_idx[i] for i in body.row_indexes if i in by_idx)
+    if body.register_ids:
+        picked.extend(await _register_targets(body.register_ids))
     if not picked:
-        raise HTTPException(400, "No matching spreadsheet rows")
+        raise HTTPException(400, "Select at least one company")
 
     db = await get_db()
     try:
@@ -90,7 +130,10 @@ async def create_release(body: ReleaseCreate, user: dict = Depends(get_current_u
                     release_id,
                     row.get("row_index"),
                     row.get("company"),
-                    _domain_guess(row),
+                    # A register company already carries its domain; only a
+                    # spreadsheet row has to have one guessed from its source
+                    # URL, and guessing over a known value loses it.
+                    row.get("company_domain") or _domain_guess(row),
                     row.get("sector"),
                     row.get("contact_type"),
                     row.get("incentive_score"),

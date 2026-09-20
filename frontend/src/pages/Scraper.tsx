@@ -96,7 +96,7 @@ function ResearchTab() {
 export default function Scraper() {
   const [params] = useSearchParams();
   // Default to the crawl: it is the one door that turns a company name into people.
-  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'import', 'register'], 'company');
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'import', 'register'], 'register');
   const discoveryKey = [
     params.get('company') || '',
     params.get('domain') || '',
@@ -274,14 +274,14 @@ export default function Scraper() {
     <div className="app-workspace pb-12">
       <PageHeader
         title="Find contacts"
-        subtitle="Name a company to collect people, or search for one person by name."
+        subtitle="Start from the company index, or name a company you already have in mind."
       />
 
       <AppSubnav
         className="mb-8"
         items={[
+          { id: 'register', label: 'Companies' },
           { id: 'company', label: 'Find people' },
-          { id: 'register', label: 'Company register' },
         ]}
         active={activeTab === 'register' ? 'register' : 'company'}
         onChange={(id) => {

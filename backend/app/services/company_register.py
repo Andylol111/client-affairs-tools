@@ -235,6 +235,61 @@ async def _attach_people(people_by_key: dict[tuple[str, str], list[dict[str, Any
     return attached
 
 
+async def ingest_club_targets() -> dict[str, Any]:
+    """Fold the club's own curated target list into the register.
+
+    Two company indexes that cannot talk to each other is the whole problem:
+    the spreadsheet holds ~600 companies somebody thought about - why they
+    fit, the Yale connection, the role to aim at, the angle to open with -
+    while the register holds 200k+ found in public filings. Judgement lives
+    in one and reach in the other, and a member had to know which page to
+    visit.
+
+    So the curated rows become a tier like any other, keeping their reasoning
+    in metadata. Re-run freely: rows key on the spreadsheet line, so an edited
+    sheet updates in place rather than duplicating.
+    """
+    from app.services.prospect_coordinator import load_prospects
+
+    batch = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        prospects = load_prospects()
+    except FileNotFoundError as exc:
+        await _record_ingest("club_sheet", batch, 0, 0, "failed", str(exc)[:200])
+        return {"ok": False, "source": "club_sheet", "error": str(exc)[:200]}
+
+    rows: list[dict[str, Any]] = []
+    for row in prospects:
+        name = _title_case(str(row.get("company") or "").strip())
+        index = row.get("row_index")
+        if not name or index is None:
+            continue
+        score = row.get("incentive_score")
+        rows.append({
+            "source": "club_sheet",
+            "source_key": str(index),
+            "tier": "club_targets",
+            "country": "US",
+            "company_name": name,
+            "sector_label": (row.get("sector") or None),
+            "last_event_kind": "curated_by_the_club",
+            "metadata": {
+                # The reasoning is the point of this tier. It is what a member
+                # would otherwise have to rebuild from scratch.
+                "why_attractive": (row.get("why_attractive") or None),
+                "engagement_theme": (row.get("engagement_theme") or None),
+                "yale_hook": (row.get("yale_hook") or None),
+                "target_role_title": (row.get("target_role_title") or row.get("contact_type") or None),
+                "first_message_angle": (row.get("first_message_angle") or None),
+                "priority_score": float(score) if isinstance(score, (int, float)) else None,
+                "row_index": int(index),
+            },
+        })
+    written = await upsert_companies(rows)
+    await _record_ingest("club_sheet", batch, len(rows), written, "ok")
+    return {"ok": True, "source": "club_sheet", "seen": len(rows), "written": written}
+
+
 async def ingest_sec_public() -> dict[str, Any]:
     """Every US listed company from SEC's ticker file. Sector is filled in
     later by backfill_sec_sectors; SEC publishes no bulk SIC file."""
@@ -1110,6 +1165,14 @@ async def drain_company_register() -> dict[str, Any]:
         return {"ok": True, "skipped": "disabled"}
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     result: dict[str, Any] = {"ok": True}
+    # The club's own curated list first: it is small, it is the highest-intent
+    # pool, and re-reading it keeps the register in step with sheet edits.
+    # Unlike the bulk sources this is a local file of a few hundred rows, so
+    # it runs inline and the pass continues - returning here would mean a
+    # scheduler tick never reached the sources that actually need one.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not await _already_ingested("club_sheet", today):
+        result["club_targets"] = await ingest_club_targets()
     if not await _already_ingested("sec_public", month):
         result["sec_public"] = await ingest_sec_public()
         return result
