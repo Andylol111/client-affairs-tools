@@ -447,7 +447,7 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
         window = [dict(row) for row in window]
         for row in window:
             row["email"] = row.get("recipient_email")
-        sendable, held = await select_sendable(db, campaign_id, window)
+        sendable, held = await select_sendable(db, campaign_id, window, sender)
         rows = sendable[: min(limit, remaining)]
         claimed = []
         for row in rows:

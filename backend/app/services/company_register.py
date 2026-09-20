@@ -1307,6 +1307,14 @@ async def search_register(
             item = dict(row)
             item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
             items.append(item)
+        # Who in the club is already on each of these, so a member does not
+        # start a company a colleague is halfway through.
+        from app.services.company_claims import claims_for, company_key
+
+        claims = await claims_for(items)
+        for item in items:
+            held = claims.get(company_key(item.get("company_name"), item.get("company_domain")))
+            item["claimed_by"] = held["member"] if held else None
         return {"items": items, "total": int(total["n"] or 0), "limit": limit, "offset": max(0, int(offset))}
     finally:
         await db.close()
