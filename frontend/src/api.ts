@@ -142,6 +142,7 @@ export type RegisterCompany = {
   last_event_kind?: string | null;
   officer_count: number;
   working_count?: number;
+  claimed_by?: string | null;
   metadata?: { revenue_range?: string | null; ticker?: string | null; city?: string | null; year_of_inc?: string | null; size_band?: string | null; account_category?: string | null; incorporated?: string | null; buys_outside_advice?: string | null; why_attractive?: string | null; target_role_title?: string | null; first_message_angle?: string | null; yale_hook?: string | null };
 };
 export type RegisterSummary = {

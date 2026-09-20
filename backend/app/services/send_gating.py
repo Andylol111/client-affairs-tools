@@ -30,6 +30,52 @@ from typing import Any, Iterable
 
 HELD_PROBE_IN_FLIGHT = "probe_in_flight"
 HELD_PROBE_BOUNCED = "probe_bounced"
+HELD_TEAMMATE_SENT = "teammate_already_wrote"
+
+
+def teammate_quiet_days() -> int:
+    """How long another member's email to a person blocks a second one.
+
+    A term is roughly twelve weeks, so ninety days means a recipient hears
+    from the club at most once per member per term unless someone overrides.
+    """
+    try:
+        return max(1, min(int(os.getenv("TEAMMATE_QUIET_DAYS", "90") or 90), 365))
+    except ValueError:
+        return 90
+
+
+async def _mailed_by_teammates(db, rows: list, sender_id: int | None) -> dict[str, str]:
+    """Recipients another member has already written to, and who wrote.
+
+    Keyed on the address rather than the company, because that is the thing
+    the recipient experiences. Two members writing to two different people at
+    one company is fine and often deliberate; two members writing to the same
+    person is the club looking disorganised.
+    """
+    emails = sorted({(row["email"] or "").strip().lower() for row in rows if row.get("email")})
+    if not emails:
+        return {}
+    placeholders = ",".join("?" * len(emails))
+    found = await (await db.execute(
+        f"""SELECT lower(c.email) AS email, COALESCE(u.name, u.email) AS who, cc.sent_by_user_id
+            FROM campaign_contacts cc
+            JOIN contacts c ON c.id = cc.contact_id
+            JOIN users u ON u.id = cc.sent_by_user_id
+            WHERE lower(c.email) IN ({placeholders})
+              AND cc.sent_at IS NOT NULL
+              AND cc.sent_at > datetime('now', ?)""",
+        (*emails, f"-{teammate_quiet_days()} days"),
+    )).fetchall()
+    # Only a *teammate's* send blocks. A member re-contacting someone they
+    # wrote to themselves is a follow-up, which is the normal case: pending
+    # rows carry no sender yet, so the sender has to come from the campaign
+    # rather than from the rows.
+    return {
+        row["email"]: row["who"]
+        for row in found
+        if sender_id is None or int(row["sent_by_user_id"]) != int(sender_id)
+    }
 
 
 def grace_minutes() -> int:
@@ -117,7 +163,8 @@ async def _host_history(db, campaign_id: int) -> dict[str, dict[str, Any]]:
     return history
 
 
-async def select_sendable(db, campaign_id: int, rows: list) -> tuple[list, list[dict[str, Any]]]:
+async def select_sendable(db, campaign_id: int, rows: list,
+                          sender_id: int | None = None) -> tuple[list, list[dict[str, Any]]]:
     """Split claimable rows into those allowed to send now and those held.
 
     Rows are returned in their original order so the queue stays first-in
@@ -131,12 +178,20 @@ async def select_sendable(db, campaign_id: int, rows: list) -> tuple[list, list[
         by_id[row["id"]] = mail_host(row["email"] or "")
     proven = await proven_hosts(db, by_id.values())
     history = await _host_history(db, campaign_id)
+    recently_mailed = await _mailed_by_teammates(db, rows, sender_id)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=grace_minutes())
 
     sendable: list = []
     held: list[dict[str, Any]] = []
     probing: set[str] = set()
     for row in rows:
+        # The club sends as individual members, so nothing downstream would
+        # notice two of them writing to the same person. The recipient would.
+        teammate = recently_mailed.get((row["email"] or "").strip().lower())
+        if teammate:
+            held.append({"row": row, "host": by_id.get(row["id"]) or "",
+                         "reason": HELD_TEAMMATE_SENT, "teammate": teammate})
+            continue
         host = by_id.get(row["id"]) or ""
         if not host or host in proven:
             sendable.append(row)
@@ -171,9 +226,16 @@ def describe_hold(held: list[dict[str, Any]]) -> str:
     """One line a member can act on, or empty when nothing is held."""
     if not held:
         return ""
+    teammates = sorted({h.get("teammate") or "a teammate" for h in held if h["reason"] == HELD_TEAMMATE_SENT})
     bounced = sorted({h["host"] for h in held if h["reason"] == HELD_PROBE_BOUNCED})
     waiting = sorted({h["host"] for h in held if h["reason"] == HELD_PROBE_IN_FLIGHT})
     parts: list[str] = []
+    if teammates:
+        held_n = sum(1 for h in held if h["reason"] == HELD_TEAMMATE_SENT)
+        parts.append(
+            f"{held_n} recipient(s) held: {', '.join(teammates)} already wrote to them in the last "
+            f"{teammate_quiet_days()} days. Remove them, or ask who is further along."
+        )
     if bounced:
         parts.append(
             f"{len(held)} email(s) held: the first address to {', '.join(bounced)} bounced, "
