@@ -265,7 +265,14 @@ export default function CompanyRegister() {
                   })}
                 />
                 <div className="min-w-0">
-                <div className="font-medium text-deep-navy">{item.company_name}</div>
+                <div className="font-medium text-deep-navy">
+                  {item.company_name}
+                  {item.claimed_by && (
+                    <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+                      {item.claimed_by} is on this
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-500">
                   {[item.sector_label, item.region,
                     item.last_event_amount ? `raised ${money(item.last_event_amount)}${item.last_event_at ? ` · ${item.last_event_at}` : ''}` : null,

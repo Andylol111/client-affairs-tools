@@ -75,6 +75,7 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
     )
     rows = [row_to_dict(r) for r in await cur.fetchall()]
     created = updated = skipped = 0
+    held_by: dict[str, int] = {}
     contact_ids: list[int] = []
     for pr in rows:
         pr["mailbox_assessment"] = await assess_address(pr.get("email") or "", actor_id=user_id)
@@ -113,9 +114,16 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
         if not email or not is_valid_person_contact(row, company_name=company, domain=domain):
             skipped += 1
             continue
-        ex = await (await db.execute("SELECT id, owner_id FROM contacts WHERE email = ?", (email,))).fetchone()
+        ex = await (await db.execute(
+            """SELECT c.id, c.owner_id, COALESCE(u.name, u.email) AS owner
+               FROM contacts c LEFT JOIN users u ON u.id = c.owner_id
+               WHERE c.email = ?""", (email,))).fetchone()
         if ex:
             if ex["owner_id"] is not None and int(ex["owner_id"]) != user_id:
+                # Silently dropping these is how two members discover each
+                # other from a client. Count them by owner so the caller can
+                # say who to ask.
+                held_by[ex["owner"] or "another member"] = held_by.get(ex["owner"] or "another member", 0) + 1
                 skipped += 1
                 continue
             await db.execute(
@@ -186,4 +194,9 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
         "skipped": skipped,
         "contact_ids": contact_ids,
         "evidence": evidence_rows,
+        # Who to ask, rather than an unexplained smaller number.
+        "held_by": held_by,
+        "held_by_note": "; ".join(
+            f"{count} already worked by {owner}" for owner, count in sorted(held_by.items())
+        ),
     }

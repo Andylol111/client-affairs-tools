@@ -172,7 +172,63 @@ def target_list_from_register_tests() -> None:
         asyncio.run(scenario())
 
 
+def company_claim_tests() -> None:
+    """Two members of one society working the same company, each unaware, is
+    the failure a client notices. Before this there was no record of who was
+    on what - a contact owned by someone else was dropped from an import with
+    no name attached."""
+    from app.services.company_claims import (
+        claim_company, claims_for, company_key, release_company,
+    )
+
+    # One company, several spellings, one key. The register holds all three.
+    assert (company_key("The Walt Disney Company", "disney.com")
+            == company_key("Walt Disney Co", "www.disney.com")
+            == company_key("Disney (Studios)", "https://disney.com/about"))
+    # Without a domain, the legal form is not identity.
+    assert company_key("The Walt Disney Company, Inc.") == company_key("Walt Disney")
+    assert company_key("") == "n:"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["DATABASE_URL"] = "sqlite:///" + tmp + "/claims.db"
+
+        async def scenario() -> None:
+            await init_db()
+            db = await get_db()
+            await db.execute(
+                """INSERT INTO users(id,email,name,role,is_active)
+                   VALUES (1,'andre@yale.edu','Andre','admin',1),
+                          (2,'aaron@yale.edu','Aaron','standard',1)""")
+            await db.commit()
+            await db.close()
+
+            first = await claim_company(1, "Cheekwood Botanical Garden", "cheekwood.org")
+            assert first["held_by_other"] is False
+
+            # The second member is told who, not refused: they may have a
+            # reason, and the point is that they find out now.
+            second = await claim_company(2, "Cheekwood Botanical Garden", "cheekwood.org")
+            assert second["held_by_other"] is True and second["member"] == "Andre"
+
+            # The holder returning to their own company is not a collision.
+            assert (await claim_company(1, "Cheekwood", "cheekwood.org"))["held_by_other"] is False
+
+            found = await claims_for([
+                {"company_name": "Cheekwood Botanical Garden", "company_domain": "cheekwood.org"},
+                {"company_name": "Nobody Ltd"},
+            ])
+            assert list(found) == ["d:cheekwood.org"], found
+
+            # Only the holder may hand it back.
+            assert await release_company(2, "Cheekwood", "cheekwood.org") is False
+            assert await release_company(1, "Cheekwood", "cheekwood.org") is True
+            assert (await claim_company(2, "Cheekwood", "cheekwood.org"))["held_by_other"] is False
+
+        asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     tests()
     target_list_from_register_tests()
+    company_claim_tests()
     print("register loader: ok")

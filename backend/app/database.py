@@ -752,6 +752,25 @@ async def init_db():
         """)
         await db.commit()
 
+        # Two members working the same company is the failure a club notices:
+        # the recipient sees two cold emails from the same society in a week.
+        # A claim is a soft signal, not a lock - it says who is on this
+        # company so the other person can ask, and it goes stale on its own
+        # rather than needing anyone to remember to release it.
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS company_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_key TEXT NOT NULL UNIQUE,
+                company_name TEXT NOT NULL,
+                member_id INTEGER NOT NULL REFERENCES users(id),
+                claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                released_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_company_claims_member ON company_claims(member_id);
+        """)
+        await db.commit()
+
         # Databases created before the column existed. Must run after the
         # register tables above, or the ALTER hits a table that is not there
         # yet, the exception is swallowed, and a fresh database silently

@@ -164,7 +164,15 @@ async def start_outreach_flow(
         flow_id = int(cur.lastrowid)
     finally:
         await db.close()
-    return await get_flow(flow_id, user_id)
+    # Starting work on a company is the moment worth recording, and the moment
+    # the member should learn a colleague is already on it - not after a week.
+    from app.services.company_claims import claim_company
+
+    claim = await claim_company(user_id, company, company_domain)
+    result = await get_flow(flow_id, user_id)
+    if result is not None and claim.get("held_by_other"):
+        result["claimed_by"] = claim["member"]
+    return result
 
 
 async def get_flow(flow_id: int, user_id: int) -> dict[str, Any] | None:
@@ -363,9 +371,15 @@ async def _advance(flow_id: int, lease_token: str) -> None:
                         "want - the person who would run the project.")
             return
         campaign_id = await _create_campaign(user_id, flow["company_name"])
+        # A smaller number than expected has a reason, and the reason is a
+        # person the member can go and ask.
+        held_note = result.get("held_by_note") or ""
+        progress = f"Drafting {len(contact_ids)} email(s)…"
+        if held_note:
+            progress = f"{progress} ({held_note})"
         ok = await _update(flow_id, lease_token, status="drafting", campaign_id=campaign_id,
                            imported_count=len(contact_ids), drafted_count=0,
-                           progress_message=f"Drafting {len(contact_ids)} email(s)…")
+                           progress_message=progress)
         if not ok:
             return
         flow.update(status="drafting", campaign_id=campaign_id, imported_count=len(contact_ids), drafted_count=0)

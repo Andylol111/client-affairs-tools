@@ -217,12 +217,59 @@ async def one_held_company_does_not_stall_another() -> None:
         assert result["held"] == 2
 
 
+async def a_teammate_who_already_wrote_blocks_a_second_email() -> None:
+    """Two members of one society writing to the same person in the same week
+    is the failure a client actually notices. Nothing downstream would catch
+    it: the club sends as individuals, so each member's queue looks clean."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["DATABASE_URL"] = "sqlite:///" + tmp + "/teammate.db"
+        await init_db()
+        db = await get_db()
+        await _seed(db, people=2)
+        await db.execute("INSERT INTO users(id,email,name,role,is_active) VALUES (2,'aaron@yale.edu','Aaron',       'standard',1)")
+        # Aaron wrote to person1 last week, from his own campaign.
+        await db.execute(
+            "INSERT INTO campaigns(id,name,status,owner_user_id,sender_user_id) VALUES (2,'Aaron run','sent',2,2)")
+        await db.execute(
+            """INSERT INTO campaign_contacts(campaign_id,contact_id,email_subject,email_body,status,sent_at,sent_by_user_id)
+               VALUES (2,1,'s','b','sent',datetime('now','-7 days'),2)""")
+        # acme.com is proven, so nothing else can explain a hold.
+        await db.execute(
+            """INSERT INTO company_email_patterns(company_domain,pattern_key,pattern_template,
+                   confidence,sample_count,verified_samples,sources_json)
+               VALUES ('acme.com','first.last','{first}.{last}',0.9,3,2,'["gmail_reply"]')""")
+        await db.commit()
+        await db.close()
+
+        sent: list[str] = []
+        result = await _drain(sent)
+        assert sent == ["person2@acme.com"], sent
+        assert result["held"] == 1, result
+        assert "Aaron already wrote to them" in result["hold_reason"], result["hold_reason"]
+        # A colleague writing to a different person at the same company is
+        # fine and often deliberate, so person2 went.
+
+        # And the block is on teammates, not on the member's own history: a
+        # follow-up campaign to someone you wrote to yourself must still send.
+        db = await get_db()
+        await db.execute("UPDATE campaign_contacts SET sent_by_user_id = 1 WHERE campaign_id = 2")
+        await db.execute("UPDATE campaign_contacts SET status='pending', sent_at=NULL WHERE campaign_id = 1")
+        await db.execute("UPDATE campaigns SET status='releasing' WHERE id=1")
+        await db.commit()
+        await db.close()
+        sent2: list[str] = []
+        again = await _drain(sent2)
+        assert sorted(sent2) == ["person1@acme.com", "person2@acme.com"], sent2
+        assert again["held"] == 0
+
+
 def tests() -> None:
     asyncio.run(one_probe_then_the_rest())
     asyncio.run(a_bounced_probe_stops_the_company())
     asyncio.run(a_proven_company_is_never_throttled())
     asyncio.run(a_member_stated_format_counts_as_proof())
     asyncio.run(one_held_company_does_not_stall_another())
+    asyncio.run(a_teammate_who_already_wrote_blocks_a_second_email())
 
 
 if __name__ == "__main__":
