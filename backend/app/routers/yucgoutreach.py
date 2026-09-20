@@ -3,7 +3,11 @@ YUCGoutreach company discovery: SQL-backed runs, parallel enrichment, Excel expo
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import os
+from hmac import compare_digest
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -141,6 +145,55 @@ async def register_stats(user: dict = Depends(get_current_user)):
     from app.services.company_register import register_summary
 
     return await register_summary()
+
+
+class RegisterLoad(BaseModel):
+    """One batch from an off-box loader."""
+
+    source: str
+    batch: str
+    companies: list[dict[str, Any]] = []
+    people: dict[str, list[dict[str, Any]]] = {}
+    done: bool = False
+
+
+@router.post("/register/load")
+async def load_register(payload: RegisterLoad, request: Request):
+    """Accept register rows parsed on another machine.
+
+    The bulk sources are large - the Companies House file is 2.8 GB
+    uncompressed and a year of IRS 990 filings is about 1.5 GB across sixteen
+    archives - and parsing them competes with serving the site on a t3.small.
+    This lets a second machine do the downloading and parsing and post the
+    result, while the SQLite file here stays the only thing members read.
+
+    Off by default: with no REGISTER_LOADER_TOKEN set, the endpoint refuses
+    everything, so it adds no reachable surface until it is deliberately
+    turned on.
+    """
+    from app.services.company_register import _attach_people, _record_ingest, upsert_companies
+
+    expected = (os.getenv("REGISTER_LOADER_TOKEN") or "").strip()
+    if not expected:
+        raise HTTPException(404, "Not found")
+    offered = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if not compare_digest(offered, expected):
+        raise HTTPException(401, "Loader token is not valid")
+    if not payload.source or not payload.batch:
+        raise HTTPException(422, "A source and batch are required")
+
+    written = await upsert_companies(payload.companies) if payload.companies else 0
+    attached = 0
+    if payload.people:
+        attached = await _attach_people({
+            (payload.source, key): rows for key, rows in payload.people.items() if rows
+        })
+    # Only the final call records the batch, so a run that dies halfway is not
+    # remembered as complete and the loader repeats it next time.
+    if payload.done:
+        await _record_ingest(payload.source, payload.batch, len(payload.companies), written, "ok",
+                             f"loaded off-box, {attached} people")
+    return {"ok": True, "written": written, "people": attached}
 
 
 @router.get("/register/{register_id}/people")

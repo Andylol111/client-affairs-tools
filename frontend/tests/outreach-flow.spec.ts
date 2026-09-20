@@ -60,7 +60,7 @@ async function mockFlow(page: Page) {
 
 test('one click starts the flow and the tracker hands off to Review & release', async ({ page }) => {
   const mutations = await mockFlow(page);
-  await page.goto('/scraper');
+  await page.goto('/scraper?view=company');
 
   await page.getByLabel('Company', { exact: true }).fill('Acme Corp');
   await page.getByLabel('Titles to prioritize').fill('VPs');
@@ -90,7 +90,7 @@ test('one click starts the flow and the tracker hands off to Review & release', 
 
 test('role bubbles translate asked roles into the company vocabulary and fill the titles field', async ({ page }) => {
   await mockFlow(page);
-  await page.goto('/scraper');
+  await page.goto('/scraper?view=company');
 
   await page.getByLabel('Company', { exact: true }).fill('OpenAI');
   const bubbles = page.getByTestId('role-suggestions');
@@ -114,7 +114,7 @@ test('a malformed role-suggestions payload never breaks the Find people page', a
   // deploy) must degrade to no chips, not white-screen the form.
   await mockFlow(page);
   await page.route('**/api/yucgoutreach/role-suggestions*', route => route.fulfill({ json: {} }));
-  await page.goto('/scraper');
+  await page.goto('/scraper?view=company');
   await page.getByLabel('Company', { exact: true }).fill('OpenAI');
   await page.getByLabel('Titles to prioritize').fill('PMs');
   await expect(page.getByTestId('outreach-this-company')).toBeEnabled();

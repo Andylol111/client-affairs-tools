@@ -318,25 +318,6 @@ function CoordinatorPanel() {
     }
   };
 
-  const exportShortlist = async () => {
-    const indices =
-      selectedRows.size > 0
-        ? [...selectedRows]
-        : recommendations.map((r) => r.verifiability.row_index);
-    if (indices.length === 0) {
-      setBoardError('Select companies or run a recommendation first.');
-      return;
-    }
-    setExporting(true);
-    setBoardError(null);
-    try {
-      await api.yucg.exportShortlist(indices);
-    } catch (e) {
-      setBoardError(e instanceof Error ? e.message : 'Export failed');
-    } finally {
-      setExporting(false);
-    }
-  };
 
   const contactChipClass = (type: string, emphasized: boolean) => {
     const active = contactType === type;
@@ -568,19 +549,17 @@ function CoordinatorPanel() {
           <button
             type="button"
             disabled={exporting}
-            onClick={exportShortlist}
-            className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
-          >
-            {exporting ? 'Exporting…' : 'Export shortlist'}
-          </button>
-          <button
-            type="button"
-            disabled={exporting}
             onClick={createWeekSlate}
             className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
           >
             Create target list
           </button>
+          <Link
+            to="/scraper?view=register"
+            className="text-sm font-semibold text-steel-blue hover:underline"
+          >
+            Browse all 214k companies →
+          </Link>
         </div>
         {recommendError && (
           <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{recommendError}</div>

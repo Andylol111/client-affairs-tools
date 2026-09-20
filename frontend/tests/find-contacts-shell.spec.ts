@@ -58,13 +58,18 @@ async function mockPage(page: Page) {
 
 test('Find contacts offers two surfaces and reaches the public register from the company field', async ({ page }) => {
   const { registerQueries, aiCalls } = await mockPage(page);
+
+  // Find contacts opens on the company index, because choosing a company is
+  // the step before looking for people at it.
   await page.goto('/scraper');
+  await expect(page.getByRole('tab', { name: 'Companies' })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tab', { name: 'Find people' }).click();
 
   // Two doors, not four. Looking up one person and reading email formats are
   // steps inside company work, not destinations of their own.
   await expect(page.getByRole('tab')).toHaveCount(2);
   await expect(page.getByRole('tab', { name: 'Find people' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Company register' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Companies' })).toBeVisible();
 
   // Both folded sections are present on the Find people surface, collapsed.
   const onePerson = page.getByRole('group').filter({ hasText: 'Look up one named person' });
@@ -93,7 +98,7 @@ test('Find contacts offers two surfaces and reaches the public register from the
 
 test('a one-character company does not query the register', async ({ page }) => {
   const { registerQueries } = await mockPage(page);
-  await page.goto('/scraper');
+  await page.goto('/scraper?view=company');
   await page.getByLabel('Company', { exact: true }).fill('a');
   await page.waitForTimeout(600);
   expect(registerQueries).toEqual([]);

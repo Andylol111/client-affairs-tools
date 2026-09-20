@@ -128,7 +128,7 @@ export type CompanySummaryRow = {
 export type RegisterCompany = {
   id: number;
   source: string;
-  tier: 'us_public' | 'us_private' | 'us_employer' | 'us_nonprofit' | 'uk';
+  tier: 'us_public' | 'us_private' | 'us_employer' | 'us_nonprofit' | 'uk' | 'club_targets';
   country: string;
   company_name: string;
   company_domain?: string | null;
@@ -141,7 +141,7 @@ export type RegisterCompany = {
   last_event_amount?: number | null;
   last_event_kind?: string | null;
   officer_count: number;
-  metadata?: { revenue_range?: string | null; ticker?: string | null; city?: string | null; year_of_inc?: string | null; size_band?: string | null; account_category?: string | null; incorporated?: string | null; buys_outside_advice?: string | null };
+  metadata?: { revenue_range?: string | null; ticker?: string | null; city?: string | null; year_of_inc?: string | null; size_band?: string | null; account_category?: string | null; incorporated?: string | null; buys_outside_advice?: string | null; why_attractive?: string | null; target_role_title?: string | null; first_message_angle?: string | null; yale_hook?: string | null };
 };
 export type RegisterSummary = {
   tiers: { tier: string; country: string; n: number; with_officers: number }[];
@@ -1302,7 +1302,7 @@ export const api = {
     },
     listReleases: () => fetchApi<Release[]>('/api/yucg/releases'),
     getRelease: (id: number) => fetchApi<Release>(`/api/yucg/releases/${id}`),
-    createRelease: (data: { name: string; row_indexes: number[]; notes?: string }) =>
+    createRelease: (data: { name: string; row_indexes?: number[]; register_ids?: number[]; notes?: string }) =>
       fetchApi<{ id: number; status: string; targets: number }>('/api/yucg/releases', {
         method: 'POST',
         body: JSON.stringify(data),
