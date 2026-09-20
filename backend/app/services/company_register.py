@@ -1167,10 +1167,12 @@ async def drain_company_register() -> dict[str, Any]:
     result: dict[str, Any] = {"ok": True}
     # The club's own curated list first: it is small, it is the highest-intent
     # pool, and re-reading it keeps the register in step with sheet edits.
+    # Unlike the bulk sources this is a local file of a few hundred rows, so
+    # it runs inline and the pass continues - returning here would mean a
+    # scheduler tick never reached the sources that actually need one.
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if not await _already_ingested("club_sheet", today):
         result["club_targets"] = await ingest_club_targets()
-        return result
     if not await _already_ingested("sec_public", month):
         result["sec_public"] = await ingest_sec_public()
         return result
