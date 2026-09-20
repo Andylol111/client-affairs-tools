@@ -201,6 +201,42 @@ async def upsert_companies(rows: Iterable[dict[str, Any]]) -> int:
     return written
 
 
+# Who actually reads a cold email is not who a filing names. A statutory
+# filing lists the people the law requires - the board above all - so the
+# register is an index of companies and of doors into them, not of the people
+# who would run a project. These four levels let the app say which it is
+# holding, and specifically keep a Form 990 "Director" (a board seat) apart
+# from a "Director of Operations" (a job).
+_BOARD_TITLE = re.compile(
+    r"\b(trustee|board member|board of directors|chair(man|person|woman)?|vice chair|governor|"
+    r"regent|overseer|incorporator)\b|^director$|^member$|^board\b", re.I)
+_WORKING_TITLE = re.compile(
+    r"\b(vice president|vp|svp|evp|avp|manager|managing|head of|director of|lead|"
+    r"associate|analyst|coordinator|specialist|partner|principal of)\b", re.I)
+_EXEC_TITLE = re.compile(
+    r"\b(ceo|cfo|coo|cto|cio|cmo|chro|chief|president|executive director|treasurer|"
+    r"secretary|general counsel|executive officer|head of school|superintendent)\b", re.I)
+
+
+def classify_person_level(title: str | None) -> str:
+    """board | executive | working | unknown.
+
+    Order matters. A working phrase is checked before the board pattern so
+    "Director of Finance" is a job, while a bare "Director" falls through to
+    the board rule - which is what a 990 means by it 97,292 times over.
+    """
+    text = (title or "").strip()
+    if not text:
+        return "unknown"
+    if _WORKING_TITLE.search(text) and not _BOARD_TITLE.match(text):
+        return "working"
+    if _EXEC_TITLE.search(text):
+        return "executive"
+    if _BOARD_TITLE.search(text):
+        return "board"
+    return "unknown"
+
+
 async def _attach_people(people_by_key: dict[tuple[str, str], list[dict[str, Any]]]) -> int:
     if not people_by_key:
         return 0
@@ -216,13 +252,16 @@ async def _attach_people(people_by_key: dict[tuple[str, str], list[dict[str, Any
             register_id = int(row["id"])
             for person in people:
                 await db.execute(
-                    """INSERT INTO company_register_people (register_id, full_name, relationship, observed_at, source_url)
-                       VALUES (?, ?, ?, ?, ?)
+                    """INSERT INTO company_register_people
+                           (register_id, full_name, relationship, observed_at, source_url, person_level)
+                       VALUES (?, ?, ?, ?, ?, ?)
                        ON CONFLICT(register_id, full_name) DO UPDATE SET
                          relationship=COALESCE(excluded.relationship, company_register_people.relationship),
+                         person_level=COALESCE(excluded.person_level, company_register_people.person_level),
                          observed_at=MAX(COALESCE(excluded.observed_at, ''), COALESCE(company_register_people.observed_at, ''))""",
                     (register_id, person["full_name"], person.get("relationship"),
-                     person.get("observed_at"), person.get("source_url")),
+                     person.get("observed_at"), person.get("source_url"),
+                     classify_person_level(person.get("relationship"))),
                 )
                 attached += 1
             await db.execute(
@@ -1254,7 +1293,10 @@ async def search_register(
     try:
         total = await (await db.execute(f"SELECT COUNT(*) AS n FROM company_register {clause}", tuple(args))).fetchone()
         rows = await (await db.execute(
-            f"""SELECT * FROM company_register {clause}
+            f"""SELECT r.*,
+                       (SELECT COUNT(*) FROM company_register_people p
+                         WHERE p.register_id = r.id AND p.person_level = 'working') AS working_count
+                FROM company_register r {clause}
                 ORDER BY COALESCE(last_event_at, '') DESC, COALESCE(last_event_amount, 0) DESC,
                          officer_count DESC, company_name
                 LIMIT ? OFFSET ?""",
