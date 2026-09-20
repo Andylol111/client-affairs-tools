@@ -125,6 +125,21 @@ export type CompanySummaryRow = {
   queued_count?: number;
 };
 
+export type FollowUpScheduleRow = {
+  campaign_contact_id: number;
+  contact_name?: string | null;
+  email: string;
+  company?: string | null;
+  campaign_id: number;
+  campaign_name?: string | null;
+  campaign_status?: string | null;
+  sequence_name?: string | null;
+  next_subject?: string | null;
+  due_on?: string | null;
+  overdue?: boolean;
+  reason?: string | null;
+};
+
 export type RegisterCompany = {
   id: number;
   source: string;
@@ -1137,6 +1152,10 @@ export const api = {
       create: (data: { name: string; subject: string; body: string; industry?: string; use_case?: string }) =>
         fetchApi<unknown>('/api/outreach/templates', { method: 'POST', body: JSON.stringify(data) }),
       delete: (id: number) => fetchApi<unknown>(`/api/outreach/templates/${id}`, { method: 'DELETE' }),
+    },
+    followUps: {
+      schedule: () => fetchApi<{ scheduled: FollowUpScheduleRow[]; stopped: FollowUpScheduleRow[] }>(
+        '/api/outreach/follow-ups/schedule'),
     },
     sequences: {
       list: () => fetchApi<Sequence[]>('/api/outreach/sequences'),

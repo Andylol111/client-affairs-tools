@@ -3,6 +3,7 @@ Outreach API - Pipeline, notes, activities, templates, sequences, profile analys
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from app.database import get_db, row_to_dict
 from app.auth_deps import get_current_user, get_current_user_optional
@@ -256,6 +257,79 @@ async def list_sequences(user: dict = Depends(get_current_user_optional)):
             )
             s["steps"] = [dict(r) for r in await cursor.fetchall()]
         return seqs
+    finally:
+        await db.close()
+
+
+@router.get("/follow-ups/schedule")
+async def follow_up_schedule(user: dict = Depends(get_current_user)):
+    """What is queued to go out, and what stopped.
+
+    A sequence runs unattended once a campaign is released, and until now
+    there was nowhere to see it: the member could define steps and could read
+    the campaign, but could not answer "who hears from us tomorrow". That is
+    the question worth a screen.
+
+    Everything here is derived from the same rows the job reads, so the view
+    cannot drift from what will actually happen.
+    """
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            """SELECT cc.id AS campaign_contact_id,
+                      cc.sequence_step_sent AS step_index,
+                      cc.last_sequence_sent_at,
+                      cc.replied_at,
+                      cc.status,
+                      c.name AS contact_name, c.email, c.company,
+                      camp.id AS campaign_id, camp.name AS campaign_name, camp.status AS campaign_status,
+                      seq.name AS sequence_name,
+                      d.subject AS next_subject, d.delay_days, d.state AS dispatch_state
+               FROM campaign_contacts cc
+               JOIN campaigns camp ON camp.id = cc.campaign_id
+               JOIN contacts c ON c.id = cc.contact_id
+               JOIN follow_up_sequences seq ON seq.id = camp.sequence_id
+               LEFT JOIN outreach_dispatches d
+                      ON d.dispatch_key = 'followup:' || cc.id || ':' || cc.sequence_step_sent
+               WHERE camp.sequence_id IS NOT NULL
+                 AND cc.sent_at IS NOT NULL
+                 AND camp.sender_user_id = ?
+               ORDER BY cc.last_sequence_sent_at""",
+            (user["id"],),
+        )).fetchall()
+
+        scheduled: list[dict] = []
+        stopped: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            if item.get("replied_at"):
+                item["reason"] = "They replied"
+                stopped.append(item)
+                continue
+            if item.get("status") == "bounced":
+                item["reason"] = "The address bounced"
+                stopped.append(item)
+                continue
+            if not item.get("next_subject"):
+                item["reason"] = "No further steps in the sequence"
+                stopped.append(item)
+                continue
+            # The job only looks at campaigns still marked sent, so anything
+            # else is paused whether or not the member realises it.
+            if item.get("campaign_status") != "sent":
+                item["reason"] = f"The campaign is {item['campaign_status']}, so follow-ups are paused"
+                stopped.append(item)
+                continue
+            last = str(item.get("last_sequence_sent_at") or "")[:10]
+            try:
+                due = (datetime.fromisoformat(last) + timedelta(days=int(item.get("delay_days") or 0))).date()
+                item["due_on"] = due.isoformat()
+                item["overdue"] = due < datetime.now(timezone.utc).date()
+            except ValueError:
+                item["due_on"] = None
+                item["overdue"] = False
+            scheduled.append(item)
+        return {"scheduled": scheduled, "stopped": stopped}
     finally:
         await db.close()
 
