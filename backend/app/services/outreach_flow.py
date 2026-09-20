@@ -43,6 +43,64 @@ def _campaign_name(company: str) -> str:
     return f"{company.strip()} — {datetime.utcnow():%b %d}"[:200]
 
 
+async def _recorded_target_role(company: str) -> str | None:
+    """The role the club already decided to aim at for this company, if any.
+
+    Curated register rows carry target_role_title - "Head of Acquisitions",
+    "VP Strategic Partnerships" - which is exactly the hint discovery needs
+    and exactly what a member would otherwise retype from memory.
+    """
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            """SELECT metadata_json FROM company_register
+               WHERE lower(company_name) = lower(?) AND metadata_json IS NOT NULL
+               ORDER BY CASE tier WHEN 'club_targets' THEN 0 ELSE 1 END LIMIT 1""",
+            (company,),
+        )).fetchone()
+    finally:
+        await db.close()
+    if not row:
+        return None
+    try:
+        meta = json.loads(row["metadata_json"] or "{}")
+    except (TypeError, ValueError):
+        return None
+    role = (meta.get("target_role_title") or "").strip()
+    return role[:500] or None
+
+
+async def _drop_board_only(contact_ids: list[int]) -> tuple[list[int], list[str]]:
+    """Keep the people who would read the email; report the board seats.
+
+    Returns (keepers, board names). A contact with no title is kept: discovery
+    found them by searching for a role, so an unlabelled row is far more
+    likely to be a working person than a trustee, and dropping it would throw
+    away real contacts to avoid a rare one.
+    """
+    if not contact_ids:
+        return [], []
+    from app.services.company_register import classify_person_level
+
+    placeholders = ",".join("?" * len(contact_ids))
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            f"SELECT id, name, title FROM contacts WHERE id IN ({placeholders})",
+            [int(i) for i in contact_ids],
+        )).fetchall()
+    finally:
+        await db.close()
+    level_by_id = {
+        int(row["id"]): classify_person_level(row["title"]) for row in rows
+    }
+    names = {int(row["id"]): (row["name"] or row["title"] or "someone") for row in rows}
+    keepers = [cid for cid in contact_ids if level_by_id.get(int(cid), "unknown") != "board"]
+    board = [names.get(int(cid), "someone") for cid in contact_ids
+             if level_by_id.get(int(cid)) == "board"]
+    return keepers, board
+
+
 async def start_outreach_flow(
     *,
     user_id: int,
@@ -62,6 +120,12 @@ async def start_outreach_flow(
     if not company:
         raise HTTPException(400, "Company name is required")
     max_contacts = max(1, min(int(max_contacts or 25), 200))
+    # Discovery is only as good as the titles it is told to look for, and the
+    # register often already knows: the club wrote down who to aim at, and the
+    # filings say whether anyone at working level has ever been named here.
+    # Using that when the member typed nothing is the difference between
+    # finding a VP and finding the board.
+    title_hints = (title_hints or "").strip() or await _recorded_target_role(company)
     db = await get_db()
     try:
         await begin_write(db)
@@ -283,6 +347,20 @@ async def _advance(flow_id: int, lease_token: str) -> None:
         if not contact_ids:
             await _fail(flow_id, lease_token,
                         f"No usable people found. {run.get('progress_message') or ''}".strip())
+            return
+        # A board seat is not a reader. Statutory filings name the board first
+        # - on the live register 58.7% of named people are directors or
+        # trustees and only 26.2% of companies have anyone at working level -
+        # so a run that surfaced nothing but a board is a search that has not
+        # finished, not a campaign that is ready. Executives count: at a
+        # 50-person nonprofit the executive director is the right target.
+        contact_ids, board_only = await _drop_board_only(contact_ids)
+        if not contact_ids:
+            await _fail(flow_id, lease_token,
+                        f"Everyone found at {flow['company_name']} sits on the board "
+                        f"({', '.join(board_only[:3])}{'…' if len(board_only) > 3 else ''}). "
+                        "They are a way in, not a recipient. Search again with the role you "
+                        "want - the person who would run the project.")
             return
         campaign_id = await _create_campaign(user_id, flow["company_name"])
         ok = await _update(flow_id, lease_token, status="drafting", campaign_id=campaign_id,

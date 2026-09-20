@@ -182,6 +182,63 @@ def tests() -> None:
         del os.environ['DRAFTS_PER_MEMBER_PER_HOUR']
 
 
+def board_only_gate_tests() -> None:
+    """A run that surfaced only board seats is an unfinished search, not a
+    campaign. On the live register 58.7% of named people are directors or
+    trustees, and only 26.2% of companies with filed officers have anyone at
+    working level - so this is the common case, not an edge one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DATABASE_URL'] = f'sqlite:///{Path(tmp) / "gate.db"}'
+        for mod in [m for m in list(sys.modules) if m.startswith('app.')]:
+            del sys.modules[mod]
+        from app.database import get_db, init_db
+        from app.services import outreach_flow
+
+        async def scenario() -> None:
+            await init_db()
+            db = await get_db()
+            await db.execute("INSERT INTO users(id,email,role,is_active) VALUES (1,'me@yale.edu','standard',1)")
+            people = [
+                (1, 'Ada Lovelace', 'ada@acme.com', 'Trustee'),
+                (2, 'Grace Hopper', 'grace@acme.com', 'Board Member'),
+                (3, 'Alan Turing', 'alan@acme.com', 'Director'),
+                (4, 'Jean Bartik', 'jean@acme.com', 'Director of Operations'),
+                (5, 'Klara Dan', 'klara@acme.com', None),
+            ]
+            for cid, name, email, title in people:
+                await db.execute(
+                    "INSERT INTO contacts(id,name,email,title,owner_id) VALUES (?,?,?,?,1)",
+                    (cid, name, email, title))
+            await db.commit()
+            await db.close()
+
+            # Board seats are dropped and named; the working-level person and
+            # the untitled one survive - discovery searched for a role, so an
+            # unlabelled row is far likelier to be staff than a trustee.
+            keepers, board = await outreach_flow._drop_board_only([1, 2, 3, 4, 5])
+            assert keepers == [4, 5], keepers
+            assert sorted(board) == ['Ada Lovelace', 'Alan Turing', 'Grace Hopper'], board
+
+            # A bare "Director" is a board seat here, which is what a filing
+            # means by it 97,292 times over in the live register.
+            keepers, board = await outreach_flow._drop_board_only([1, 2, 3])
+            assert keepers == [] and len(board) == 3
+
+            # The club already recorded who to aim at, so a member who types
+            # nothing still gets a targeted search rather than a generic one.
+            from app.services.company_register import upsert_companies
+            await upsert_companies([{
+                'source': 'club_sheet', 'source_key': '2', 'tier': 'club_targets',
+                'country': 'US', 'company_name': 'Acme Corp',
+                'metadata': {'target_role_title': 'VP Strategic Partnerships'},
+            }])
+            assert await outreach_flow._recorded_target_role('acme corp') == 'VP Strategic Partnerships'
+            assert await outreach_flow._recorded_target_role('Nobody Ltd') is None
+
+        asyncio.run(scenario())
+
+
 if __name__ == '__main__':
     tests()
+    board_only_gate_tests()
     print('outreach flow: ok')
