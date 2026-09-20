@@ -4,6 +4,7 @@ import { api, type RegisterCompany, type RegisterSummary } from '../../api';
 
 const TIERS: { id: string; label: string; hint: string }[] = [
   { id: '', label: 'All', hint: 'Everything on record' },
+  { id: 'club_targets', label: 'Club target list', hint: 'Companies the club picked and wrote up: why they fit, the Yale connection, the role to aim at' },
   { id: 'us_nonprofit', label: 'Nonprofits that buy advice', hint: 'US nonprofits with $5M+ revenue that already pay outside firms for management, legal or accounting work (IRS Form 990), with the officers they named on the same return' },
   { id: 'us_employer', label: 'US employers', hint: 'US companies that file a benefit plan for their own staff (DOL Form 5500), with the headcount they reported' },
   { id: 'us_private', label: 'Recently funded', hint: 'US companies that filed a Reg D raise — the startup pool' },
@@ -26,7 +27,7 @@ function money(value?: number | null): string {
 export default function CompanyRegister() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
-  const [tier, setTier] = useState('us_private');
+  const [tier, setTier] = useState('club_targets');
   const [sector, setSector] = useState('');
   const [withOfficers, setWithOfficers] = useState(false);
   const [items, setItems] = useState<RegisterCompany[]>([]);
@@ -59,8 +60,8 @@ export default function CompanyRegister() {
           with_officers: withOfficers || undefined,
           limit: 40,
         }, controller.signal);
-        setItems(page.items);
-        setTotal(page.total);
+        setItems(Array.isArray(page?.items) ? page.items : []);
+        setTotal(Number.isFinite(page?.total) ? page.total : 0);
         setError('');
       } catch (e) {
         if (!(e instanceof DOMException && e.name === 'AbortError')) {
@@ -142,14 +143,14 @@ export default function CompanyRegister() {
           the small-company accounts thresholds (Companies House). Free public registers — no paid
           data provider. Pick a company to start Find people there.
         </p>
-        {summary && (
+        {summary && Array.isArray(summary.tiers) && (
           <p className="text-[13px] text-slate-500">
             On record: {(counts.us_public || 0).toLocaleString()} listed ·{' '}
             {(counts.us_employer || 0).toLocaleString()} US employers ·{' '}
             {(counts.us_nonprofit || 0).toLocaleString()} nonprofits that buy advice ·{' '}
             {(counts.us_private || 0).toLocaleString()} recently funded
             {counts.uk ? ` · ${counts.uk.toLocaleString()} UK` : ''} ·{' '}
-            {(summary.tiers.reduce((sum, row) => sum + (row.with_officers || 0), 0)).toLocaleString()} with named officers
+            {((summary.tiers || []).reduce((sum, row) => sum + (row.with_officers || 0), 0)).toLocaleString()} with named officers
           </p>
         )}
       </div>
@@ -272,8 +273,12 @@ export default function CompanyRegister() {
                     item.metadata?.size_band || null,
                     item.metadata?.buys_outside_advice || null,
                     item.metadata?.revenue_range || null,
+                    item.metadata?.target_role_title ? `aim at ${item.metadata.target_role_title}` : null,
                   ].filter(Boolean).join(' · ')}
                 </div>
+                {item.metadata?.why_attractive && (
+                  <p className="mt-1 text-xs text-slate-600 line-clamp-2">{item.metadata.why_attractive}</p>
+                )}
                 {item.officer_count === 0 && (item.tier === 'us_public' || item.tier === 'uk') && (
                   <button
                     type="button"

@@ -16,7 +16,7 @@ const ROWS = [
 async function mockRegister(page: Page) {
   const calls: string[] = [];
   const fetched: string[] = [];
-  const created: any[] = [];
+  const created: Record<string, number[]>[] = [];
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -63,9 +63,14 @@ async function mockRegister(page: Page) {
 test('register browses the free public pool and hands a company to Find people', async ({ page }) => {
   const { calls } = await mockRegister(page);
   await page.goto('/scraper');
-  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('tab', { name: 'Companies' }).click();
 
-  // Defaults to the startup pool and states what is on record.
+  // The index opens on the club's own curated list: judgement first, reach
+  // second.
+  await expect(page.getByRole('button', { name: 'Club target list' })).toBeVisible();
+  await page.getByRole('button', { name: 'Recently funded' }).click();
+
+  // States what is on record across every source.
   await expect(page.getByText('8,031 listed · 84,822 US employers · 26,689 nonprofits that buy advice · 1,563 recently funded · 82,819 UK · 29,492 with named officers')).toBeVisible();
   await expect(page.getByText('Gilgamesh Pharma Inc.')).toBeVisible();
   await expect(page.getByText(/Pharmaceuticals · New York · raised \$15M · 2026-03-27/)).toBeVisible();
@@ -104,7 +109,7 @@ test('register browses the free public pool and hands a company to Find people',
 test('a listed or UK company with no officers on file can be looked up on demand', async ({ page }) => {
   const { fetched } = await mockRegister(page);
   await page.goto('/scraper');
-  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('tab', { name: 'Companies' }).click();
   await page.getByRole('button', { name: 'UK' }).click();
 
   // The bulk Companies House file carries no people, so the row arrives empty
@@ -123,7 +128,7 @@ test('a listed or UK company with no officers on file can be looked up on demand
 test('the US employer tier shows the headcount the company filed, and offers no officer lookup', async ({ page }) => {
   const { fetched } = await mockRegister(page);
   await page.goto('/scraper');
-  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('tab', { name: 'Companies' }).click();
   await page.getByRole('button', { name: 'US employers' }).click();
 
   const row = page.getByRole('listitem').filter({ hasText: 'Wikoff Color Corporation' });
@@ -139,7 +144,7 @@ test('the US employer tier shows the headcount the company filed, and offers no 
 test('the nonprofit tier shows that the organisation already pays for outside advice', async ({ page }) => {
   await mockRegister(page);
   await page.goto('/scraper');
-  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('tab', { name: 'Companies' }).click();
   await page.getByRole('button', { name: 'Nonprofits that buy advice' }).click();
 
   const row = page.getByRole('listitem').filter({ hasText: 'Cheekwood Botanical Garden' });
@@ -155,7 +160,9 @@ test('the nonprofit tier shows that the organisation already pays for outside ad
 test('companies picked in the register become a target list the rest of the app can use', async ({ page }) => {
   const { created } = await mockRegister(page);
   await page.goto('/scraper');
-  await page.getByRole('tab', { name: 'Company register' }).click();
+  await page.getByRole('tab', { name: 'Companies' }).click();
+  await page.getByRole('button', { name: 'Recently funded' }).click();
+  await expect(page.getByText('Gilgamesh Pharma Inc.')).toBeVisible();
 
   // Nothing to act on until something is picked.
   await expect(page.getByRole('button', { name: 'Create target list' })).toHaveCount(0);
