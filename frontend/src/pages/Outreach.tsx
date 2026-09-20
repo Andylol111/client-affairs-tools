@@ -4,6 +4,7 @@ import { api } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
 import PageHeader from '../components/PageHeader';
 import TrackingSync from '../components/TrackingSync';
+import FollowUpSchedule from '../components/outreach/FollowUpSchedule';
 import { useUrlTab } from '../lib/useUrlTab';
 
 const PIPELINE_STATUSES = ['cold', 'contacted', 'replied', 'meeting', 'closed'];
@@ -110,7 +111,7 @@ function CompanyFolder({ company, contacts, outcome, selectedContact, selectedId
 }
 
 export default function Outreach() {
-  const [activeTab, setActiveTab] = useUrlTab<'pipeline' | 'worklists' | 'resources'>(['pipeline', 'worklists', 'resources'], 'pipeline');
+  const [activeTab, setActiveTab] = useUrlTab<'pipeline' | 'worklists' | 'followups' | 'resources'>(['pipeline', 'worklists', 'followups', 'resources'], 'pipeline');
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [mobileStatus, setMobileStatus] = useState('cold');
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -422,6 +423,7 @@ export default function Outreach() {
           tabs={[
             { id: 'pipeline', label: 'Pipeline' },
             { id: 'worklists', label: 'Worklists' },
+            { id: 'followups', label: 'Follow-ups' },
             { id: 'resources', label: 'Email resources' },
           ]}
           active={activeTab}
@@ -430,7 +432,7 @@ export default function Outreach() {
         />
         {activeTab === 'resources' && (
           <p className="app-tab-panel text-sm text-slate-600 dark:text-slate-400">
-            Templates hold reusable copy. Sequences schedule polite follow-ups for contacts who have not replied.
+            Templates hold reusable copy. Follow-up sequences and their schedule have their own tab.
           </p>
         )}
       </div>
@@ -931,83 +933,9 @@ export default function Outreach() {
         </div>
       </div>
 
-      {activeTab === 'resources' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="surface-card rounded-xl p-6 space-y-4">
-            <div>
-              <h3 className="font-semibold text-deep-navy">Templates</h3>
-              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                Reusable copy for first touches and follow-ups. Prefer a few strong templates per
-                industry or use case; refine based on reply rate, not volume.
-              </p>
-            </div>
-            {templates.length > 0 && (
-              <div className="max-h-64 overflow-y-auto border border-pale-sky rounded-lg divide-y divide-pale-sky">
-                {templates.map((t) => (
-                  <div key={t.id} className="p-3 flex justify-between items-center">
-                    <div>
-                      <div className="font-medium text-slate-800">{t.name}</div>
-                      <div className="text-xs text-slate-500">{t.industry || 'General'}</div>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        if (confirm('Delete this template?')) {
-                          try {
-                            await api.outreach.templates.delete(t.id);
-                            setTemplates((prev) => prev.filter((x) => x.id !== t.id));
-                          } catch (e) {
-                            alert((e as Error)?.message);
-                          }
-                        }
-                      }}
-                      className="text-xs text-red-600 hover:underline"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="pt-2 border-t border-pale-sky space-y-3">
-              <p className="text-sm font-medium text-deep-navy">New template</p>
-              <p className="text-xs text-slate-500">
-                Use {'{first}'}, {'{last}'}, {'{company}'}, {'{title}'} for merge fields.
-              </p>
-              <input
-                value={templateForm.name}
-                onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))}
-                placeholder="Template name"
-                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-              />
-              <input
-                value={templateForm.industry}
-                onChange={(e) => setTemplateForm((p) => ({ ...p, industry: e.target.value }))}
-                placeholder="Industry (optional)"
-                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-              />
-              <input
-                value={templateForm.subject}
-                onChange={(e) => setTemplateForm((p) => ({ ...p, subject: e.target.value }))}
-                placeholder="Subject"
-                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-              />
-              <textarea
-                value={templateForm.body}
-                onChange={(e) => setTemplateForm((p) => ({ ...p, body: e.target.value }))}
-                placeholder="Body"
-                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
-                rows={5}
-              />
-              <button
-                onClick={saveTemplate}
-                disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-              >
-                {loading ? 'Saving...' : 'Save template'}
-              </button>
-            </div>
-          </div>
-
+      {activeTab === 'followups' && (
+        <div className="space-y-6">
+          <FollowUpSchedule />
           <div className="surface-card rounded-xl p-6 space-y-4">
             <div>
               <h3 className="font-semibold text-deep-navy">Sequences (follow-ups)</h3>
@@ -1100,6 +1028,86 @@ export default function Outreach() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'resources' && (
+        <div className="grid grid-cols-1 gap-6">
+          <div className="surface-card rounded-xl p-6 space-y-4">
+            <div>
+              <h3 className="font-semibold text-deep-navy">Templates</h3>
+              <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                Reusable copy for first touches and follow-ups. Prefer a few strong templates per
+                industry or use case; refine based on reply rate, not volume.
+              </p>
+            </div>
+            {templates.length > 0 && (
+              <div className="max-h-64 overflow-y-auto border border-pale-sky rounded-lg divide-y divide-pale-sky">
+                {templates.map((t) => (
+                  <div key={t.id} className="p-3 flex justify-between items-center">
+                    <div>
+                      <div className="font-medium text-slate-800">{t.name}</div>
+                      <div className="text-xs text-slate-500">{t.industry || 'General'}</div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (confirm('Delete this template?')) {
+                          try {
+                            await api.outreach.templates.delete(t.id);
+                            setTemplates((prev) => prev.filter((x) => x.id !== t.id));
+                          } catch (e) {
+                            alert((e as Error)?.message);
+                          }
+                        }
+                      }}
+                      className="text-xs text-red-600 hover:underline"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="pt-2 border-t border-pale-sky space-y-3">
+              <p className="text-sm font-medium text-deep-navy">New template</p>
+              <p className="text-xs text-slate-500">
+                Use {'{first}'}, {'{last}'}, {'{company}'}, {'{title}'} for merge fields.
+              </p>
+              <input
+                value={templateForm.name}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Template name"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              <input
+                value={templateForm.industry}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, industry: e.target.value }))}
+                placeholder="Industry (optional)"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              <input
+                value={templateForm.subject}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, subject: e.target.value }))}
+                placeholder="Subject"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+              />
+              <textarea
+                value={templateForm.body}
+                onChange={(e) => setTemplateForm((p) => ({ ...p, body: e.target.value }))}
+                placeholder="Body"
+                className="w-full px-3 py-2 rounded-lg border border-pale-sky"
+                rows={5}
+              />
+              <button
+                onClick={saveTemplate}
+                disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
+                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
+              >
+                {loading ? 'Saving...' : 'Save template'}
+              </button>
+            </div>
+          </div>
+
         </div>
       )}
     </div>
