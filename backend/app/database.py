@@ -729,6 +729,9 @@ async def init_db():
                 register_id INTEGER NOT NULL REFERENCES company_register(id) ON DELETE CASCADE,
                 full_name TEXT NOT NULL,
                 relationship TEXT,
+                -- board | executive | working | unknown. See
+                -- classify_person_level: a filing's "Director" is a board seat.
+                person_level TEXT,
                 observed_at TEXT,
                 source_url TEXT,
                 UNIQUE (register_id, full_name)
@@ -748,6 +751,16 @@ async def init_db():
             );
         """)
         await db.commit()
+
+        # Databases created before the column existed. Must run after the
+        # register tables above, or the ALTER hits a table that is not there
+        # yet, the exception is swallowed, and a fresh database silently
+        # never gets the column.
+        try:
+            await db.execute("ALTER TABLE company_register_people ADD COLUMN person_level TEXT")
+            await db.commit()
+        except Exception:
+            pass
 
         for col, col_type in [
             ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),

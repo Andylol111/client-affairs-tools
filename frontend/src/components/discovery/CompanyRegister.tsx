@@ -289,13 +289,19 @@ export default function CompanyRegister() {
                     {fetching[item.id] ? 'Reading the register…' : 'Look up officers'}
                   </button>
                 )}
+                {item.officer_count > 0 && (item.working_count ?? 0) === 0 && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    Filed officers are board and executive only — nobody at working level.
+                    Find people at this company to reach someone who would run the project.
+                  </p>
+                )}
                 {item.officer_count > 0 && (
                   <button
                     type="button"
                     className="mt-1 text-xs font-medium text-steel-blue hover:underline"
                     onClick={() => void loadPeople(item.id)}
                   >
-                    {people[item.id] ? 'Officers on file:' : `${item.officer_count} officer(s) on file — show`}
+                    {people[item.id] ? 'Officers on file:' : `${item.officer_count} officer(s) on file${(item.working_count ?? 0) > 0 ? `, ${item.working_count} working-level` : ''} — show`}
                   </button>
                 )}
                 {people[item.id] && (

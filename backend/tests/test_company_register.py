@@ -532,6 +532,41 @@ def part_vii_officer_tests() -> None:
     assert parse_part_vii('<Return><Form990PartVIISectionAGrp/></Return>') == ('', [])
 
 
+def person_level_tests() -> None:
+    """A filing names the people the law requires, which is mostly the board.
+    Measured on the live register: 58.7% of 392,190 titled people are
+    directors or trustees and 7.2% hold a working-level role, and only 26.2%
+    of companies with any filed officer have a single working-level person.
+
+    The trap is the word "director". It is the most common title in the
+    register by a distance (97,292), and in a Form 990 it means a board seat.
+    Matching it as a job would mail trustees.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services.company_register import classify_person_level as level
+
+    # Bare board titles, including the one that looks like a job.
+    for title in ('Director', 'Trustee', 'Board Member', 'Chair', 'Vice Chair',
+                  'Member', 'Chairperson', 'Board of Directors'):
+        assert level(title) == 'board', (title, level(title))
+
+    # The same word, qualified, is a job.
+    for title in ('Director of Operations', 'Director of Programs',
+                  'VP Strategic Partnerships', 'Head of Acquisitions',
+                  'Senior Vice President, CFO', 'Vice President',
+                  'Managing Director', 'Head of School'):
+        assert level(title) == 'working', (title, level(title))
+
+    for title in ('CEO', 'Chairman & CEO', 'President', 'Treasurer',
+                  'Executive Officer', 'General Counsel'):
+        assert level(title) == 'executive', (title, level(title))
+
+    # Nothing to go on is said, not guessed.
+    assert level('Signed the plan filing') == 'unknown'
+    assert level('') == 'unknown'
+    assert level(None) == 'unknown'
+
+
 if __name__ == '__main__':
     tests()
     uk_tests()
@@ -539,4 +574,5 @@ if __name__ == '__main__':
     form_5500_tests()
     nonprofit_buyer_tests()
     part_vii_officer_tests()
+    person_level_tests()
     print('company register: ok')
