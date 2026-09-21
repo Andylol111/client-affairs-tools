@@ -15,6 +15,23 @@ export type Member = { id: number; email: string; name?: string; role: string; i
 export type LogEntry = { user_id?: number; name?: string; id: number; created_at: string; email?: string; user_email?: string; action?: string; details?: string; ip_address?: string; event_type?: string; resource_type?: string };
 export type ApiKey = { key_prefix?: string; id: number; name: string; scopes?: string; created_at?: string; last_used_at?: string };
 export type StoredObject = { byte_size?: number; source?: string; id: number; kind: string; s3_key: string; bytes?: number; created_at?: string };
+export type TargetListStatus = {
+  row_count: number;
+  source_exists: boolean;
+  source_kind?: string;
+  source_updated_at?: string | null;
+  sectors?: string[];
+  last_upload?: { created_at?: string; details?: string; name?: string; email?: string } | null;
+};
+export type TargetListReplaced = {
+  ok: boolean;
+  companies: number;
+  companies_before: number;
+  register_rows_written?: number;
+  register_rows_dropped?: number;
+  folded_duplicates?: string[];
+  replaced_copy?: string | null;
+};
 export type CustomFormat = { id: number; name: string; pattern: string; priority?: number };
 export type Settings = {
   sign_off_name?: string;
@@ -432,6 +449,19 @@ function getAuthHeaders(): Record<string, string> {
 
 function isParseFailure(e: unknown): boolean {
   return e instanceof SyntaxError || (e instanceof Error && e.name === 'SyntaxError');
+}
+
+/** FastAPI reports a refusal as {"detail": "..."}; keep the reason, not the JSON. */
+export function problemDetail(text: string): string {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === 'object' && 'detail' in parsed && typeof parsed.detail === 'string') {
+      return parsed.detail;
+    }
+  } catch (error) {
+    if (!isParseFailure(error)) throw error;
+  }
+  return text.replace(/\s+/g, ' ').trim().slice(0, 320) || 'Request failed';
 }
 
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -883,6 +913,22 @@ export const api = {
         prefixes: { prefix: string; objects: StoredObject[] }[];
       }>('/api/admin/catalog'),
     loginLog: () => fetchApi<LogEntry[]>('/api/admin/login-log'),
+    targetList: {
+      status: () =>
+        fetchApi<TargetListStatus>('/api/admin/target-list'),
+      replace: (file: File) => {
+        const form = new FormData();
+        form.append('file', file);
+        return fetch(`${API_BASE}/api/admin/target-list`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: form,
+        }).then(async (res): Promise<TargetListReplaced> => {
+          if (!res.ok) throw new Error(problemDetail(await res.text()));
+          return res.json() as Promise<TargetListReplaced>;
+        });
+      },
+    },
     users: {
       list: () => fetchApi<Member[]>('/api/admin/users'),
       invite: (email: string) =>

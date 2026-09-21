@@ -274,6 +274,26 @@ async def _attach_people(people_by_key: dict[tuple[str, str], list[dict[str, Any
     return attached
 
 
+_QUALIFIER = re.compile(r"\s+[—–]\s+(.+)$")
+
+
+def _split_company_qualifier(name: str) -> tuple[str, str | None]:
+    """Separate "McKinsey & Company — New Haven / Public Sector".
+
+    The sheet's company cell sometimes carries the segment to pitch rather
+    than the company's name, and that cell is the search key: Find people
+    would crawl for the whole string and match no website. The qualifier is
+    kept as the row's segment, so nothing a member wrote is lost — only a
+    spaced em or en dash splits, which no company name uses, so
+    "Tweed-New Haven Airport (HVN)" is left exactly as it is.
+    """
+    cleaned = (name or "").strip()
+    match = _QUALIFIER.search(cleaned)
+    if not match:
+        return cleaned, None
+    return cleaned[: match.start()].strip(), match.group(1).strip() or None
+
+
 async def ingest_club_targets() -> dict[str, Any]:
     """Fold the club's own curated target list into the register.
 
@@ -285,8 +305,19 @@ async def ingest_club_targets() -> dict[str, Any]:
     visit.
 
     So the curated rows become a tier like any other, keeping their reasoning
-    in metadata. Re-run freely: rows key on the spreadsheet line, so an edited
-    sheet updates in place rather than duplicating.
+    in metadata. Rows key on the **company and segment**, not the spreadsheet
+    line: an admin who inserts or deletes a row in the middle of the sheet
+    moves every line beneath it, and line-keyed rows would be deleted and
+    recreated under new keys - losing their first-seen date and their register
+    id for half the tier on a one-row edit. Keyed by company, moving a row
+    changes nothing, editing one updates it in place, and deleting one takes
+    it out of the tier, because an admin who can add a target must be able to
+    remove one.
+
+    Two lines for the same company and the same segment are two notes on one
+    target: they become one row holding both write-ups, and the fold is
+    reported rather than done quietly. Lines that differ by segment stay
+    separate, because they are separate pitches.
     """
     from app.services.prospect_coordinator import load_prospects
 
@@ -297,36 +328,91 @@ async def ingest_club_targets() -> dict[str, Any]:
         await _record_ingest("club_sheet", batch, 0, 0, "failed", str(exc)[:200])
         return {"ok": False, "source": "club_sheet", "error": str(exc)[:200]}
 
-    rows: list[dict[str, Any]] = []
+    by_company: dict[str, dict[str, Any]] = {}
+    folded: list[str] = []
+    lines = 0
     for row in prospects:
-        name = _title_case(str(row.get("company") or "").strip())
+        name, segment = _split_company_qualifier(_title_case(str(row.get("company") or "").strip()))
         index = row.get("row_index")
         if not name or index is None:
             continue
+        lines += 1
+        key = _club_key(name, segment)
         score = row.get("incentive_score")
-        rows.append({
+        entry = {
+            # The reasoning is the point of this tier. It is what a member
+            # would otherwise have to rebuild from scratch.
+            "why_attractive": (row.get("why_attractive") or None),
+            "engagement_theme": (row.get("engagement_theme") or None),
+            "yale_hook": (row.get("yale_hook") or None),
+            "target_role_title": (row.get("target_role_title") or row.get("contact_type") or None),
+            "first_message_angle": (row.get("first_message_angle") or None),
+            "priority_score": float(score) if isinstance(score, (int, float)) else None,
+            "segment": segment,
+            # The first sheet line for this company and segment. Later lines
+            # keep their own row_index inside also_listed.
+            "row_index": int(index),
+        }
+        existing = by_company.get(key)
+        if existing:
+            # Two lines naming the same company and the same segment are two
+            # notes on one target, so they become one row carrying both
+            # write-ups - never one reasoning quietly overwriting the other.
+            existing["metadata"].setdefault("also_listed", []).append(entry)
+            # Name the row it merged into, which is the one an admin can open.
+            folded.append(existing["company_name"])
+            continue
+        by_company[key] = {
             "source": "club_sheet",
-            "source_key": str(index),
+            "source_key": key,
             "tier": "club_targets",
             "country": "US",
             "company_name": name,
-            "sector_label": (row.get("sector") or None),
+            "sector_label": (row.get("sector") or segment or None),
             "last_event_kind": "curated_by_the_club",
-            "metadata": {
-                # The reasoning is the point of this tier. It is what a member
-                # would otherwise have to rebuild from scratch.
-                "why_attractive": (row.get("why_attractive") or None),
-                "engagement_theme": (row.get("engagement_theme") or None),
-                "yale_hook": (row.get("yale_hook") or None),
-                "target_role_title": (row.get("target_role_title") or row.get("contact_type") or None),
-                "first_message_angle": (row.get("first_message_angle") or None),
-                "priority_score": float(score) if isinstance(score, (int, float)) else None,
-                "row_index": int(index),
-            },
-        })
+            "metadata": entry,
+        }
+
+    rows = list(by_company.values())
     written = await upsert_companies(rows)
-    await _record_ingest("club_sheet", batch, len(rows), written, "ok")
-    return {"ok": True, "source": "club_sheet", "seen": len(rows), "written": written}
+    dropped = await _prune_club_targets(set(by_company)) if rows else 0
+    await _record_ingest("club_sheet", batch, lines, written, "ok")
+    return {"ok": True, "source": "club_sheet", "seen": lines, "written": written,
+            "dropped": dropped, "folded": sorted(set(folded))}
+
+
+def _flatten_key(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _club_key(name: str, segment: str | None) -> str:
+    """One row per company *and* segment.
+
+    "McKinsey & Company - New Haven / Public Sector" is a different pitch from
+    plain "McKinsey & Company", and the sheet's author meant both, so both
+    stay. Only lines identical in company and segment collapse.
+    """
+    return f"{_flatten_key(name)}|{_flatten_key(segment)}"
+
+
+async def _prune_club_targets(keys: set[str]) -> int:
+    """Delete curated rows the current sheet no longer lists."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, source_key FROM company_register WHERE source = 'club_sheet'")
+        stale = [row[0] for row in await cursor.fetchall() if str(row[1]) not in keys]
+        if not stale:
+            return 0
+        placeholders = ",".join("?" for _ in stale)
+        await db.execute(
+            f"DELETE FROM company_register_people WHERE register_id IN ({placeholders})", stale)
+        await db.execute(
+            f"DELETE FROM company_register WHERE id IN ({placeholders})", stale)
+        await db.commit()
+        return len(stale)
+    finally:
+        await db.close()
 
 
 async def ingest_sec_public() -> dict[str, Any]:

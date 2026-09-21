@@ -5,7 +5,7 @@ Admin-only access.
 import io
 import secrets
 import hashlib
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
@@ -732,3 +732,57 @@ async def research_metrics_view(admin: dict = Depends(get_current_admin)):
         return await research_metrics(db, actor_id=admin["id"])
     finally:
         await db.close()
+
+
+# --- Club target list (admin only) ---
+@router.get("/target-list")
+async def target_list_status(_admin: dict = Depends(get_current_admin)):
+    """What the club target list currently holds, and who last replaced it."""
+    from app.services.prospect_coordinator import prospects_meta
+
+    try:
+        meta = prospects_meta()
+    except FileNotFoundError:
+        meta = {"source_exists": False, "row_count": 0}
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            """SELECT a.created_at, a.details, u.name, u.email
+               FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+               WHERE a.action = 'target_list_replace'
+               ORDER BY a.created_at DESC LIMIT 1"""
+        )
+        row = await cur.fetchone()
+    finally:
+        await db.close()
+    return {
+        **meta,
+        "last_upload": row_to_dict(row) if row else None,
+    }
+
+
+@router.post("/target-list")
+async def replace_target_list(
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_current_admin),
+):
+    """Replace the curated club target list with an uploaded workbook.
+
+    Admin only: these rows steer every member's outreach, and the sheet
+    carries the club's own judgement about each company."""
+    from app.services.prospect_workbook import WorkbookRejected, replace_club_target_list
+
+    content = await file.read()
+    try:
+        result = await replace_club_target_list(content, file.filename or "")
+    except WorkbookRejected as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await log_audit(
+        admin["id"],
+        "target_list_replace",
+        "company_register",
+        "club_targets",
+        f"{file.filename or 'workbook'}: {result['companies']} companies "
+        f"(was {result['companies_before']})",
+    )
+    return result
