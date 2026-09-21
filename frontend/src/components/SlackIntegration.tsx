@@ -33,33 +33,30 @@ export default function SlackIntegration() {
     }
   };
 
-  const disconnect = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.auth.slack.disconnect();
-      setStatus({ connected: false });
-    } catch (requestError) {
-      setError((requestError as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // No disconnect here: leaving the workspace is done in Slack, and a member
+  // who reconnects simply reinstalls. Revoking a stored token is a support
+  // action (DELETE /api/auth/slack/disconnect), not a button beside Connect.
 
+  // Same shape as the Gmail card beside it: title and status on one row, the
+  // explanation under it, then the action only when there is one to take.
   return (
-    <section className="surface-card rounded-xl p-6 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Slack</h2>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Connect the club workspace for shared notifications.</p>
-        </div>
-        {status && <StatusBadge tone={status.connected ? 'success' : 'neutral'}>{status.connected ? 'Connected' : 'Not connected'}</StatusBadge>}
+    <section className="surface-card p-5 mb-6" aria-labelledby="slack-heading">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="slack-heading" className="app-section-title">Club Slack workspace</h2>
+        <StatusBadge tone={status?.connected ? 'success' : 'neutral'}>
+          {status == null ? 'Checking connection' : status.connected ? 'Connected' : 'Not connected'}
+        </StatusBadge>
       </div>
-      {status?.team_name && <p className="text-sm text-slate-600">Workspace: <strong>{status.team_name}</strong></p>}
-      {error && <Notice tone="danger">{error}</Notice>}
-      <Button variant={status?.connected ? 'danger' : 'primary'} onClick={status?.connected ? disconnect : connect} disabled={busy || status == null}>
-        {busy ? 'Working…' : status?.connected ? 'Disconnect Slack' : 'Connect Slack'}
-      </Button>
+      <p className="text-sm text-slate-600 my-3">
+        Connect the club workspace for shared notifications and the <code>/yucg</code> command in
+        Slack. {status?.team_name ? `Connected to ${status.team_name}.` : ''}
+      </p>
+      {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
+      {!status?.connected && (
+        <Button disabled={busy || status == null} onClick={connect}>
+          {busy ? 'Working…' : 'Connect Slack'}
+        </Button>
+      )}
     </section>
   );
 }

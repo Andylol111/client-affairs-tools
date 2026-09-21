@@ -526,11 +526,16 @@ async def init_db():
         """)
         await db.commit()
 
-        # Slack OAuth tokens (per-user)
+        # Slack OAuth tokens (per-user). With token rotation enabled on the
+        # Slack app, the access token expires (12 hours) and is exchanged using
+        # a single-use refresh token, so both the refresh token and the expiry
+        # are part of the credential rather than optional extras.
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS user_slack_tokens (
                 user_id INTEGER PRIMARY KEY REFERENCES users(id),
                 access_token TEXT NOT NULL,
+                refresh_token TEXT,
+                token_expires_at REAL,
                 team_id TEXT,
                 team_name TEXT,
                 user_slack_id TEXT,
@@ -539,6 +544,25 @@ async def init_db():
             );
         """)
         await db.commit()
+        # Slack retries an event when the acknowledgement is slow, so the ids
+        # already answered are recorded rather than kept in memory: the live
+        # box replaces its container and a member must not be answered twice.
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS slack_events (
+                event_id TEXT PRIMARY KEY,
+                created_at REAL NOT NULL
+            );
+        """)
+        await db.commit()
+        for statement in (
+            "ALTER TABLE user_slack_tokens ADD COLUMN refresh_token TEXT",
+            "ALTER TABLE user_slack_tokens ADD COLUMN token_expires_at REAL",
+        ):
+            try:
+                await db.execute(statement)
+                await db.commit()
+            except Exception:
+                pass
 
         # Email attachments library (intro PDFs, past workstreams, etc.)
         await db.executescript("""

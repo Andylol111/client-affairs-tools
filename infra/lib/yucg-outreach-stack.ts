@@ -63,6 +63,7 @@ export class YucgOutreachStack extends cdk.Stack {
           TAVILY_API_KEY: "",
           SLACK_CLIENT_ID: "",
           SLACK_CLIENT_SECRET: "",
+          SLACK_SIGNING_SECRET: "",
           SLACK_BOT_TOKEN: "",
           VERIFALIA_API_KEY: "",
         }),
