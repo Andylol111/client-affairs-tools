@@ -68,14 +68,14 @@ test('every Find contacts surface is a pill, and the company field reaches the p
   // Every surface is a pill in one strip. Previously two were tabs, one was a
   // fold at the bottom of the page and two were sentence links above it, so
   // the ways into this page did not look like each other or like a menu.
-  // Two doors. Importing a spreadsheet and queuing deep research are ways
-  // people arrive, so they live inside the step that gathers people rather
-  // than as destinations competing with the workflow.
-  await expect(page.getByRole('tab')).toHaveCount(2);
-  for (const name of ['Companies', 'Find people']) {
+  // Three doors. Bulk research is not one of them - queuing research is a way
+  // people arrive at a list, so it lives inside the step that gathers people -
+  // but uploading a file is its own act with its own permissions, including
+  // the club target list that only an admin may replace.
+  await expect(page.getByRole('tab')).toHaveCount(3);
+  for (const name of ['Companies', 'Find people', 'Import a file']) {
     await expect(page.getByRole('tab', { name })).toBeVisible();
   }
-  await expect(page.getByRole('tab', { name: 'Import a sheet' })).toHaveCount(0);
   await expect(page.getByRole('tab', { name: 'Bulk research' })).toHaveCount(0);
   await expect(page.getByText('Have a spreadsheet already?')).toHaveCount(0);
 

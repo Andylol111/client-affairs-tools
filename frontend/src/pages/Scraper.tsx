@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { api, type Contact, type DiscoveryLogEntry } from '../api';
+import { useEffect, useState, useRef } from 'react';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
+import { api, type Contact, type DiscoveryLogEntry, type TargetListStatus } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import CompanyRegister from '../components/discovery/CompanyRegister';
@@ -92,28 +92,31 @@ function ResearchTab() {
   );
 }
 
+type ImportKind = 'contacts' | 'club_targets';
+
 export default function Scraper() {
   const [params] = useSearchParams();
+  const { user } = useOutletContext<{ user: { role?: string } }>();
+  const isAdmin = user?.role === 'admin';
   // Default to the crawl: it is the one door that turns a company name into people.
   const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'import', 'register'], 'register');
   const [importing, setImporting] = useState(false);
+  const [importKind, setImportKind] = useState<ImportKind>('contacts');
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [targetList, setTargetList] = useState<TargetListStatus | null>(null);
 
   const [discoveryLog] = useState<DiscoveryLogEntry[]>([]);
   const [scrapeRunId] = useState<string | null>(null);
   const [showDiscoveryLog, setShowDiscoveryLog] = useState(false);
 
-
-
-
-
-
-
-
-
+  // Only an admin may see or replace the club list, so only an admin asks.
+  useEffect(() => {
+    if (!isAdmin || activeTab !== 'import') return;
+    api.admin.targetList.status().then(setTargetList).catch(() => setTargetList(null));
+  }, [isAdmin, activeTab]);
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -123,14 +126,34 @@ export default function Scraper() {
     setInfoMessage('');
     setContacts([]);
     try {
-      const res = await api.contacts.importFile(file);
-      setContacts(res.contacts);
-      if (res.duplicates_skipped && res.duplicates_skipped > 0) {
-        setInfoMessage(`Imported ${res.count} contacts. ${res.duplicates_skipped} duplicate(s) skipped (existing email).`);
-      } else if (res.count > 0) {
-        setInfoMessage(`Imported ${res.count} contact(s).`);
+      if (importKind === 'club_targets') {
+        const res = await api.admin.targetList.replace(file);
+        const dropped = res.register_rows_dropped || 0;
+        const folded = res.folded_duplicates || [];
+        setInfoMessage(
+          `Club target list replaced: ${res.companies} sheet lines (was ${res.companies_before})`
+          + `${dropped > 0 ? `, ${dropped} removed from Companies` : ''}. `
+          + 'Everyone sees these targets now.'
+          // A line that repeats a company and segment already listed is
+          // merged, keeping both write-ups. Said out loud, because otherwise
+          // the sheet and the Companies tab disagree with no explanation.
+          + (folded.length > 0
+            ? ` ${folded.length} repeated ${folded.length === 1 ? 'company was' : 'companies were'} merged`
+              + ` into one target each, keeping both write-ups: ${folded.slice(0, 5).join(', ')}`
+              + `${folded.length > 5 ? ` and ${folded.length - 5} more` : ''}.`
+            : ''),
+        );
+        setTargetList(await api.admin.targetList.status().catch(() => null));
       } else {
-        setInfoMessage('');
+        const res = await api.contacts.importFile(file);
+        setContacts(res.contacts);
+        if (res.duplicates_skipped && res.duplicates_skipped > 0) {
+          setInfoMessage(`Imported ${res.count} contacts. ${res.duplicates_skipped} duplicate(s) skipped (existing email).`);
+        } else if (res.count > 0) {
+          setInfoMessage(`Imported ${res.count} contact(s).`);
+        } else {
+          setInfoMessage('');
+        }
       }
     } catch (e) {
       const eMessage = e instanceof Error ? e.message : 'Request failed';
@@ -150,6 +173,7 @@ export default function Scraper() {
         items={[
           { id: 'register', label: 'Companies' },
           { id: 'company', label: 'Find people' },
+          { id: 'import', label: 'Import a file' },
         ]}
         active={activeTab}
         onChange={(id) => {
@@ -186,15 +210,66 @@ export default function Scraper() {
         <div className="px-5 py-4 border-b border-pale-sky">
           <h2 className="text-[15px] font-semibold text-deep-navy">Import a spreadsheet</h2>
         </div>
-        <div className="px-5 pb-5">
-          <p className="text-[13px] text-slate-500 py-3">CSV or Excel with name, email, title, company.</p>
-          <input ref={fileInputRef} type="file" accept=".csv,.xlsx" onChange={handleImport} className="hidden" />
+        <div className="px-5 pb-5 space-y-3">
+          {/* One door, and the file says which pipeline it feeds. The club
+              list is the only choice that rewrites what everybody works
+              from, so only an admin is offered it - and the server enforces
+              that too, this select is a courtesy. */}
+          <label className="block text-[13px] font-medium text-deep-navy pt-3">
+            What is in this file?
+            <select
+              className="block w-full mt-1 border border-pale-sky rounded-xl px-3 py-2 bg-white text-[14px] text-deep-navy"
+              value={importKind}
+              onChange={(e) => {
+                setImportKind(e.target.value === 'club_targets' ? 'club_targets' : 'contacts');
+                setError('');
+                setInfoMessage('');
+              }}
+            >
+              <option value="contacts">People to add to contacts</option>
+              {isAdmin && <option value="club_targets">Club target list (admins only)</option>}
+            </select>
+          </label>
+
+          {importKind === 'contacts' ? (
+            <p className="text-[13px] text-slate-500">CSV or Excel with name, email, title, company.</p>
+          ) : (
+            <div className="text-[13px] text-slate-500 space-y-1">
+              <p>
+                Excel workbook, sheet <strong>YUCG Prospects</strong>: company, sector, why it fits,
+                engagement theme, Yale hook, priority and the role to aim at. It replaces the club
+                target list for everyone, and the Companies tab updates as soon as it uploads.
+              </p>
+              <p>
+                A company you delete from the sheet stops being a club target. The list it replaces
+                is archived, and a workbook that cannot be read changes nothing.
+              </p>
+              {targetList && (
+                <p data-testid="target-list-status">
+                  On file now: <strong>{targetList.row_count}</strong> companies
+                  {targetList.last_upload?.name
+                    ? `, last uploaded by ${targetList.last_upload.name}`
+                    : ''}
+                  {targetList.last_upload?.created_at ? ` on ${targetList.last_upload.created_at.slice(0, 10)}` : ''}.
+                </p>
+              )}
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={importKind === 'club_targets' ? '.xlsx,.xlsm' : '.csv,.xlsx'}
+            onChange={handleImport}
+            className="hidden"
+          />
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-50">
-            {importing ? 'Importing…' : 'Import file'}
+            {importing
+              ? 'Uploading…'
+              : importKind === 'club_targets' ? 'Replace club target list' : 'Import file'}
           </button>
         </div>
       </div>
-
       )}
 
       {error && <p className="text-[#ff3b30] text-[13px] px-1 mt-4" role="alert">{error}</p>}

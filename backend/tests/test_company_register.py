@@ -567,6 +567,31 @@ def person_level_tests() -> None:
     assert level(None) == 'unknown'
 
 
+def club_name_is_the_company_not_the_segment() -> None:
+    """The sheet's company cell sometimes holds the segment to pitch —
+    "McKinsey & Company — New Haven / Public Sector" — and that cell is the
+    search key Find people crawls with, so the whole string matched no
+    website and McKinsey appeared twice under different names. The segment is
+    kept; it just stops being part of the name."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.services.company_register import _split_company_qualifier
+
+    assert _split_company_qualifier('McKinsey & Company — New Haven / Public Sector') == (
+        'McKinsey & Company', 'New Haven / Public Sector')
+    assert _split_company_qualifier('Deloitte – Public Sector') == ('Deloitte', 'Public Sector')
+
+    # Only a spaced em or en dash splits. Names that really contain a hyphen,
+    # a slash or a parenthetical stay whole, or Find people would search for
+    # half an airport.
+    for whole in (
+        'Tweed-New Haven Airport (HVN)',
+        'Savannah/Hilton Head (SAV)',
+        'GE Aerospace (CF34 / regional engine MRO)',
+        'Zipcar / Avis Budget',
+        'Mitsubishi Aircraft (SpaceJet legacy / MRO partners)',
+    ):
+        assert _split_company_qualifier(whole) == (whole, None), whole
+
 if __name__ == '__main__':
     tests()
     uk_tests()
@@ -575,4 +600,5 @@ if __name__ == '__main__':
     nonprofit_buyer_tests()
     part_vii_officer_tests()
     person_level_tests()
+    club_name_is_the_company_not_the_segment()
     print('company register: ok')
