@@ -29,16 +29,20 @@ async def run():
         finally:
             await db.close()
         a, b = {'id': 1}, {'id': 2}
-        from app.services.settings_service import set_member_setting, get_member_setting, get_all_settings, set_setting
-        await set_member_setting(1, 'signature', 'A signature')
-        await set_member_setting(2, 'signature', 'B signature')
-        assert await get_member_setting(1, 'signature') == 'A signature'
-        assert await get_member_setting(2, 'signature') == 'B signature'
-        assert not any(key.startswith('member:') for key in await get_all_settings())
+        from app.routers.settings import get_settings
+        from app.services.settings_service import set_member_setting, get_member_setting, set_setting
+        await set_member_setting(1, 'sign_off_role', 'A role')
+        await set_member_setting(2, 'sign_off_role', 'B role')
+        assert await get_member_setting(1, 'sign_off_role') == 'A role'
+        assert await get_member_setting(2, 'sign_off_role') == 'B role'
+        # The settings endpoint returns only the reader's own values, never
+        # another member's and never a stored club secret.
+        assert (await get_settings(a))['sign_off_role'] == 'A role'
         await set_setting('gmail_app_password', 'legacy-secret')
-        assert 'gmail_app_password' not in await get_all_settings()
         await set_setting('document_quota_bytes:2', '100')
-        assert 'document_quota_bytes:2' not in await get_all_settings()
+        visible = await get_settings(b)
+        assert visible['sign_off_role'] == 'B role'
+        assert not any(key.startswith(('member:', 'gmail_', 'document_quota_bytes')) for key in visible)
         campaign = await create_campaign(CampaignCreate(name='A outreach'), a)
         cid = campaign['id']
         assert campaign['owner_user_id'] == campaign['sender_user_id'] == 1
@@ -96,7 +100,7 @@ async def run():
             result = await drain_campaign(cid,1)
             assert result['sent'] == 1
             assert send.await_args.kwargs['user_id'] == 1
-            assert send.await_args.kwargs['signature'] == 'A signature'
+            assert send.await_args.kwargs['sign_off'].role == 'A role'
         # Shared sequence content must never select its author's mailbox.
         from app.services.follow_up_job import run_follow_up_sequences
         db = await get_db()
@@ -107,7 +111,7 @@ async def run():
             await db.execute("UPDATE campaign_contacts SET sequence_step_sent=0,last_sequence_sent_at='2020-01-01',sent_by_user_id=1 WHERE campaign_id=?", (cid,))
             from app.services.dispatch_service import snapshot
             cc = await (await db.execute("SELECT id FROM campaign_contacts WHERE campaign_id=?", (cid,))).fetchone()
-            await snapshot(db, f"followup:{cc['id']}:0", cc['id'], 1, 'person@example.org', 'Follow up', 'Body', 'A signature')
+            await snapshot(db, f"followup:{cc['id']}:0", cc['id'], 1, 'person@example.org', 'Follow up', 'Body')
             await db.commit()
         finally:
             await db.close()
@@ -116,7 +120,7 @@ async def run():
             result = await run_follow_up_sequences()
             assert result['sent'] == 1, result
             assert send.await_args.kwargs['user_id'] == 1
-            assert send.await_args.kwargs['signature'] == 'A signature'
+            assert send.await_args.kwargs['sign_off'].role == 'A role'
         db = await get_db()
         try:
             await db.execute("UPDATE campaigns SET status='releasing' WHERE id=?", (cid,))

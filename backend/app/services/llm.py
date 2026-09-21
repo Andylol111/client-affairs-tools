@@ -13,7 +13,7 @@ from typing import Any
 BEDROCK_ANTHROPIC: list[dict[str, str]] = [
     {
         "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "label": "Claude Haiku 4.5",
+        "label": "Claude",
         "tier": "haiku",
         "blurb": "Fast, grounded club work",
     },

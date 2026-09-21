@@ -17,9 +17,13 @@ export type ApiKey = { key_prefix?: string; id: number; name: string; scopes?: s
 export type StoredObject = { byte_size?: number; source?: string; id: number; kind: string; s3_key: string; bytes?: number; created_at?: string };
 export type CustomFormat = { id: number; name: string; pattern: string; priority?: number };
 export type Settings = {
-  signature?: string;
-  signature_image_url?: string;
-  attachments_enabled?: string | boolean;
+  sign_off_name?: string;
+  sign_off_pronouns?: string;
+  sign_off_role?: string;
+  sign_off_organization?: string;
+  sign_off_linkedin?: string;
+  sign_off_phone?: string;
+  sign_off_logo_url?: string;
   daily_send_limit?: number;
   daily_send_warn_at?: number | string;
 };
@@ -54,22 +58,6 @@ export type CompanyReached = {
   last_sent_at?: string | null;
 };
 
-export type SegmentCompanyRow = {
-  company_key: string;
-  company_name: string;
-  company_domain: string | null;
-  contacts: number;
-};
-export type SegmentSummaryRow = {
-  segment: string;
-  companies: number;
-  contacts: number;
-  reached_contacts: number;
-  replied_contacts: number;
-  target_companies: number;
-  progress_pct: number | null;
-  companies_list: SegmentCompanyRow[];
-};
 
 export type WebProbeResult = { ok: boolean; duration_s?: number; content_chars?: number; result_count?: number; error?: string; note?: string | null };
 export type BackendProbeStatus = { configured: boolean; fetch?: WebProbeResult; search?: WebProbeResult };
@@ -138,6 +126,21 @@ export type FollowUpScheduleRow = {
   due_on?: string | null;
   overdue?: boolean;
   reason?: string | null;
+};
+
+/** A measured section of the breakdown. The page renders whatever arrives,
+ *  so a new measurement on the server needs no frontend change. */
+export type BreakdownSection = {
+  id: string;
+  title: string;
+  note?: string;
+  chart: 'bar' | 'pie';
+  rows: { label: string; value: number; secondary: number | null }[];
+};
+
+export type OutcomeSplit = {
+  mailed: number; replied: number; bounced: number; queued: number;
+  awaiting: number; reply_rate: number;
 };
 
 export type RegisterCompany = {
@@ -275,7 +278,6 @@ export type GeneratedEmail = {
   campaign_id?: number | null;
   subject: string;
   body: string;
-  signature?: string;
   created_at: string;
   name?: string | null;
   email?: string | null;
@@ -510,43 +512,6 @@ export const api = {
         groups: { id: string; label: string; models: { id: string; label: string; tier: string; blurb: string }[] }[];
       }>('/api/ai/models'),
   },
-  assistant: {
-    sources: () => fetchApi<Array<{
-      id: number; title: string; owner_user_id: number; project_id?: number | null; project_name?: string | null;
-      visibility: string; current_version: number; index_state?: string | null; character_count?: number; last_error?: string | null;
-    }>>('/api/assistant/sources'),
-    indexDocument: (documentId: number) =>
-      fetchApi<{ state: string; chunks?: number; characters?: number }>(`/api/assistant/documents/${documentId}/index`, { method: 'POST' }),
-    threads: () => fetchApi<Array<{ id: number; title: string; created_at: number; updated_at: number }>>('/api/assistant/threads'),
-    messages: (threadId: number) => fetchApi<Array<{
-      id: number; role: 'user' | 'assistant'; content: string; created_at: number;
-      sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }>;
-      lookups?: Array<{ tool: string; data: unknown }>;
-      pending_actions?: Array<{ tool: string; args: Record<string, unknown>; summary: string }>;
-      navigations?: Array<{ path: string; label: string }>;
-      asks?: Array<{ id: string; label: string; value: string; required: boolean; placeholder?: string }>;
-    }>>(`/api/assistant/threads/${threadId}`),
-    ask: (data: { question: string; thread_id?: number; project_id?: number; document_ids?: number[]; page_path?: string }) =>
-      fetchApi<{
-        answer: string; thread_id: number; model: string; grounded: boolean;
-        sources: Array<{ id: string; document_id: number; title: string; project_name?: string | null }>;
-        lookups?: Array<{ tool: string; data: unknown }>;
-        pending_actions?: Array<{ tool: string; args: Record<string, unknown>; summary: string }>;
-        navigations?: Array<{ path: string; label: string }>;
-        asks?: Array<{ id: string; label: string; value: string; required: boolean; placeholder?: string }>;
-      }>('/api/assistant/ask', {
-        method: 'POST', body: JSON.stringify(data),
-      }),
-    act: (data: { tool: string; args: Record<string, unknown>; thread_id?: number }) =>
-      fetchApi<{
-        ok: boolean; answer: string; thread_id?: number | null;
-        result?: { id?: number };
-        navigations?: Array<{ path: string; label: string }>;
-      }>('/api/assistant/act', {
-        method: 'POST', body: JSON.stringify(data),
-      }),
-    usage: () => fetchApi<{ member_requests: number; club_requests: number; member_input_tokens: number; member_output_tokens: number; club_input_tokens: number; club_output_tokens: number; member_estimated_usd: number; club_estimated_usd: number; pricing_note: string }>('/api/assistant/usage'),
-  },
   telemetry: {
     event: (data: { event_type: string; resource_type?: string; details?: Record<string, unknown> }) =>
       fetchApi<unknown>('/api/telemetry/event', { method: 'POST', body: JSON.stringify(data) }).catch(() => {}),
@@ -557,8 +522,13 @@ export const api = {
       }).catch(() => ({ ok: false, count: 0 })),
   },
   contacts: {
-    companiesSummary: () =>
-      fetchApi<CompanySummaryRow[]>('/api/contacts/companies/summary'),
+    companiesSummary: (opts?: { q?: string; limit?: number; offset?: number }, signal?: AbortSignal) => {
+      const params = new URLSearchParams();
+      if (opts?.q?.trim()) params.set('q', opts.q.trim());
+      params.set('limit', String(opts?.limit ?? 200));
+      if (opts?.offset) params.set('offset', String(opts.offset));
+      return fetchApi<CompanySummaryRow[]>(`/api/contacts/companies/summary?${params}`, { signal });
+    },
     list: (opts?: {
       company?: string;
       companies?: string;
@@ -695,11 +665,6 @@ export const api = {
       if (!result) throw new Error('Stream ended without a complete result');
       return result;
     },
-    searchPerson: (data: { name: string; company?: string }) =>
-      fetchApi<{ query: string; results: { title?: string; url?: string; content?: string }[]; summary: string | null; message: string | null }>(
-        '/api/contacts/search-person',
-        { method: 'POST', body: JSON.stringify(data) }
-      ),
     bulkDelete: (contact_ids: number[]) =>
       fetchApi<{ deleted: number; skipped: number }>('/api/contacts/bulk-delete', {
         method: 'POST',
@@ -803,6 +768,15 @@ export const api = {
       }),
   },
   campaigns: {
+    /** One AI draft for a whole group, written with merge fields. */
+    draftTemplate: (data: { companies: string[]; roles?: string; goal: string; proof?: string; length?: string }) =>
+      fetchApi<{ subject: string; body: string }>('/api/campaigns/draft-template', {
+        method: 'POST', body: JSON.stringify(data),
+      }),
+    /** Render one written message per recipient; preview_only stops before creating. */
+    build: (data: { name?: string; companies?: string[]; contact_ids?: number[]; subject: string; body: string; preview_only?: boolean }) =>
+      fetchApi<{ campaign_id: number; created: number; name: string; recipients?: number; ready?: number; sample?: { subject: string; body: string; email?: string } | null; held: { contact_id?: number; email?: string; name?: string; reason: string }[] }>(
+        '/api/campaigns/build', { method: 'POST', body: JSON.stringify(data) }),
     list: () => fetchApi<Campaign[]>('/api/campaigns'),
     get: (id: number) => fetchApi<Campaign>(`/api/campaigns/${id}`),
     delete: (id: number) => fetchApi<{ ok: boolean }>(`/api/campaigns/${id}`, { method: 'DELETE' }),
@@ -836,11 +810,22 @@ export const api = {
       }),
     removeContact: (campaignId: number, ccId: number) =>
       fetchApi<{ ok: boolean }>(`/api/campaigns/${campaignId}/contact/${ccId}`, { method: 'DELETE' }),
-    update: (id: number, data: { sequence_id?: number | null }) =>
+    update: (id: number, data: { sequence_id?: number | null; attachment_ids?: number[] }) =>
       fetchApi<unknown>(`/api/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
   analytics: {
-    dashboard: () => fetchApi<{ contacts_discovered_today: number; emails_in_queue: number; active_campaigns: number; total_sent: number; opened: number; open_rate: number; reply_rate: number }>('/api/analytics/dashboard'),
+    breakdown: () => fetchApi<{
+      sections: BreakdownSection[];
+      mine?: OutcomeSplit | null;
+      club?: OutcomeSplit;
+    }>('/api/analytics/breakdown'),
+    dashboard: () => fetchApi<{
+      contacts_discovered_today: number; emails_in_queue: number; active_campaigns: number;
+      total_sent: number; opened: number; open_rate: number; reply_rate: number;
+      mine?: OutcomeSplit | null; club?: OutcomeSplit;
+      my_sectors?: { sector: string; count: number }[];
+      club_sectors?: { sector: string; count: number }[];
+    }>('/api/analytics/dashboard'),
     leaderboard: () =>
       fetchApi<{ leaderboard: LeaderboardRow[] }>('/api/analytics/leaderboard'),
     companiesReached: (userId?: number) =>
@@ -864,24 +849,6 @@ export const api = {
       a.download = 'analytics_export.csv';
       a.click();
       URL.revokeObjectURL(url);
-    },
-  },
-  segments: {
-    list: () => fetchApi<{ segments: string[] }>('/api/segments/list'),
-    summary: () => fetchApi<{ summary: SegmentSummaryRow[]; unclassified_companies: number }>('/api/segments/summary'),
-    classify: () => fetchApi<{ classified: number; remaining: number }>('/api/segments/classify', { method: 'POST' }),
-    reassign: (companyKey: string, segment: string) =>
-      fetchApi<{ ok: boolean }>(`/api/segments/company/${encodeURIComponent(companyKey)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ segment }),
-      }),
-    goals: {
-      list: () => fetchApi<{ goals: Record<string, number> }>('/api/segments/goals'),
-      set: (segment: string, target_companies: number) =>
-        fetchApi<{ ok: boolean }>('/api/segments/goals', {
-          method: 'PUT',
-          body: JSON.stringify({ segment, target_companies }),
-        }),
     },
   },
   auth: {
@@ -1417,9 +1384,13 @@ export const api = {
   settings: {
     get: () => fetchApi<Settings>('/api/settings'),
     update: (data: {
-      signature?: string;
-      signature_image_url?: string;
-      attachments_enabled?: boolean;
+      sign_off_name?: string;
+      sign_off_pronouns?: string;
+      sign_off_role?: string;
+      sign_off_organization?: string;
+      sign_off_linkedin?: string;
+      sign_off_phone?: string;
+      sign_off_logo_url?: string;
       daily_send_limit?: number;
       daily_send_warn_at?: number;
     }) =>

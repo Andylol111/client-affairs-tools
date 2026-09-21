@@ -1,5 +1,6 @@
 import type { Contact, Template, Sequence, PipelineMetrics, ContactNote, ContactActivity, ContactProfile, Worklist, CompanySummaryRow } from '../api';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
 import PageHeader from '../components/PageHeader';
@@ -135,16 +136,31 @@ export default function Outreach() {
   const [selectedCampaign, setSelectedCampaign] = useState<Worklist | null>(null);
   const [campaignContacts, setCampaignContacts] = useState<Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
-  const [contactPipelineFilter, setContactPipelineFilter] = useState<string>('');
+  // Read from the URL so a chart slice on Home can open exactly its rows
+  // instead of dropping the member on an unfiltered table to find them again.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const contactPipelineFilter = searchParams.get('status') || '';
+  // "Yours" on the front page has to mean yours here too, or the split the
+  // dashboard draws is a lie one click later.
+  const mineOnly = searchParams.get('owner') === 'me';
+  const setContactPipelineFilter = useCallback((next: string) => {
+    setSearchParams((current) => {
+      const updated = new URLSearchParams(current);
+      if (next) updated.set('status', next);
+      else updated.delete('status');
+      return updated;
+    }, { replace: true });
+  }, [setSearchParams]);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const [inboxSyncBusy, setInboxSyncBusy] = useState(false);
   const [pipelineSortBusy, setPipelineSortBusy] = useState(false);
   const [inboxSyncBanner, setInboxSyncBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const refreshContactsAndMetrics = async () => {
-    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 1000 };
+    const params: { q?: string; pipeline_status?: string; limit: number; mine_only?: boolean } = { limit: 1000 };
     if (contactSearch.trim()) params.q = contactSearch.trim();
     if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
+    if (mineOnly) params.mine_only = true;
     try {
       const [page, metrics] = await Promise.all([
         api.contacts.list(params),
@@ -159,9 +175,10 @@ export default function Outreach() {
   };
 
   useEffect(() => {
-    const params: { q?: string; pipeline_status?: string; limit: number } = { limit: 1000 };
+    const params: { q?: string; pipeline_status?: string; limit: number; mine_only?: boolean } = { limit: 1000 };
     if (contactSearch.trim()) params.q = contactSearch.trim();
     if (contactPipelineFilter) params.pipeline_status = contactPipelineFilter;
+    if (mineOnly) params.mine_only = true;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       api.contacts.list(params, controller.signal)
@@ -174,7 +191,7 @@ export default function Outreach() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [contactSearch, contactPipelineFilter]);
+  }, [contactSearch, contactPipelineFilter, mineOnly]);
 
   useEffect(() => {
     api.outreach.templates.list().then(setTemplates).catch(() => setTemplates([]));
@@ -477,7 +494,7 @@ export default function Outreach() {
                   type="button"
                   onClick={() => void handleSyncInboxReplies()}
                   disabled={inboxSyncBusy}
-                  className="px-3 py-2 rounded-lg text-sm font-medium bg-white border border-pale-sky hover:bg-pale-sky/20 disabled:opacity-60 text-deep-navy"
+                  className="ui-button ui-button--secondary ui-button--sm"
                   title="Scan Gmail for replies on campaign threads you sent, then refresh this board"
                 >
                   {inboxSyncBusy ? 'Syncing inbox…' : 'Sync inbox (Gmail)'}
@@ -486,7 +503,7 @@ export default function Outreach() {
                   type="button"
                   onClick={() => void handleAutoSortPipeline()}
                   disabled={pipelineSortBusy}
-                  className="px-3 py-2 rounded-lg text-sm font-medium bg-white border border-pale-sky hover:bg-pale-sky/20 disabled:opacity-60 text-deep-navy"
+                  className="ui-button ui-button--secondary ui-button--sm"
                   title="Move cold → contacted when you already sent from a campaign but they have not replied yet (no Gmail call)"
                 >
                   {pipelineSortBusy ? 'Sorting…' : 'Auto-sort pipeline'}
@@ -536,13 +553,13 @@ export default function Outreach() {
                       <option key={oc.id} value={oc.id}>{oc.name}</option>
                     ))}
                   </select>
-                  <button type="button" onClick={() => setSelectedContactIds(new Set())} className="text-sm font-medium text-[var(--accent)] hover:text-[var(--accent-hover)] hover:underline">
+                  <button type="button" onClick={() => setSelectedContactIds(new Set())} className="ui-button ui-button--ghost ui-button--sm">
                     Clear
                   </button>
                   <button
                     type="button"
                     onClick={handleBulkDeleteContacts}
-                    className="btn-danger-solid text-sm px-3 py-1.5"
+                    className="ui-button ui-button--danger ui-button--sm"
                   >
                     Delete contacts
                   </button>
@@ -643,7 +660,7 @@ export default function Outreach() {
                     }
                   }}
                   disabled={!campaignForm.name.trim()}
-                  className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50"
+                  className="ui-button ui-button--primary"
                 >
                   Create
                 </button>
@@ -707,11 +724,11 @@ export default function Outreach() {
                         alert((e as Error)?.message);
                       }
                     }}
-                    className="text-sm text-red-600 hover:underline"
+                    className="ui-button ui-button--danger ui-button--sm"
                   >
                     Delete
                   </button>
-                  <button onClick={() => setSelectedCampaign(null)} className="text-sm text-slate-500 hover:text-slate-700">✕ Close</button>
+                  <button onClick={() => setSelectedCampaign(null)} className="ui-button ui-button--ghost ui-button--sm">✕ Close</button>
                 </div>
               </div>
               <h4 className="text-sm font-medium text-slate-600 mb-2">Contacts In Campaign</h4>
@@ -731,7 +748,7 @@ export default function Outreach() {
                             alert((e as Error)?.message);
                           }
                         }}
-                        className="text-xs text-red-600 hover:underline"
+                        className="ui-button ui-button--danger ui-button--sm"
                       >
                         Remove
                       </button>
@@ -779,7 +796,7 @@ export default function Outreach() {
                   <h3 className="font-semibold text-deep-navy">Contact: {selectedContact.name || selectedContact.email}</h3>
                   <button
                     onClick={() => { setSelectedContact(null); setEmailVerified(null); }}
-                    className="text-sm text-slate-500 hover:text-slate-700"
+                    className="ui-button ui-button--ghost"
                   >
                     ✕ Clear Selection
                   </button>
@@ -808,7 +825,7 @@ export default function Outreach() {
                   </select>
                   <button
                     onClick={verifyEmail}
-                    className="px-2 py-1 rounded text-xs bg-pale-sky/50 hover:bg-pale-sky"
+                    className="ui-button ui-button--secondary ui-button--sm"
                   >
                     Verify Email
                   </button>
@@ -843,7 +860,7 @@ export default function Outreach() {
                     <button
                       onClick={refreshProfile}
                       disabled={loading}
-                      className="mt-2 px-3 py-1 rounded bg-pale-sky/50 text-sm hover:bg-pale-sky"
+                      className="ui-button ui-button--secondary ui-button--sm mt-2"
                     >
                       {loading ? 'Refreshing...' : 'Refresh Analysis'}
                     </button>
@@ -866,7 +883,7 @@ export default function Outreach() {
                   <button
                     onClick={addNote}
                     disabled={!newNote.trim()}
-                    className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50"
+                    className="ui-button ui-button--primary"
                   >
                     Add
                   </button>
@@ -904,7 +921,7 @@ export default function Outreach() {
                   />
                   <button
                     onClick={addActivity}
-                    className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium"
+                    className="ui-button ui-button--primary"
                   >
                     Log
                   </button>
@@ -1008,24 +1025,26 @@ export default function Outreach() {
                   />
                 </div>
               ))}
-              <button
-                onClick={() =>
-                  setSequenceForm((p) => ({
-                    ...p,
-                    steps: [...p.steps, { days_after: 7, subject: '', body: '' }],
-                  }))
-                }
-                className="text-sm text-[var(--accent)] hover:underline"
-              >
-                + Add step
-              </button>
-              <button
-                onClick={saveSequence}
-                disabled={loading || !sequenceForm.name}
-                className="block px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
-              >
-                {loading ? 'Saving...' : 'Save sequence'}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() =>
+                    setSequenceForm((p) => ({
+                      ...p,
+                      steps: [...p.steps, { days_after: 7, subject: '', body: '' }],
+                    }))
+                  }
+                  className="ui-button ui-button--ghost"
+                >
+                  + Add step
+                </button>
+                <button
+                  onClick={saveSequence}
+                  disabled={loading || !sequenceForm.name}
+                  className="ui-button ui-button--primary"
+                >
+                  {loading ? 'Saving...' : 'Save sequence'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1060,7 +1079,7 @@ export default function Outreach() {
                           }
                         }
                       }}
-                      className="text-xs text-red-600 hover:underline"
+                      className="ui-button ui-button--danger ui-button--sm"
                     >
                       Delete
                     </button>
@@ -1101,7 +1120,7 @@ export default function Outreach() {
               <button
                 onClick={saveTemplate}
                 disabled={loading || !templateForm.name || !templateForm.subject || !templateForm.body}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium disabled:opacity-50"
+                className="ui-button ui-button--primary"
               >
                 {loading ? 'Saving...' : 'Save template'}
               </button>

@@ -31,7 +31,7 @@ export default function TrackingSync({ onSynced }: { onSynced?: () => Promise<vo
         <p className="text-xs text-slate-500">Checks every two minutes while the server is running. Open detection is approximate.</p>
         {(error || state?.error) && <p className="text-red-700 mt-1" role="alert">{error || state?.error}</p>}
       </div>
-      <button type="button" disabled={busy || state?.in_progress} className="px-4 py-2 rounded-lg border border-pale-sky text-sm text-deep-navy disabled:opacity-50"
+      <button type="button" disabled={busy || state?.in_progress} className="ui-button ui-button--secondary ui-button--sm shrink-0"
         onClick={async () => {
           setBusy(true); setError('');
           try {

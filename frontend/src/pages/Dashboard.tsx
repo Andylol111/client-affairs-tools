@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
-import { api, type LeaderboardRow, type CompanyReached, type Campaign, type PipelineMetrics } from '../api';
+import { api, type LeaderboardRow, type CompanyReached, type Campaign, type PipelineMetrics, type OutcomeSplit } from '../api';
 import PageHeader from '../components/PageHeader';
 import GmailConnection from '../components/GmailConnection';
 import SlackIntegration from '../components/SlackIntegration';
 import { canManageCampaign } from '../lib/campaignAccess';
+import OutcomePie from '../components/OutcomePie';
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -13,7 +14,24 @@ const DEFAULT_DATA = {
   total_sent: 0,
   open_rate: 0,
   reply_rate: 0,
+  mine: null as OutcomeSplit | null,
+  club: undefined as OutcomeSplit | undefined,
+  my_sectors: [] as { sector: string; count: number }[],
+  club_sectors: [] as { sector: string; count: number }[],
 };
+
+// Slices use the club's chart tokens, and each one knows where its rows live:
+// a chart you can click is the difference between a number and an answer.
+function slicesFor(split: OutcomeSplit | null | undefined, mine: boolean) {
+  const scope = mine ? '&owner=me' : '';
+  return [
+    { label: 'replied', value: split?.replied ?? 0, colour: 'var(--chart-good)', to: `/outreach?status=replied${scope}` },
+    { label: 'awaiting a reply', value: split?.awaiting ?? 0, colour: 'var(--chart-4)', to: `/outreach?status=contacted${scope}` },
+    { label: 'bounced', value: split?.bounced ?? 0, colour: 'var(--chart-bad)', to: `/campaigns?filter=needs_attention` },
+    { label: 'still queued', value: split?.queued ?? 0, colour: 'var(--chart-idle)', to: `/campaigns` },
+  ];
+}
+
 
 export default function Dashboard() {
   const { user } = useOutletContext<{ user: { id?: number; name?: string; picture?: string } }>();
@@ -37,17 +55,19 @@ export default function Dashboard() {
       .dueFollowUps()
       .then((d) => setDueFollowUps(d?.count ?? 0))
       .catch(() => setDueFollowUps(0));
+    // Every list is coerced: the home page must not blank because one
+    // endpoint answered with something other than an array.
     api.analytics
       .leaderboard()
-      .then((d) => setBoard(d.leaderboard || []))
+      .then((d) => setBoard(Array.isArray(d?.leaderboard) ? d.leaderboard : []))
       .catch(() => setBoard([]));
     api.campaigns
       .list()
-      .then(setCampaigns)
+      .then((d) => setCampaigns(Array.isArray(d) ? d : []))
       .catch(() => setCampaigns([]));
     api.outreach
       .pipelineMetrics()
-      .then((d) => setPipeline(d.by_status || []))
+      .then((d) => setPipeline(Array.isArray(d?.by_status) ? d.by_status : []))
       .catch(() => setPipeline([]));
   }, []);
 
@@ -55,7 +75,7 @@ export default function Dashboard() {
     if (!user?.id) return;
     api.analytics
       .companiesReached(user.id)
-      .then((d) => setMyCompanies(d.companies || []))
+      .then((d) => setMyCompanies(Array.isArray(d?.companies) ? d.companies : []))
       .catch(() => setMyCompanies([]));
   }, [user?.id]);
 
@@ -68,7 +88,7 @@ export default function Dashboard() {
     <div className="app-workspace max-w-[1920px]">
       <PageHeader
         title="Home"
-        actions={<Link to="/yucgoutreach" className="ui-button ui-button--primary">Open target lists</Link>}
+        actions={<Link to="/scraper" className="ui-button ui-button--primary">Find companies and people</Link>}
       />
       {apiError && (
         <p className="ui-notice ui-notice--warning mb-4">
@@ -116,6 +136,79 @@ export default function Dashboard() {
               <div className="text-xs text-slate-500">{data.total_sent} sent</div>
             </Link>
           </div>
+
+          <section className="surface-card p-5" aria-label="Results">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <h2 className="app-section-title">Results</h2>
+              <Link to="/analytics" className="text-xs font-semibold text-steel-blue hover:underline">
+                Full breakdown
+              </Link>
+            </div>
+            {/* Yours and the club's side by side. A club total hides whether
+                anyone is doing anything; a personal total hides whether the
+                club is. Both are on the front page so neither is the only
+                story a member sees. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-3">
+              <OutcomePie
+                title="Yours"
+                slices={slicesFor(data.mine, true)}
+                empty="You have not mailed anyone yet. Pick companies that interest you and start there."
+              />
+              <OutcomePie
+                title="The club"
+                slices={slicesFor(data.club, false)}
+                empty="Nobody has mailed anyone yet."
+              />
+            </div>
+            {(data.my_sectors.length > 0 || data.club_sectors.length > 0) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5 pt-4 border-t border-[var(--border)]">
+                <div>
+                  <p className="text-[13px] font-semibold text-deep-navy">What you work on</p>
+                  {data.my_sectors.length === 0 ? (
+                    <p className="text-xs text-slate-500 mt-1">
+                      Nothing yet — whatever you choose becomes your own list, not a handed-down one.
+                    </p>
+                  ) : (
+                    <ul className="mt-2 space-y-1">
+                      {data.my_sectors.map((s) => (
+                        <li key={s.sector} className="text-xs text-slate-700">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>{s.sector}</span>
+                            <span className="font-semibold text-deep-navy">{s.count}</span>
+                          </div>
+                          <div className="mt-0.5 h-1.5 rounded-full bg-pale-sky/60">
+                            <div
+                              className="h-1.5 rounded-full bg-steel-blue"
+                              style={{ width: `${Math.round((s.count / data.my_sectors[0].count) * 100)}%` }}
+                            />
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[13px] font-semibold text-deep-navy">What the club works on</p>
+                  <ul className="mt-2 space-y-1">
+                    {data.club_sectors.map((s) => (
+                      <li key={s.sector} className="text-xs text-slate-700">
+                        <div className="flex items-center justify-between gap-2">
+                          <span>{s.sector}</span>
+                          <span className="font-semibold text-deep-navy">{s.count}</span>
+                        </div>
+                        <div className="mt-0.5 h-1.5 rounded-full bg-pale-sky/60">
+                          <div
+                            className="h-1.5 rounded-full bg-deep-navy/60"
+                            style={{ width: `${Math.round((s.count / data.club_sectors[0].count) * 100)}%` }}
+                          />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </section>
 
           <section className="surface-card p-5" aria-label="Pipeline">
             <div className="flex items-center justify-between gap-2 mb-3">

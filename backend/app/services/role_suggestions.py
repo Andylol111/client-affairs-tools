@@ -235,6 +235,45 @@ async def search_titles(company: str, hints: str | None, *, user_id: int | None 
     return [{"title": display[k], "count": n, "source": source[k]} for k, n in counts.most_common()], note
 
 
+# The people who answer a cold email are one or two levels below the board:
+# they own a budget and a problem. Each is asked for separately because these
+# search engines match a headline literally - a single query stringing the
+# terms together scored zero against A24 and Garmin in live testing, while the
+# looser query returned results dominated by directors in the board sense.
+_SENIORITY_BANDS = ("VP", "Vice President", "Head of", "Director of", "Manager", "Chief of Staff")
+
+
+async def titles_by_seniority(company: str, *, user_id: int | None = None) -> list[dict[str, Any]]:
+    """Ask LinkedIn per band when one broad query found nobody.
+
+    Same system, sharper questions: the search is still restricted to
+    /in/ profiles at this company, which is where the people who would reply
+    actually describe themselves. A company website's team page is not a
+    substitute - it lists a handful of executives and no one below them.
+    """
+    from app.services.web_fetch import web_search
+
+    c = company.strip()
+    counts: Counter[str] = Counter()
+    display: dict[str, str] = {}
+    for band in _SENIORITY_BANDS:
+        try:
+            results = await web_search(f"{c} {band} site:linkedin.com/in", max_results=10, user_id=user_id)
+        except Exception as exc:  # quota or transport; the bands are best-effort
+            logger.info("seniority band search skipped for %r/%r: %s", company, band, exc)
+            break
+        for item in results or []:
+            if "/in/" not in str(item.get("url") or ""):
+                continue
+            title = title_from_search_result(item.get("title"), c)
+            if not title:
+                continue
+            key = _key(title)
+            counts[key] += 1
+            display.setdefault(key, title)
+    return [{"title": display[k], "count": n, "source": "band"} for k, n in counts.most_common(25)]
+
+
 def merge_titles(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     display: dict[str, str] = {}
@@ -313,10 +352,20 @@ async def suggest_roles(*, user_id: int, company: str, domain: str | None, hints
         return {"company": company, "roles": [], "equivalents": [], "sources": {}, "note": None}
     seen = await observed_titles(company, domain)
     searched: list[dict[str, Any]] = []
+    escalated: list[dict[str, Any]] = []
     note: str | None = None
     if len(seen) < _SEARCH_FILL_THRESHOLD or (hints or "").strip():
         searched, note = await search_titles(company, hints, user_id=user_id)
-    roles = merge_titles(seen, searched)
+    # Nothing observed and nothing found: ask LinkedIn again, one seniority
+    # band at a time, rather than handing back a generic guess.
+    if not seen and not searched:
+        escalated = await titles_by_seniority(company, user_id=user_id)
+        if escalated:
+            note = "Found by asking LinkedIn for each seniority band separately."
+        elif not note:
+            note = ("LinkedIn search returns nothing for this company. Type the role you want "
+                    "and Find people will search for it directly.")
+    roles = merge_titles(seen, searched, escalated)
     equivalents = await map_equivalents(company, hints, roles) if (hints or "").strip() else []
     return {
         "company": company,
@@ -329,5 +378,6 @@ async def suggest_roles(*, user_id: int, company: str, domain: str | None, hints
             "catalog": sum(1 for r in seen if r["source"] == "catalog"),
             "search": sum(1 for r in searched if r["source"] == "search"),
             "jobs": sum(1 for r in searched if r["source"] == "jobs"),
+            "by_band": len(escalated),
         },
     }

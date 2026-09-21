@@ -229,7 +229,7 @@ export default function CompanyDiscovery() {
         <CompanySuggestions onPick={applyCompany} />
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid gap-6">
         <form
           onSubmit={onSubmit}
           className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-4"
@@ -279,6 +279,11 @@ export default function CompanyDiscovery() {
             />
             <div className="mt-2">
               <RoleSuggestionBubbles
+                onObserved={(titles) => {
+                  // Fill with the company's own vocabulary the first time it
+                  // is known, and never overwrite what the member typed.
+                  setTitleHints((current) => current.trim() ? current : titles.slice(0, 4).join(', '));
+                }}
                 company={companyName}
                 domain={domain}
                 hints={titleHints}
@@ -315,7 +320,7 @@ export default function CompanyDiscovery() {
               type="button"
               disabled={flowStarting || submitting || flowLive}
               onClick={() => void startFlow()}
-              className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-deep-navy text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              className="ui-button ui-button--primary w-full sm:w-auto"
               data-testid="outreach-this-company"
             >
               {flowStarting ? 'Starting…' : 'Outreach this company'}
@@ -323,7 +328,7 @@ export default function CompanyDiscovery() {
             <button
               type="submit"
               disabled={submitting || flowStarting}
-              className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-deep-navy text-deep-navy text-sm font-medium hover:bg-pale-sky/30 disabled:opacity-50"
+              className="ui-button ui-button--secondary w-full sm:w-auto"
             >
               {submitting ? 'Starting…' : 'Find people only'}
             </button>
@@ -423,7 +428,7 @@ export default function CompanyDiscovery() {
               <button
                 type="button"
                 disabled={exporting || selected.status === 'running'}
-                className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
+                className="ui-button ui-button--secondary ui-button--sm"
                 onClick={async () => {
                   setExporting(true);
                   setError(null);
@@ -441,7 +446,7 @@ export default function CompanyDiscovery() {
               <button
                 type="button"
                 disabled={importing || !prospects.length}
-                className="px-3 py-2 rounded-lg border border-emerald-300 text-sm font-medium text-emerald-900 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50"
+                className="ui-button ui-button--secondary ui-button--sm"
                 onClick={async () => {
                   if (!confirm(`Import ${prospects.length} prospect(s) into main Contacts?`)) return;
                   setImporting(true);
@@ -469,7 +474,7 @@ export default function CompanyDiscovery() {
               )}
               <button
                 type="button"
-                className="px-3 py-2 rounded-lg border border-red-200 text-sm font-medium text-red-800 bg-white hover:bg-red-50"
+                className="ui-button ui-button--danger ui-button--sm"
                 onClick={async () => {
                   if (!confirm('Delete this run and all prospect rows?')) return;
                   try {

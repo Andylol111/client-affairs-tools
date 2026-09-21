@@ -31,7 +31,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'campaigns', to: '/campaigns', label: 'Campaigns', shortLabel: 'Campaigns' },
   { id: 'outreach', to: '/outreach', label: 'Pipeline', shortLabel: 'Pipeline' },
   { id: 'scraper', to: '/scraper', label: 'Find contacts', shortLabel: 'Contacts' },
-  { id: 'analytics', to: '/analytics', label: 'Results', shortLabel: 'Results' },
 ];
 
 export const ADMIN_NAV_ITEM: NavItem = {
@@ -53,8 +52,8 @@ export const ADMIN_NAV_ITEM: NavItem = {
 export const TOP_LEVEL_IDS: NavItemId[] = ['dashboard', 'scraper', 'campaigns'];
 
 export const NAV_GROUPS: { label: string; ids: NavItemId[] }[] = [
-  { label: 'Outreach', ids: ['studio', 'outreach', 'analytics'] },
-  { label: 'Club', ids: ['yucgoutreach', 'projects', 'documents'] },
+  { label: 'Outreach', ids: ['studio', 'outreach'] },
+  { label: 'Club', ids: ['projects', 'documents'] },
 ];
 
 export const MOBILE_PRIMARY_IDS: NavItemId[] = ['dashboard', 'scraper', 'studio', 'campaigns'];

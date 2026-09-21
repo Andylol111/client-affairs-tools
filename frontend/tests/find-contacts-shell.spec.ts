@@ -56,7 +56,7 @@ async function mockPage(page: Page) {
   return { registerQueries, aiCalls: () => aiRecommendCalls };
 }
 
-test('Find contacts offers two surfaces and reaches the public register from the company field', async ({ page }) => {
+test('every Find contacts surface is a pill, and the company field reaches the public register', async ({ page }) => {
   const { registerQueries, aiCalls } = await mockPage(page);
 
   // Find contacts opens on the company index, because choosing a company is
@@ -65,19 +65,32 @@ test('Find contacts offers two surfaces and reaches the public register from the
   await expect(page.getByRole('tab', { name: 'Companies' })).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('tab', { name: 'Find people' }).click();
 
-  // Two doors, not four. Looking up one person and reading email formats are
-  // steps inside company work, not destinations of their own.
+  // Every surface is a pill in one strip. Previously two were tabs, one was a
+  // fold at the bottom of the page and two were sentence links above it, so
+  // the ways into this page did not look like each other or like a menu.
+  // Two doors. Importing a spreadsheet and queuing deep research are ways
+  // people arrive, so they live inside the step that gathers people rather
+  // than as destinations competing with the workflow.
   await expect(page.getByRole('tab')).toHaveCount(2);
-  await expect(page.getByRole('tab', { name: 'Find people' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Companies' })).toBeVisible();
+  for (const name of ['Companies', 'Find people']) {
+    await expect(page.getByRole('tab', { name })).toBeVisible();
+  }
+  await expect(page.getByRole('tab', { name: 'Import a sheet' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Bulk research' })).toHaveCount(0);
+  await expect(page.getByText('Have a spreadsheet already?')).toHaveCount(0);
 
-  // Both folded sections are present on the Find people surface, collapsed.
-  const onePerson = page.getByRole('group').filter({ hasText: 'Look up one named person' });
-  await expect(onePerson).toHaveCount(1);
-  await expect(page.getByLabel('Full name')).toBeHidden();
-  await page.getByText('Look up one named person').click();
-  await expect(page.getByLabel('Full name')).toBeVisible();
-  await expect(page.getByText('Company email formats')).toBeVisible();
+  // Company email formats are no longer a browsable list of templates and
+  // percentages: a format is only useful at the moment an address is missing,
+  // so it appears on the contact row that lacks one, and only once confirmed.
+  await expect(page.getByText('Company email formats')).toHaveCount(0);
+  // Find people shows who was found, rather than sending the member elsewhere
+  // to read their own results.
+  await expect(page.getByRole('heading', { name: /People found/ })).toBeVisible();
+
+  // Looking up a single named person is gone: it was a company search with
+  // one name in it, which Find people already does, and the address guess it
+  // offered now appears on the contact row that lacks one.
+  await expect(page.getByText('Look up one named person')).toHaveCount(0);
 
   // Typing a company reaches the 100k-row register, which cannot be held in
   // the browser, and the row is labelled with where it came from.
@@ -87,7 +100,9 @@ test('Find contacts offers two surfaces and reaches the public register from the
   await expect(option).toBeVisible();
   await expect(option).toContainText('hansfordsensors.com');
   await option.click();
-  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('Hansford Sensors Limited');
+  // Picking from the register adds it to the chosen companies rather than
+  // only filling a box: choosing is the point of the step.
+  await expect(page.getByText('1 chosen')).toBeVisible();
 
   // The curated target list stays, and costs no model call: the AI variant
   // rendered only a name chip here while truncating mid-JSON.
@@ -102,4 +117,25 @@ test('a one-character company does not query the register', async ({ page }) => 
   await page.getByLabel('Company', { exact: true }).fill('a');
   await page.waitForTimeout(600);
   expect(registerQueries).toEqual([]);
+});
+
+test('the guide explains the page instead of a chatbot driving it', async ({ page }) => {
+  await mockPage(page);
+  await page.goto('/scraper');
+
+  // The assistant existed to translate a sentence into a form fill, which
+  // mattered when the work was spread over six pages. The work is now four
+  // numbered steps on one page, so the help is static, page-specific and
+  // costs nothing to open.
+  await expect(page.getByRole('button', { name: 'Open assistant' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'How this page works' }).click();
+  const guide = page.getByRole('dialog', { name: /How Find contacts works/ });
+  await expect(guide).toBeVisible();
+  await expect(guide).toContainText('215,000 companies');
+  await expect(guide).toContainText('Nothing leaves until you release it');
+
+  // It points at the next thing rather than ending the trail.
+  await guide.getByRole('link', { name: /Next: Campaigns/ }).click();
+  await expect(page).toHaveURL(/\/campaigns/);
 });

@@ -176,10 +176,10 @@ export default function CompanyAutocomplete({
             setOpen(false);
           }
         }}
-        className="w-full px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50 focus:ring-2 focus:ring-steel-blue/40 focus:border-steel-blue"
+        className="ui-input"
       />
       {open && filtered.length > 0 && (
-        <ul id={listId} role="listbox" className="absolute z-30 mt-1 w-full max-h-64 overflow-auto rounded-xl border border-pale-sky bg-white shadow-lg">
+        <ul id={listId} role="listbox" className="company-autocomplete-list absolute z-30 mt-1 w-full max-h-64 overflow-auto rounded-xl border border-pale-sky bg-white shadow-lg">
           {filtered.map((option, index) => (
             <li
               id={`${listId}-${index}`}

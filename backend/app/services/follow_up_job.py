@@ -16,7 +16,6 @@ async def run_follow_up_sequences() -> dict:
     Returns {"sent": count, "errors": [...]}.
     """
     from app.services.gmail_api import send_via_gmail_api_with_tracking
-    from app.services.settings_service import get_member_setting
 
     db = await get_db()
     try:
@@ -41,8 +40,6 @@ async def run_follow_up_sequences() -> dict:
                 errors.append({"campaign_id": cid, "error": "Sender ownership requires reconciliation"})
                 continue
 
-            signature = await get_member_setting(sender_user_id, "signature") or ""
-            signature_image_url = await get_member_setting(sender_user_id, "signature_image_url") or None
 
             # Campaign contacts: initial send done, sequence not finished, no reply yet
             cursor = await db.execute(
@@ -126,21 +123,21 @@ async def run_follow_up_sequences() -> dict:
                         errors.append({"campaign_contact_id": cc["id"], "error": "Original recipient requires reconciliation"})
                         continue
                     to_email = history["recipient"]
-                await snapshot(db, key, cc["id"], sender_user_id, to_email, subject, body, signature, signature_image_url)
+                await snapshot(db, key, cc["id"], sender_user_id, to_email, subject, body)
                 intent = await claim(db, key, sender_user_id)
                 await db.commit()
                 if not intent:
                     continue
                 try:
+                    from app.services.settings_service import load_sign_off
                     send_meta = await send_via_gmail_api_with_tracking(
                         user_id=sender_user_id,
                         to_email=intent["recipient"],
                         subject=intent["subject"],
                         body=intent["body"],
                         campaign_contact_id=cc["id"],
-                        signature=intent["signature"],
-                        signature_image_url=intent["signature_image_url"],
                         dispatch_key=key,
+                        sign_off=await load_sign_off(sender_user_id),
                     )
                     tid = send_meta.get("thread_id")
                     mid = send_meta.get("message_id")

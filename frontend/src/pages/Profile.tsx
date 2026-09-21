@@ -8,7 +8,6 @@ import { useEffect, useState } from 'react';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useTheme } from '../contexts/useTheme';
-import { SignatureEditor } from '../components/SignatureEditor';
 import AppTabMenu from '../components/AppTabMenu';
 import AppSubnav from '../components/AppSubnav';
 import SlackIntegration from '../components/SlackIntegration';
@@ -48,9 +47,15 @@ export default function Profile() {
 
   // Settings state (for Settings tab)
   const isAdmin = user?.role === 'admin';
-  const [signature, setSignature] = useState('');
-  const [signatureImageUrl, setSignatureImageUrl] = useState('');
-  const [attachmentsEnabled, setAttachmentsEnabled] = useState(false);
+  const [signOff, setSignOff] = useState({
+    name: user?.name || '',
+    pronouns: '',
+    role: '',
+    organization: 'Yale Undergraduate Consulting Group',
+    linkedin: '',
+    phone: '',
+    logoUrl: '',
+  });
   const [dailySendLimit, setDailySendLimit] = useState('');
   const [dailySendWarnAt, setDailySendWarnAt] = useState('');
   const [customFormats, setCustomFormats] = useState<CustomFormat[]>([]);
@@ -83,9 +88,15 @@ export default function Profile() {
   useEffect(() => {
     if (activeTab !== 'settings') return;
     api.settings.get().then((s) => {
-      setSignature(s.signature || '');
-      setSignatureImageUrl(s.signature_image_url || '');
-      setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
+      setSignOff({
+        name: s.sign_off_name || user?.name || '',
+        pronouns: s.sign_off_pronouns || '',
+        role: s.sign_off_role || '',
+        organization: s.sign_off_organization || 'Yale Undergraduate Consulting Group',
+        linkedin: s.sign_off_linkedin || '',
+        phone: s.sign_off_phone || '',
+        logoUrl: s.sign_off_logo_url || '',
+      });
       setDailySendLimit(s.daily_send_limit != null ? String(s.daily_send_limit) : '');
       setDailySendWarnAt(s.daily_send_warn_at ? String(s.daily_send_warn_at) : '');
     }).catch(() => {});
@@ -94,12 +105,12 @@ export default function Profile() {
       api.settings.customFormats.list().then(setCustomFormats).catch(() => []);
       api.admin.loginLog().then(setLoginLog).catch(() => []);
     }
-  }, [activeTab, isAdmin]);
+  }, [activeTab, isAdmin, user?.name]);
 
   useEffect(() => {
-    if (!attachmentsEnabled || !isAdmin) return;
+    if (!isAdmin) return;
     api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
-  }, [attachmentsEnabled, isAdmin]);
+  }, [isAdmin]);
 
   const saveProfile = async () => {
     setError('');
@@ -126,9 +137,13 @@ export default function Profile() {
       const limit = parseInt(dailySendLimit, 10);
       const warnAt = parseInt(dailySendWarnAt, 10);
       await api.settings.update({
-        signature,
-        signature_image_url: signatureImageUrl,
-        ...(isAdmin ? { attachments_enabled: attachmentsEnabled } : {}),
+        sign_off_name: signOff.name,
+        sign_off_pronouns: signOff.pronouns,
+        sign_off_role: signOff.role,
+        sign_off_organization: signOff.organization,
+        sign_off_linkedin: signOff.linkedin,
+        sign_off_phone: signOff.phone,
+        sign_off_logo_url: signOff.logoUrl,
         ...(Number.isFinite(limit) ? { daily_send_limit: limit } : {}),
         ...(Number.isFinite(warnAt) ? { daily_send_warn_at: warnAt } : {}),
       });
@@ -269,7 +284,7 @@ export default function Profile() {
                   />
                 </div>
               </div>
-              <button onClick={saveProfile} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
+              <button onClick={saveProfile} className="ui-button ui-button--primary">
                 {saved ? 'Saved!' : 'Save Profile'}
               </button>
             </div>
@@ -362,7 +377,7 @@ export default function Profile() {
                   setUiFontSize(def.fontSize);
                   setReduceMotion(def.reduceMotion);
                 }}
-                className="px-4 py-2 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)] font-medium hover:bg-slate-50 dark:hover:bg-slate-600"
+                className="ui-button ui-button--secondary"
               >
                 Revert to Default
               </button>
@@ -379,15 +394,42 @@ export default function Profile() {
               <input type="checkbox" checked={notifPrefs.campaign_summary} onChange={(e) => setNotifPrefs((p) => ({ ...p, campaign_summary: e.target.checked }))} />
               <span className="text-sm">Campaign summary</span>
             </label>
-            <button onClick={saveNotifPrefs} className="mt-4 px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">Save Preferences</button>
+            <button onClick={saveNotifPrefs} className="ui-button ui-button--primary mt-4">Save Preferences</button>
           </div>
               <div className="surface-card shadow-sm rounded-xl p-6">
-                <h2 className="font-semibold text-deep-navy mb-4">Email Signature</h2>
-                <p className="text-sm text-slate-600 mb-2">This signature is used only for emails sent from your account. Type text and paste or insert images (e.g. logo) directly in the box below.</p>
-                <SignatureEditor value={signature} onChange={setSignature} placeholder="Best regards,&#10;Your Name&#10;YUCG" minHeight="140px" />
-                <label className="block text-sm text-slate-600 mt-3 mb-1">Extra signature image URL (optional)</label>
-                <input type="url" value={signatureImageUrl} onChange={(e) => setSignatureImageUrl(e.target.value)} placeholder="https://example.com/logo.png" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800" />
-                {signatureImageUrl && <img src={signatureImageUrl} alt="Signature" className="mt-2 max-h-16 object-contain border border-pale-sky rounded" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />}
+                <h2 className="font-semibold text-deep-navy mb-4">Email sign-off</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-sm text-slate-600">Name
+                    <input value={signOff.name} onChange={(e) => setSignOff((v) => ({ ...v, name: e.target.value }))} className="ui-input mt-1 w-full" />
+                  </label>
+                  <label className="text-sm text-slate-600">Pronouns
+                    <input value={signOff.pronouns} onChange={(e) => setSignOff((v) => ({ ...v, pronouns: e.target.value }))} placeholder="he/him" className="ui-input mt-1 w-full" />
+                  </label>
+                  <label className="text-sm text-slate-600">Role
+                    <input value={signOff.role} onChange={(e) => setSignOff((v) => ({ ...v, role: e.target.value }))} placeholder="Director of Client Recruitment" className="ui-input mt-1 w-full" />
+                  </label>
+                  <label className="text-sm text-slate-600">Organization
+                    <input value={signOff.organization} onChange={(e) => setSignOff((v) => ({ ...v, organization: e.target.value }))} className="ui-input mt-1 w-full" />
+                  </label>
+                  <label className="text-sm text-slate-600">LinkedIn URL
+                    <input type="url" value={signOff.linkedin} onChange={(e) => setSignOff((v) => ({ ...v, linkedin: e.target.value }))} placeholder="https://linkedin.com/in/..." className="ui-input mt-1 w-full" />
+                  </label>
+                  <label className="text-sm text-slate-600">Phone
+                    <input type="tel" value={signOff.phone} onChange={(e) => setSignOff((v) => ({ ...v, phone: e.target.value }))} placeholder="+1 203 555 0123" className="ui-input mt-1 w-full" />
+                  </label>
+                  <label className="text-sm text-slate-600 sm:col-span-2">YUCG logo URL
+                    <input type="url" value={signOff.logoUrl} onChange={(e) => setSignOff((v) => ({ ...v, logoUrl: e.target.value }))} placeholder="https://..." className="ui-input mt-1 w-full" />
+                  </label>
+                </div>
+                <div className="mt-5 border-t border-slate-200 pt-4 flex items-start gap-4 text-sm text-slate-700">
+                  {signOff.logoUrl && <img src={signOff.logoUrl} alt="YUCG" className="w-[72px] h-auto object-contain" />}
+                  <div>
+                    <div className="font-bold text-deep-navy">{signOff.name || 'Your name'} {signOff.pronouns && <em className="font-normal">({signOff.pronouns})</em>}</div>
+                    {signOff.role && <div>{signOff.role}</div>}
+                    <div>{signOff.organization}</div>
+                    {(signOff.linkedin || signOff.phone) && <div className="mt-0.5 text-deep-navy">{signOff.linkedin ? 'LinkedIn' : ''}{signOff.linkedin && signOff.phone ? ' | ' : ''}{signOff.phone}</div>}
+                  </div>
+                </div>
               </div>
               <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-1">Send pacing</h2>
@@ -431,7 +473,7 @@ export default function Profile() {
                   </div>
                 </div>
               </div>
-          <button onClick={saveSettings} className="ui-button">{saved ? "Saved" : "Save settings"}</button>
+          <button onClick={saveSettings} className="ui-button ui-button--primary">{saved ? "Saved" : "Save settings"}</button>
           {isAdmin && (
             <>
               <div className="surface-card shadow-sm rounded-xl p-6">
@@ -450,12 +492,7 @@ export default function Profile() {
               </div>
               <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Email Attachments</h2>
-                <label className="flex items-center gap-2 mb-4">
-                  <input type="checkbox" checked={attachmentsEnabled} onChange={(e) => setAttachmentsEnabled(e.target.checked)} />
-                  <span className="text-sm">Enable email attachments library</span>
-                </label>
-                {attachmentsEnabled && (
-                  <div className="mt-4 pt-4 border-t border-pale-sky">
+                <div className="mt-4 pt-4 border-t border-pale-sky">
                     <input type="file" id="att-upload" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.gif"
                       onChange={async (e) => {
                         const f = e.target.files?.[0];
@@ -474,31 +511,30 @@ export default function Profile() {
                           <li key={a.id} className="flex justify-between text-sm">
                             <span className="truncate">{a.display_name || a.filename}</span>
                             <button onClick={async () => { try { await api.attachments.delete(a.id); setAttachmentLibrary(await api.attachments.list()); } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed'; alert(eMessage); } }} className="text-red-600 text-xs">Remove</button>
+      const eMessage = e instanceof Error ? e.message : 'Request failed'; alert(eMessage); } }} className="ui-button ui-button--danger ui-button--sm">Remove</button>
                           </li>
                         ))}
                       </ul>
                     )}
-                  </div>
-                )}
+                </div>
               </div>
               <div className="surface-card shadow-sm rounded-xl p-6">
                 <h2 className="font-semibold text-deep-navy mb-4">Custom Email Formats</h2>
                 <div className="flex gap-2 mb-4">
                   <input value={newFormatName} onChange={(e) => setNewFormatName(e.target.value)} placeholder="Name" className="flex-1 px-3 py-2 rounded-lg border" />
                   <input value={newFormatPattern} onChange={(e) => setNewFormatPattern(e.target.value)} placeholder="Pattern" className="flex-1 px-3 py-2 rounded-lg border" />
-                  <button onClick={addFormat} disabled={!newFormatName.trim() || !newFormatPattern.trim()} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] disabled:hover:bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] disabled:opacity-50">{formatAdded ? 'Added!' : 'Add'}</button>
+                  <button onClick={addFormat} disabled={!newFormatName.trim() || !newFormatPattern.trim()} className="ui-button ui-button--primary">{formatAdded ? 'Added!' : 'Add'}</button>
                 </div>
                 <ul className="space-y-2">
                   {customFormats.map((f) => (
                     <li key={f.id} className="flex justify-between py-2 border-b text-sm">
                       <span className="font-mono">{f.name}: {f.pattern}</span>
-                      <button onClick={() => removeFormat(f.id)} className="text-red-600 text-xs">Remove</button>
+                      <button onClick={() => removeFormat(f.id)} className="ui-button ui-button--danger ui-button--sm">Remove</button>
                     </li>
                   ))}
                 </ul>
               </div>
-              <button onClick={saveSettings} className="px-6 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">{saved ? 'Saved!' : 'Save Settings'}</button>
+              <button onClick={saveSettings} className="ui-button ui-button--primary">{saved ? 'Saved!' : 'Save Settings'}</button>
             </>
           )}
         </div>

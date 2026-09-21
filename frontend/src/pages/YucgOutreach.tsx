@@ -58,7 +58,7 @@ function VerifiabilityDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="px-2 py-1 text-sm text-slate-600 hover:text-deep-navy rounded border border-pale-sky"
+            className="ui-button ui-button--secondary ui-button--sm"
           >
             Close
           </button>
@@ -375,7 +375,7 @@ function CoordinatorPanel() {
             type="button"
             onClick={refreshBoard}
             disabled={loadingBoard}
-            className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
+            className="ui-button ui-button--secondary ui-button--sm"
           >
             {loadingBoard ? 'Refreshing…' : 'Refresh board'}
           </button>
@@ -542,7 +542,7 @@ function CoordinatorPanel() {
             type="button"
             disabled={recommendBusy}
             onClick={runRecommend}
-            className="px-4 py-2 rounded-xl bg-deep-navy text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            className="ui-button ui-button--primary"
           >
             {recommendBusy ? 'Recommending…' : 'Run recommendation'}
           </button>
@@ -550,7 +550,7 @@ function CoordinatorPanel() {
             type="button"
             disabled={exporting}
             onClick={createWeekSlate}
-            className="px-3 py-2 rounded-lg border border-pale-sky text-sm font-medium text-deep-navy bg-white hover:bg-slate-50 disabled:opacity-50"
+            className="ui-button ui-button--secondary"
           >
             Create target list
           </button>
@@ -592,7 +592,7 @@ function CoordinatorPanel() {
                     <td className="px-3 py-2 text-right">
                       <button
                         type="button"
-                        className="text-xs font-medium text-steel-blue hover:underline"
+                        className="ui-button ui-button--ghost ui-button--sm"
                         onClick={() => openVerifiability(rec)}
                       >
                         Verify details
@@ -733,7 +733,7 @@ function CombPanel() {
             type="button"
             disabled={!releaseId || busy}
             onClick={() => releaseId && api.yucg.rebuildPack(Number(releaseId)).catch((e) => setError(e.message))}
-            className="px-3 py-2 rounded-lg border border-pale-sky text-sm"
+            className="ui-button ui-button--secondary ui-button--sm"
           >
             Refresh outreach workbook
           </button>
@@ -782,7 +782,7 @@ function CombPanel() {
               type="button"
               disabled={busy || !mintName.trim() || !resolvedMintTarget}
               onClick={mint}
-              className="px-3 py-2 rounded-lg bg-deep-navy text-white text-sm disabled:opacity-50"
+              className="ui-button ui-button--primary ui-button--sm"
             >
               Add suggested contact
             </button>
@@ -815,10 +815,10 @@ function CombPanel() {
                     {p.vendor_check ? ` · ${p.vendor_check}` : ''}
                   </td>
                   <td className="px-3 py-2 text-right space-x-2">
-                    <button type="button" disabled={busy} onClick={() => decide(p.id, true)} className="text-xs font-medium text-emerald-800 hover:underline">
+                    <button type="button" disabled={busy} onClick={() => decide(p.id, true)} className="ui-button ui-button--ghost ui-button--sm">
                       Keep
                     </button>
-                    <button type="button" disabled={busy} onClick={() => decide(p.id, false)} className="text-xs font-medium text-red-700 hover:underline">
+                    <button type="button" disabled={busy} onClick={() => decide(p.id, false)} className="ui-button ui-button--danger ui-button--sm">
                       Drop
                     </button>
                   </td>

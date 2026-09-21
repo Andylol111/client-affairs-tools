@@ -7,6 +7,7 @@ venv/
 clientreach.db
 clientreach.db-shm
 clientreach.db-wal
+.localdev/
 backend/attachments/
 .DS_Store
 .rag_index/

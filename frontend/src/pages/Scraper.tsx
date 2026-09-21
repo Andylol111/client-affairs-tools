@@ -1,12 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, type Contact, type EmailPatternRow, type DiscoveryLogEntry } from '../api';
+import { api, type Contact, type DiscoveryLogEntry } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
-import CompanyDiscovery from '../components/discovery/CompanyDiscovery';
 import CompanyRegister from '../components/discovery/CompanyRegister';
-import CompanyAutocomplete from '../components/CompanyAutocomplete';
-import EmailPrediction from '../components/EmailPrediction';
+import ContactSheet from '../components/discovery/ContactSheet';
+import CampaignPipeline from '../components/discovery/CampaignPipeline';
 import { Notice } from '../components/ui/Primitives';
 import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
 import { useProjects } from '../lib/useProjects';
@@ -97,152 +96,24 @@ export default function Scraper() {
   const [params] = useSearchParams();
   // Default to the crawl: it is the one door that turns a company name into people.
   const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'import', 'register'], 'register');
-  const discoveryKey = [
-    params.get('company') || '',
-    params.get('domain') || '',
-    params.get('titles') || '',
-    params.get('max') || '',
-    params.get('run') || '',
-  ].join('|');
-  const [domain, setDomain] = useState('');
   const [importing, setImporting] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [findName, setFindName] = useState('');
-  const [findCompany, setFindCompany] = useState('');
-  // Carried when the company is picked from the known list; the domain there
-  // is authoritative, unlike resolving a typed display name.
-  const [findCompanyDomain, setFindCompanyDomain] = useState('');
-  const [findLoading, setFindLoading] = useState(false);
-  const [findResult, setFindResult] = useState<{
-    query: string;
-    results: { title?: string; url?: string; content?: string }[];
-    summary: string | null;
-    message: string | null;
-  } | null>(null);
-  const [emailPatterns, setEmailPatterns] = useState<(EmailPatternRow & { member_asserted?: boolean })[]>([]);
-  const [patternsTotal, setPatternsTotal] = useState(0);
-  const [patternsLoading, setPatternsLoading] = useState(false);
-  const [reconciling, setReconciling] = useState(false);
-  const [purging, setPurging] = useState(false);
-  const [clearing, setClearing] = useState(false);
-  const [discoveryLog, setDiscoveryLog] = useState<DiscoveryLogEntry[]>([]);
-  const [scrapeRunId, setScrapeRunId] = useState<string | null>(null);
+  const [discoveryLog] = useState<DiscoveryLogEntry[]>([]);
+  const [scrapeRunId] = useState<string | null>(null);
   const [showDiscoveryLog, setShowDiscoveryLog] = useState(false);
 
 
-  useEffect(() => {
-    const raw = domain.trim();
-    const t = window.setTimeout(async () => {
-      setPatternsLoading(true);
-      try {
-        // One search path: the filter accepts a company name or a domain, and
-        // an empty filter lists the whole registry instead of a dead end.
-        const res = await api.contacts.emailPatternRegistry({
-          ...(raw ? { q: raw } : {}),
-          limit: 25,
-        });
-        setEmailPatterns(res.items || []);
-        setPatternsTotal(res.total || 0);
-      } catch {
-        setEmailPatterns([]);
-        setPatternsTotal(0);
-      } finally {
-        setPatternsLoading(false);
-      }
-    }, 400);
-    return () => clearTimeout(t);
-  }, [domain]);
-
-  const handleReconcileIdentity = async () => {
-    setReconciling(true);
-    setError('');
-    setInfoMessage('');
-    try {
-      const res = await api.contacts.reconcileIdentity(domain.trim() || undefined);
-      setInfoMessage(`Identity pass: ${res.fixed} fixed, ${res.removed} removed, ${res.unchanged} unchanged.`);
-    } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed';
-      setError(eMessage || 'Reconcile failed');
-    } finally {
-      setReconciling(false);
-    }
-  };
-
-  const handlePurgeJunk = async () => {
-    if (!window.confirm('Delete saved contacts that look like nav/product labels (Gift Cards, Mac Studio, etc.)?')) return;
-    setPurging(true);
-    setError('');
-    setInfoMessage('');
-    try {
-      const res = await api.contacts.purgeJunkContacts(domain.trim() || undefined);
-      setInfoMessage(`Removed ${res.removed} junk contact(s) from the database.`);
-    } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed';
-      setError(eMessage || 'Purge failed');
-    } finally {
-      setPurging(false);
-    }
-  };
-
-  const handleClearContactsCache = async () => {
-    const dom = domain.trim();
-    const scope = dom ? `contacts matching ${dom}` : 'ALL contacts in the database';
-    if (!window.confirm(`Clear ${scope}?\n\nThis permanently deletes those contacts plus related campaign rows, notes, and generated emails. Email pattern cache and AI discovery logs can be cleared too on the next step.`)) return;
-    const alsoCaches = window.confirm('Also clear email pattern cache and AI discovery logs?\n\nOK = yes, clear everything listed above.\nCancel = delete contacts only (keep learned email patterns).');
-    if (!window.confirm(`Last chance: permanently delete ${scope}${alsoCaches ? ', email patterns, and discovery logs' : ''}.\n\nThis cannot be undone.`)) return;
-    setClearing(true);
-    setError('');
-    setInfoMessage('');
-    try {
-      const res = await api.contacts.clearAll({
-        confirm: true,
-        domain: dom || undefined,
-        clear_pattern_cache: alsoCaches,
-        clear_discovery_logs: alsoCaches,
-      });
-      setContacts([]);
-      setDiscoveryLog([]);
-      setScrapeRunId(null);
-      if (alsoCaches) setEmailPatterns([]);
-      setInfoMessage(
-        `Cleared ${res.contacts_deleted} contact(s)` +
-          (alsoCaches ? `, ${res.patterns_deleted} email pattern(s), ${res.discovery_logs_deleted} discovery log row(s).` : '.')
-      );
-    } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed';
-      setError(eMessage || 'Clear failed');
-    } finally {
-      setClearing(false);
-    }
-  };
 
 
 
 
-  const handleFindContact = async () => {
-    const name = findName.trim();
-    if (!name) {
-      setError('Enter a name to search for.');
-      return;
-    }
-    setFindLoading(true);
-    setError('');
-    setFindResult(null);
-    try {
-      const res = await api.contacts.searchPerson({ name, company: findCompany.trim() || undefined });
-      setFindResult(res);
-      setError('');
-    } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed';
-      setError(eMessage || 'Search failed');
-    } finally {
-      setFindLoading(false);
-    }
-  };
+
+
+
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -271,19 +142,16 @@ export default function Scraper() {
   };
 
   return (
-    <div className="app-workspace pb-12">
-      <PageHeader
-        title="Find contacts"
-        subtitle="Start from the company index, or name a company you already have in mind."
-      />
+    <div className="app-workspace w-full max-w-[1920px] pb-12">
+      <PageHeader title="Find contacts" />
 
       <AppSubnav
-        className="mb-8"
+        className="mb-6"
         items={[
           { id: 'register', label: 'Companies' },
           { id: 'company', label: 'Find people' },
         ]}
-        active={activeTab === 'register' ? 'register' : 'company'}
+        active={activeTab}
         onChange={(id) => {
           setActiveTab(id as ScraperTab);
           setError('');
@@ -294,187 +162,38 @@ export default function Scraper() {
 
       {activeTab === 'company' && (
         <>
-          <CompanyDiscovery key={discoveryKey} />
-          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-[13px]">
-            <button type="button" onClick={() => setActiveTab('import')} className="font-semibold text-steel-blue hover:underline">
-              Have a spreadsheet already? Import it →
-            </button>
-            <button type="button" onClick={() => setActiveTab('research')} className="font-semibold text-steel-blue hover:underline">
-              Researching many companies at once? →
-            </button>
+          {/* Finding people and seeing who was found are one task. The search
+              form is a fixed-width column; the rest of the page is the sheet,
+              which used to be empty space that sent the member to another
+              page to read their own results. */}
+          <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-start">
+            <div className="xl:col-span-2 space-y-4">
+              <CampaignPipeline />
+            </div>
+            <div className="xl:col-span-3">
+              <ContactSheet company={params.get('company') || ''} />
+            </div>
           </div>
         </>
       )}
 
-      {(activeTab === 'import' || activeTab === 'research') && (
-        <button
-          type="button"
-          onClick={() => setActiveTab('company')}
-          className="mb-4 text-[13px] font-semibold text-steel-blue hover:underline"
-        >
-          ← Back to the company crawl
-        </button>
-      )}
-
       {activeTab === 'research' && <ResearchTab />}
 
-      {activeTab === 'company' && (
-      <details className="mt-8 surface-card rounded-2xl overflow-hidden shadow-sm">
-        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">
-          Look up one named person
-        </summary>
-        <div className="p-4 space-y-3 border-t border-pale-sky">
-          <p className="text-[13px] text-slate-500">
-            For a single person you already know of. The company search above collects a whole roster and checks inboxes.
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input
-              type="text"
-              placeholder="Full name"
-              aria-label="Full name"
-              value={findName}
-              onChange={(e) => setFindName(e.target.value)}
-            />
-            <CompanyAutocomplete
-              id="find-company"
-              label="Company (optional)"
-              value={findCompany}
-              placeholder="Company (optional)"
-              onChange={(name, option) => {
-                setFindCompany(name);
-                setFindCompanyDomain(option?.domain || '');
-              }}
-            />
-          </div>
-          <EmailPrediction
-            name={findName}
-            company={findCompany}
-            companyDomain={findCompanyDomain}
-            onUse={async (email, predictedDomain) => {
-              setError('');
-              setInfoMessage('');
-              try {
-                await api.contacts.create({
-                  email,
-                  name: findName.trim() || undefined,
-                  company: findCompany.trim() || undefined,
-                  // The resolved domain is what later pattern learning keys on.
-                  company_domain: predictedDomain || undefined,
-                  confidence: 'low',
-                });
-                setInfoMessage(`Saved ${email} to Contacts. It stays a derived guess until a send proves it.`);
-              } catch (err) {
-                setError(err instanceof Error ? err.message : 'Could not save that contact');
-              }
-            }}
-          />
-          <button
-            type="button"
-            onClick={handleFindContact}
-            disabled={findLoading || !findName.trim()}
-            className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-40"
-          >
-            {findLoading ? 'Searching…' : 'Search for this person'}
-          </button>
-        </div>
-      {findResult && (
-        <div className="mt-6 surface-card rounded-2xl overflow-hidden shadow-sm p-5">
-          <h3 className="text-[15px] font-semibold text-deep-navy mb-3">Results for “{findResult.query}”</h3>
-          {findResult.message && !findResult.results?.length && <p className="text-[13px] text-slate-500 mb-3">{findResult.message}</p>}
-          {findResult.summary && (
-            <div className="p-4 rounded-xl bg-pale-sky/20 border border-pale-sky/50 mb-4">
-              <p className="text-sm font-medium text-deep-navy mb-1">Summary</p>
-              <p className="text-[13px] text-slate-700 whitespace-pre-wrap">{findResult.summary}</p>
-            </div>
-          )}
-          {findResult.results && findResult.results.length > 0 && (
-            <ul className="space-y-2">
-              {findResult.results.map((r, i) => (
-                <li key={i} className="border-b border-pale-sky/50 pb-2 last:border-0">
-                  {r.url ? (
-                    <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-[13px] font-medium text-steel-blue hover:underline">{r.title || r.url}</a>
-                  ) : (
-                    <span className="text-[13px] font-medium text-deep-navy">{r.title || 'Result'}</span>
-                  )}
-                  {r.content && <p className="text-[12px] text-slate-500 mt-0.5 line-clamp-2">{r.content}</p>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-      </details>
-      )}
 
-      {activeTab === 'company' && (
-      <details className="mt-4 surface-card rounded-2xl border border-pale-sky overflow-hidden">
-        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Company email formats</summary>
-        <div className="px-5 pb-5 space-y-4 border-t border-pale-sky">
-          <p className="text-[13px] text-slate-500 pt-3">
-            Used to derive addresses when a roster does not publish them.
-          </p>
-          <input
-            type="text"
-            placeholder="Filter by company or domain"
-            aria-label="Filter company formats"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            className="w-full max-w-sm px-4 py-3 rounded-xl bg-pale-sky/30 text-deep-navy placeholder-slate-blue/70 text-[15px] border border-pale-sky/50"
-          />
-          <div className="rounded-xl border border-pale-sky/80 bg-pale-sky/20 px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-              <p className="text-[13px] font-medium text-deep-navy">
-                {domain.trim()
-                  ? `Formats · ${domain.trim()}`
-                  : `Known company formats${patternsTotal ? ` · ${patternsTotal}` : ''}`}
-              </p>
-              <div className="flex flex-wrap gap-3">
-                <button type="button" onClick={handleReconcileIdentity} disabled={reconciling} className="text-[12px] font-semibold text-steel-blue hover:text-deep-navy disabled:opacity-50">{reconciling ? 'Reconciling…' : 'Fix identity mismatches'}</button>
-                <button type="button" onClick={handlePurgeJunk} disabled={purging} className="text-[12px] font-semibold text-red-700 hover:text-red-900 disabled:opacity-50">{purging ? 'Purging…' : 'Remove nav junk contacts'}</button>
-              </div>
-            </div>
-            {patternsLoading ? (
-              <p className="text-[12px] text-slate-500">Loading patterns…</p>
-            ) : emailPatterns.length === 0 ? (
-              <p className="text-[12px] text-slate-500">
-                {domain.trim()
-                  ? 'No format on record for that company.'
-                  : 'No company formats recorded yet.'}
-              </p>
-            ) : (
-              <ul className="space-y-1.5">
-                {emailPatterns.map((p) => (
-                  <li key={`${p.company_domain}:${p.pattern_key}`} className="text-[12px] text-slate-700 flex flex-wrap gap-x-2">
-                    <span className="font-medium text-deep-navy">{p.company_name || p.company_domain}</span>
-                    <span className="font-mono font-medium text-deep-navy">{p.pattern_template}</span>
-                    <span className="text-slate-500">
-                      {Math.round((p.confidence || 0) * 100)}% · {p.verified_samples} verified
-                      {p.failed_samples ? ` · ${p.failed_samples} bounced` : ''}
-                      {p.member_asserted ? ' · set by a member' : ''}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <button type="button" onClick={handleClearContactsCache} disabled={clearing} className="text-[12px] font-semibold text-red-800 disabled:opacity-50">
-            {clearing ? 'Clearing…' : 'Clear contacts & cache…'}
-          </button>
-        </div>
-      </details>
-      )}
 
       {activeTab === 'import' && (
-      <details className="mt-0 surface-card rounded-2xl border border-pale-sky overflow-hidden" open>
-        <summary className="px-5 py-4 cursor-pointer text-[15px] font-semibold text-deep-navy">Import a spreadsheet</summary>
-        <div className="px-5 pb-5 border-t border-pale-sky">
+      <div className="surface-card rounded-2xl border border-pale-sky overflow-hidden max-w-3xl">
+        <div className="px-5 py-4 border-b border-pale-sky">
+          <h2 className="text-[15px] font-semibold text-deep-navy">Import a spreadsheet</h2>
+        </div>
+        <div className="px-5 pb-5">
           <p className="text-[13px] text-slate-500 py-3">CSV or Excel with name, email, title, company.</p>
           <input ref={fileInputRef} type="file" accept=".csv,.xlsx" onChange={handleImport} className="hidden" />
           <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className="w-full py-3.5 rounded-xl bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-[15px] font-semibold disabled:opacity-50">
             {importing ? 'Importing…' : 'Import file'}
           </button>
         </div>
-      </details>
+      </div>
 
       )}
 

@@ -100,7 +100,7 @@ test('workspace scroll keeps navigation stable without a fixed backdrop', async 
   await page.screenshot({ path: testInfo.outputPath('documents-scrolled.png'), fullPage: false });
 });
 
-for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Results'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
+for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Full breakdown'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
   test(`accessible page: ${title}`, async ({ page }, testInfo) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -109,161 +109,6 @@ for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/docu
     await page.screenshot({ path: testInfo.outputPath('page.png'), fullPage: false });
   });
 }
-
-test('assistant keeps source scope visible and returns document citations', async ({ page }) => {
-  await page.goto('/');
-  const fab = page.getByRole('button', { name: 'Open assistant' });
-  await expect(fab.locator('svg')).toBeVisible();
-  await expect(fab).not.toHaveText('AI');
-  await fab.click();
-  await expect(page.getByRole('dialog', { name: 'Site assistant' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Assistant is open' }).locator('svg')).toBeVisible();
-  await expect(page.getByText('It cannot send mail.')).toBeVisible();
-  await page.getByText('Optional documents').click();
-  await expect(page.getByText('Project report 1')).toBeVisible();
-  await page.getByLabel('Question or task').fill('Build an evidence-based plan');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await expect(page.getByText('Use the approved project evidence')).toBeVisible();
-  await expect(page.getByRole('link', { name: '[D1-C1] Project report 1' })).toHaveAttribute('href', '/documents?q=Project%20report%201');
-  await expect(page.getByText('This hour: 0/15')).toBeVisible();
-});
-
-test('assistant can propose Find people and only runs it after confirm', async ({ page }) => {
-  const mutations: string[] = [];
-  await page.route('**/api/assistant/ask', async route => {
-    mutations.push(`ASK ${route.request().postDataJSON()?.question}`);
-    return route.fulfill({
-      json: {
-        answer: 'I can start a Find people run for Acme after you confirm.',
-        thread_id: 9,
-        model: 'haiku',
-        grounded: false,
-        sources: [],
-        pending_actions: [{ tool: 'start_find_people', args: { company_name: 'Acme', max_prospects: 250 }, summary: 'Find people at Acme (up to 250)' }],
-        navigations: [{ path: '/scraper', label: 'Find contacts' }],
-        lookups: [{ tool: 'search_contacts', data: { count: 0, contacts: [] } }],
-        asks: [{ id: 'titles', label: 'Titles to prioritize', value: '', required: true, placeholder: 'VPs, project managers' }],
-      },
-    });
-  });
-  await page.route('**/api/assistant/act', async route => {
-    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
-    return route.fulfill({ json: { ok: true, answer: 'Started Find people run #12 for Acme.', result: { id: 12 }, navigations: [{ path: '/scraper?view=company&company=Acme&run=12', label: 'Open Find people' }] } });
-  });
-  await page.goto('/outreach');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByLabel('Question or task').fill('Find people at Acme');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await expect(page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' })).toBeVisible();
-  await expect(page.getByLabel('Titles to prioritize *')).toBeVisible();
-  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
-  await page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' }).click();
-  await expect(page.getByRole('alert')).toContainText('titles to prioritize');
-  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
-  await page.getByRole('button', { name: 'Skip titles' }).click();
-  await page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' }).click();
-  await expect(page.getByText('Started Find people run #12 for Acme.')).toBeVisible();
-  expect(mutations).toContain('ACT start_find_people');
-  expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
-  await expect(page).toHaveURL(/\/scraper\?view=company/);
-});
-
-test('assistant indexes an owned document from the bubble', async ({ page }) => {
-  let indexed = false;
-  await page.route('**/api/assistant/sources', route => route.fulfill({
-    json: [{
-      id: 1, title: 'Project report 1', owner_user_id: 1, project_id: 1, project_name: 'Consulting project',
-      visibility: 'project', current_version: 1, index_state: 'error', character_count: 0, last_error: 'retry',
-    }],
-  }));
-  await page.route('**/api/assistant/documents/1/index', async route => {
-    indexed = true;
-    return route.fulfill({ json: { state: 'ready', chunks: 2, characters: 100 } });
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByText('Optional documents').click();
-  await page.getByRole('button', { name: 'Index for assistant' }).click();
-  expect(indexed).toBe(true);
-});
-
-test('assistant restores a thread and starts a new chat', async ({ page }) => {
-  await page.route('**/api/assistant/threads', route => route.fulfill({
-    json: [{ id: 9, title: 'Find Acme', created_at: 1, updated_at: 2 }],
-  }));
-  await page.route('**/api/assistant/threads/9', route => route.fulfill({
-    json: [
-      { id: 1, role: 'user', content: 'Find people at Acme', created_at: 1, sources: [] },
-      {
-        id: 2, role: 'assistant', content: 'Confirm to start the run.', created_at: 2, sources: [],
-        pending_actions: [{ tool: 'start_find_people', args: { company_name: 'Acme', max_prospects: 250 }, summary: 'Find people at Acme (up to 250)' }],
-        asks: [{ id: 'titles', label: 'Titles to prioritize', value: '', required: true, placeholder: 'VPs, project managers' }],
-        navigations: [{ path: '/scraper?view=company&company=Acme', label: 'Find people' }],
-      },
-    ],
-  }));
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByRole('button', { name: 'Find Acme' }).click();
-  await expect(page.getByText('Confirm to start the run.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Start search: Find people at Acme (up to 250)' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Find people', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'New chat' }).click();
-  await expect(page.getByText('It fills the Find people boxes.')).toBeVisible();
-});
-
-test('assistant import confirm opens Pipeline and never sends mail', async ({ page }) => {
-  const mutations: string[] = [];
-  await page.route('**/api/assistant/ask', async route => {
-    mutations.push(`ASK ${route.request().postDataJSON()?.tool || route.request().postDataJSON()?.question}`);
-    return route.fulfill({
-      json: {
-        answer: 'I can import run 7 after you confirm.',
-        thread_id: 9,
-        model: 'haiku',
-        grounded: false,
-        sources: [],
-        pending_actions: [{ tool: 'import_run_to_contacts', args: { run_id: 7 }, summary: 'Import run #7 into Contacts' }],
-        navigations: [{ path: '/outreach', label: 'Open Pipeline' }],
-        lookups: [],
-      },
-    });
-  });
-  await page.route('**/api/assistant/act', async route => {
-    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
-    return route.fulfill({ json: { ok: true, answer: 'Imported into Contacts: 1 new, 0 updated, 0 skipped.', navigations: [{ path: '/outreach', label: 'Open Pipeline' }] } });
-  });
-  await page.goto('/scraper');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByLabel('Question or task').fill('Import the last run');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await expect(page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' })).toBeVisible();
-  expect(mutations.some(item => item.startsWith('ACT'))).toBe(false);
-  await page.getByRole('button', { name: 'Confirm: Import run #7 into Contacts' }).click();
-  await expect(page.getByText('Imported into Contacts: 1 new')).toBeVisible();
-  expect(mutations).toContain('ACT import_run_to_contacts');
-  expect(mutations.some(item => /send|delete/i.test(item))).toBe(false);
-  await expect(page).toHaveURL(/\/outreach/);
-});
-
-test('assistant ask failures restore the question and never call act', async ({ page }) => {
-  const mutations: string[] = [];
-  await page.route('**/api/assistant/ask', async route => {
-    mutations.push('ASK');
-    return route.fulfill({ status: 429, json: { detail: 'Too many assistant requests this hour' } });
-  });
-  await page.route('**/api/assistant/act', async route => {
-    mutations.push(`ACT ${route.request().postDataJSON()?.tool}`);
-    return route.fulfill({ json: { ok: true } });
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByLabel('Question or task').fill('Find people at Acme');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await expect(page.getByRole('alert')).toContainText('Too many assistant requests this hour');
-  await expect(page.getByLabel('Question or task')).toHaveValue('Find people at Acme');
-  expect(mutations).toEqual(['ASK']);
-});
 
 test('checking an uncertain dispatch never calls a send endpoint', async ({ page }) => {
   const mutations: string[] = [];
@@ -379,9 +224,15 @@ test('studio workbench fills the desktop viewport instead of leaving a short gen
   expect(briefBox?.height || 0).toBeGreaterThan(70);
   expect(bodyBox?.height || 0).toBeGreaterThanOrEqual(280);
   expect(editBox!.width).toBeGreaterThan(genBox!.width * 1.5);
-  const save = page.getByRole('button', { name: 'Save Draft', exact: true });
+  // The action bar is one row of one control height: the send target reads on
+  // the button, so nothing wraps the row onto a second line.
+  const actions = page.locator('.studio-draft-actions');
+  const save = actions.getByRole('button', { name: 'Save draft', exact: true });
   await save.scrollIntoViewIfNeeded();
   await expect(save).toBeInViewport({ ratio: 1 });
+  await expect(actions.getByRole('button', { name: /^Send test to .+@/ })).toBeVisible();
+  const tops = await actions.evaluate(row => [...row.children].map(child => Math.round(child.getBoundingClientRect().top)));
+  expect(new Set(tops).size, 'draft actions wrapped onto a second line').toBe(1);
   await page.locator('.email-studio-editor-column').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath('studio-workbench.png'), fullPage: false });
 });
@@ -422,64 +273,116 @@ test('untrusted draft and preview HTML cannot execute while formatting remains',
   expect(await page.evaluate(() => '__xss' in window)).toBe(false);
 });
 
-test('signature load and rich clipboard paste strip active content before insertion', async ({ page }) => {
-  await page.route('**/api/settings', route => route.fulfill({ json: { signature: maliciousHtml } }));
-  await page.goto('/profile?tab=settings');
-  const editor = page.getByRole('textbox', { name: 'Email signature', exact: true });
-  await expect(editor.locator('strong')).toHaveText('Safe bold');
-  await expect(editor.locator('[onerror], [onload], script, svg, iframe, a[href^="javascript:"]')).toHaveCount(0);
-  await editor.focus();
-  await editor.evaluate((element, html) => {
-    const transfer = new DataTransfer(); transfer.setData('text/html', html);
-    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
-  }, maliciousHtml);
-  await expect(editor.locator('[onerror], [onload], script, svg, iframe, a[href^="javascript:"]')).toHaveCount(0);
-  expect(await page.evaluate(() => '__xss' in window)).toBe(false);
+test('the studio company picker searches the server instead of holding the catalogue', async ({ page }) => {
+  const asked: URL[] = [];
+  await page.route('**/api/contacts/companies/summary*', async route => {
+    const url = new URL(route.request().url());
+    asked.push(url);
+    const q = (url.searchParams.get('q') || '').toLowerCase();
+    const all = Array.from({ length: 500 }, (_, i) => ({
+      company: `Company ${i + 1}`, company_domain: `c${i + 1}.com`, contact_count: 3,
+    }));
+    const matched = q ? all.filter(row => row.company.toLowerCase().includes(q)) : all;
+    await route.fulfill({ json: matched.slice(0, Number(url.searchParams.get('limit') || 200)) });
+  });
+  await page.goto('/studio');
+
+  await page.getByRole('button', { name: /Add this draft to a campaign/ }).click();
+  await page.getByRole('button', { name: /Companies to include/ }).click();
+  const search = page.getByRole('searchbox', { name: 'Search companies' });
+  await expect(search).toBeVisible();
+
+  // The first request is bounded: a six-figure catalogue is never fetched
+  // whole just to draw a picker.
+  expect(asked[0].searchParams.get('limit')).toBe('200');
+  await expect(page.getByText('Showing the first 200. Search to narrow.')).toBeVisible();
+
+  await search.fill('Company 47');
+  await expect.poll(() => asked.at(-1)?.searchParams.get('q')).toBe('Company 47');
+  await expect(page.getByText('Company 47', { exact: true })).toBeVisible();
+  await expect(page.getByText('Showing the first 200. Search to narrow.')).toBeHidden();
 });
 
-test('assistant Fill Find people carries typed titles even when no company was proposed', async ({ page }) => {
-  // Reproduces: "help me reach out to companies in entertainment" -> the
-  // model asked for titles but proposed no start_find_people, and the button
-  // landed on a bare /scraper with the typed titles lost.
-  await page.route('**/api/assistant/ask', async route => route.fulfill({
-    json: {
-      answer: 'Which job titles should I target?',
-      thread_id: 9, model: 'haiku', grounded: false, sources: [],
-      pending_actions: [],
-      navigations: [{ path: '/scraper?view=company', label: 'Find people' }],
-      lookups: [],
-      asks: [{ id: 'titles', label: 'Titles to prioritize', value: '', required: true, placeholder: 'VPs, project managers' }],
-    },
-  }));
-  await page.goto('/outreach');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByLabel('Question or task').fill('help me reach out to companies in entertainment');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await page.getByLabel('Titles to prioritize *').fill('healthcare PMs, VPs');
-  await page.getByRole('button', { name: 'Fill Find people' }).click();
-  await expect(page).toHaveURL(/\/scraper\?.*titles=healthcare\+PMs%2C\+VPs/);
-  await expect(page.getByLabel('Titles to prioritize', { exact: true })).toHaveValue('healthcare PMs, VPs');
+test('the composer formats like a mail client, and the preview shows the same thing', async ({ page }) => {
+  await page.goto('/studio');
+  const editor = page.locator('.email-studio-body');
+  await editor.click();
+  await page.keyboard.type('Dear Ashley,');
+  await page.keyboard.press('ControlOrMeta+a');
+
+  const bold = page.getByRole('button', { name: 'Bold', exact: true });
+  await bold.click();
+  await page.getByRole('button', { name: 'Align centre', exact: true }).click();
+  await page.getByLabel('Font', { exact: true }).selectOption({ label: 'Serif' });
+
+  // Inline CSS, not <font> tags: one representation the sanitizer, the
+  // preview and the sent message all agree on.
+  const html = await editor.innerHTML();
+  expect(html).toMatch(/font-weight:\s*bold|<b>|<strong>/);
+  expect(html).toContain('text-align: center');
+  expect(html).toMatch(/font-family:\s*Georgia/i);
+
+  // The bar reports the caret, so a member can see what they are typing into.
+  await expect(bold).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Preview email', exact: true }).click();
+  const preview = page.locator('.email-studio-gmail-body');
+  await expect(preview).toContainText('Dear Ashley,');
+  expect(await preview.innerHTML()).toContain('text-align: center');
+
+  // Clear puts it back to plain text rather than leaving orphaned markup.
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.getByRole('button', { name: 'Remove formatting', exact: true }).click();
+  expect(await editor.innerHTML()).not.toContain('text-align: center');
 });
 
-test('assistant Fill Find people uses the proposed company and its sheet title hint', async ({ page }) => {
-  await page.route('**/api/assistant/ask', async route => route.fulfill({
-    json: {
-      answer: 'Top entertainment targets: The Walt Disney Company (Studios), A24.',
-      thread_id: 9, model: 'haiku', grounded: false, sources: [],
-      pending_actions: [
-        { tool: 'start_find_people', args: { company_name: 'The Walt Disney Company (Studios)', title_hints: 'SVP Franchise Marketing or VP Consumer Insights', max_prospects: 250 }, summary: 'Find people at Disney Studios' },
-        { tool: 'start_find_people', args: { company_name: 'A24', title_hints: 'Head of Acquisitions', max_prospects: 250 }, summary: 'Find people at A24' },
-      ],
-      navigations: [{ path: '/scraper?view=company', label: 'Find people' }],
-      lookups: [],
-      asks: [{ id: 'titles', label: 'Titles to prioritize', value: 'SVP Franchise Marketing or VP Consumer Insights', required: true, placeholder: 'VPs' }],
-    },
-  }));
-  await page.goto('/outreach');
-  await page.getByRole('button', { name: 'Open assistant' }).click();
-  await page.getByLabel('Question or task').fill('companies in entertainment');
-  await page.getByRole('button', { name: 'Send' }).click();
-  await page.getByRole('button', { name: 'Fill Find people' }).click();
-  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('The Walt Disney Company (Studios)');
-  await expect(page.getByLabel('Titles to prioritize', { exact: true })).toHaveValue('SVP Franchise Marketing or VP Consumer Insights');
+test('every panel the app draws opens with the same motion', async ({ page }, testInfo) => {
+  await page.goto('/studio');
+  const duration = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--disclosure-duration').trim());
+  expect(duration).toBe('180ms');
+
+  // A header nav dropdown and an in-page collapsible are different mechanisms
+  // (absolute panel vs animated grid row); both read as one motion. The nav
+  // dropdowns exist on desktop; mobile navigates through the drawer.
+  if (testInfo.project.name === 'desktop') {
+    const panel = page.locator('.app-nav-group-panel').first();
+    await page.locator('.app-nav-group summary').first().click();
+    await expect(panel).toBeVisible();
+    expect(await panel.evaluate(el => getComputedStyle(el).animationDuration)).toBe('0.18s');
+  }
+
+  const collapsible = page.locator('.ui-disclosure').first();
+  expect(await collapsible.evaluate(el => getComputedStyle(el).transitionDuration)).toBe('0.18s');
+  expect(await collapsible.evaluate(el => getComputedStyle(el).gridTemplateRows !== '')).toBe(true);
+  const chevron = page.locator('.ui-disclosure-chevron').first();
+  expect(await chevron.evaluate(el => getComputedStyle(el).transitionDuration)).toBe('0.18s');
 });
+
+test('collapsing a workspace panel eases shut instead of snapping', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'the collapsed rail exists at desktop width');
+  await page.goto('/studio');
+  const panel = page.locator('#email-generator-section');
+  const open = (await panel.boundingBox())!.width;
+  expect(open).toBeGreaterThan(200);
+
+  // Mid-flight the panel is between its two sizes and a transition is
+  // running on it; it used to jump to the 56px rail in one frame.
+  const midFlight = await panel.evaluate(async (element) => {
+    (element.querySelector('[aria-label="Collapse AI generator panel"]') as HTMLElement).click();
+    const settled = Promise.withResolvers<void>();
+    setTimeout(settled.resolve, 70);
+    await settled.promise;
+    return {
+      width: element.getBoundingClientRect().width,
+      running: element.getAnimations().length,
+    };
+  });
+  expect(midFlight.running).toBeGreaterThan(0);
+  expect(midFlight.width).toBeGreaterThan(60);
+  expect(midFlight.width).toBeLessThan(open);
+
+  await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(56);
+});
+

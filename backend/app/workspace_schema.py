@@ -38,36 +38,15 @@ async def initialize_workspace_schema(db):
       token_hash TEXT NOT NULL UNIQUE, created_by INTEGER NOT NULL REFERENCES users(id),
       expires_at INTEGER NOT NULL, revoked_at INTEGER
     );
-    CREATE TABLE IF NOT EXISTS assistant_document_indexes (
-      version_id INTEGER PRIMARY KEY REFERENCES workspace_document_versions(id),
-      document_id INTEGER NOT NULL REFERENCES workspace_documents(id),
-      state TEXT NOT NULL DEFAULT 'pending', indexed_at INTEGER,
-      character_count INTEGER NOT NULL DEFAULT 0, last_error TEXT
-    );
-    CREATE TABLE IF NOT EXISTS assistant_document_chunks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      document_id INTEGER NOT NULL REFERENCES workspace_documents(id),
-      version_id INTEGER NOT NULL REFERENCES workspace_document_versions(id),
-      chunk_index INTEGER NOT NULL, content TEXT NOT NULL,
-      UNIQUE(version_id,chunk_index)
-    );
-    CREATE TABLE IF NOT EXISTS assistant_threads (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      owner_user_id INTEGER NOT NULL REFERENCES users(id),
-      title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS assistant_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      thread_id INTEGER NOT NULL REFERENCES assistant_threads(id),
-      role TEXT NOT NULL, content TEXT NOT NULL, sources_json TEXT NOT NULL DEFAULT '[]',
-      created_at INTEGER NOT NULL
-    );
+    /* The assistant's index, chunk, thread and message tables are no longer
+       created: the chatbot was removed. Existing databases keep theirs - the
+       club's production data is not dropped by a schema pass - but nothing
+       reads or writes them. */
     CREATE INDEX IF NOT EXISTS dispatch_contact_state ON outreach_dispatches(campaign_contact_id,state);
+    /* The drain counts today's claims per sender on every tick. */
+    CREATE INDEX IF NOT EXISTS dispatch_sender_claimed ON outreach_dispatches(sender_user_id,claimed_at);
     CREATE INDEX IF NOT EXISTS documents_owner_date ON workspace_documents(owner_user_id,created_at);
     CREATE INDEX IF NOT EXISTS documents_project_visibility ON workspace_documents(project_id,visibility);
-    CREATE INDEX IF NOT EXISTS assistant_chunks_document ON assistant_document_chunks(document_id,version_id);
-    CREATE INDEX IF NOT EXISTS assistant_threads_owner ON assistant_threads(owner_user_id,updated_at);
-    CREATE INDEX IF NOT EXISTS assistant_messages_thread ON assistant_messages(thread_id,id);
     CREATE INDEX IF NOT EXISTS invitation_email_state ON membership_invitations(email,state);
     ''')
     from app.database import is_postgres
