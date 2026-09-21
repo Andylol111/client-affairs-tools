@@ -1,5 +1,6 @@
 """Member-owned email drafts and controlled test delivery."""
 from fastapi import APIRouter, HTTPException, Depends
+import hashlib
 import json
 from starlette.concurrency import run_in_threadpool
 from app.services.generation_policy import reserve_generation
@@ -9,8 +10,6 @@ from app.database import get_db
 from app.auth_deps import get_current_user, get_current_user_optional
 from app.models import EmailGenerateRequest, EmailGenerateResponse, EmailGenerateTemplateRequest
 from app.services.ollama_email_service import generate_email
-from app.services.gmail_api import send_via_gmail_api
-from app.services.settings_service import get_member_setting
 from app.services.usage_service import log_event
 
 router = APIRouter()
@@ -49,6 +48,33 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
         from app.services.generation_policy import draft_evidence
         evidence = await draft_evidence(db, contact, user["id"])
 
+        # A draft is a pure function of its brief. Regenerating an unchanged
+        # brief bills a second Bedrock call to produce a near-identical email,
+        # which is the most common wasted spend in the app: members press
+        # Generate again while reading. Fingerprint the inputs and reuse.
+        brief_hash = hashlib.sha256(json.dumps({
+            "contact": [contact.get("name"), contact.get("title"), contact.get("company"), company_domain],
+            "tone": req.tone, "length": req.length, "angle": req.angle,
+            "instructions": req.custom_instructions, "value": req.value_proposition,
+            "model": req.model,
+            "evidence": sorted(str(s.get("id")) for s in (evidence or {}).get("sources", [])),
+        }, sort_keys=True, default=str).encode()).hexdigest()
+
+        cached = await (await db.execute(
+            """SELECT subject, body FROM generated_emails
+               WHERE user_id=? AND contact_id=? AND brief_hash=?
+               ORDER BY id DESC LIMIT 1""",
+            (user["id"], req.contact_id, brief_hash),
+        )).fetchone()
+        if cached and cached["subject"] and cached["body"]:
+            await log_event(
+                user["id"], "email_generation_reused", "email",
+                {"contact_id": req.contact_id},
+            )
+            return EmailGenerateResponse(
+                subject=cached["subject"], body=cached["body"], contact_id=req.contact_id,
+            )
+
         await reserve_generation(user['id'], req.model)
         subject, body = await run_in_threadpool(generate_email,
             contact_name=contact.get("name"),
@@ -63,11 +89,10 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
             model=req.model,
             evidence=evidence,
         )
-        signature = await get_member_setting(user["id"], "signature") or ""
         await db.execute(
-            """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature, evidence_json)
+            """INSERT INTO generated_emails (user_id, contact_id, subject, body, evidence_json, brief_hash)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (user["id"], req.contact_id, subject, body, signature, json.dumps(evidence)),
+            (user["id"], req.contact_id, subject, body, json.dumps(evidence), brief_hash),
         )
         await db.commit()
 
@@ -125,29 +150,74 @@ async def generate_email_template(
     req: EmailGenerateTemplateRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Generate an email. If the user is signed in and gave an email, upsert the catalog row and cache the draft."""
+    """Generate a quick-compose draft, reusing the same unchanged brief."""
     from app.services.contact_scraper import normalize_domain, sanitize_email
 
     company_domain = normalize_domain(req.company or "") if req.company else ""
     em = sanitize_email(req.email or "").strip().lower()
-    evidence = {"sources": [], "context_origin": "user_provided",
-                "user_provided": {"name": req.name, "title": req.title, "company": req.company}}
+    evidence = {
+        "sources": [],
+        "context_origin": "user_provided",
+        "user_provided": {"name": req.name, "title": req.title, "company": req.company},
+    }
+    contact_id = None
+    brief_hash = None
     if em:
         db = await get_db()
         try:
             from app.services.delivery_policy import require_recipient_allowed
             await require_recipient_allowed(db, em)
-            existing = await (await db.execute("SELECT * FROM contacts WHERE lower(email)=?", (em,))).fetchone()
+            existing = await (await db.execute(
+                "SELECT * FROM contacts WHERE lower(email)=?", (em,)
+            )).fetchone()
             if existing:
                 from app.services.contact_access import require_contact_access
                 await require_contact_access(db, existing["id"], user)
+                contact_id = int(existing["id"])
                 from app.services.generation_policy import draft_evidence
-                evidence = {**await draft_evidence(db, dict(existing), user["id"]),
-                            "user_provided": evidence["user_provided"]}
+                evidence = {
+                    **await draft_evidence(db, dict(existing), user["id"]),
+                    "user_provided": evidence["user_provided"],
+                }
+            else:
+                contact_id = await _upsert_contact_by_email(
+                    db, email=em, name=req.name, title=req.title, company=req.company
+                )
+                from app.services.contact_intelligence import ingest_contact
+                await ingest_contact(
+                    db, actor_id=user["id"], origin="user_supplied",
+                    contact={"id": contact_id, "email": em, "name": req.name,
+                             "title": req.title, "company": req.company},
+                )
+                await db.commit()
+
+            brief_hash = hashlib.sha256(json.dumps({
+                "contact": [req.name, req.title, req.company, company_domain, em],
+                "tone": req.tone, "length": req.length, "angle": req.angle,
+                "instructions": req.custom_instructions, "value": req.value_proposition,
+                "model": req.model,
+                "evidence": sorted(str(s.get("id")) for s in evidence.get("sources", [])),
+            }, sort_keys=True, default=str).encode()).hexdigest()
+            cached = await (await db.execute(
+                """SELECT subject, body FROM generated_emails
+                   WHERE user_id=? AND contact_id=? AND brief_hash=?
+                   ORDER BY id DESC LIMIT 1""",
+                (user["id"], contact_id, brief_hash),
+            )).fetchone()
+            if cached and cached["subject"] and cached["body"]:
+                await log_event(
+                    user["id"], "email_generation_reused", "email",
+                    {"contact_id": contact_id},
+                )
+                return EmailGenerateResponse(
+                    subject=cached["subject"], body=cached["body"], contact_id=contact_id,
+                )
         finally:
             await db.close()
-    await reserve_generation(user['id'], req.model)
-    subject, body = await run_in_threadpool(generate_email,
+
+    await reserve_generation(user["id"], req.model)
+    subject, body = await run_in_threadpool(
+        generate_email,
         contact_name=req.name,
         contact_title=req.title,
         company_name=req.company,
@@ -160,52 +230,38 @@ async def generate_email_template(
         model=req.model,
         evidence=evidence,
     )
-    contact_id = None
-    if user and em:
+    if contact_id is not None:
         db = await get_db()
         try:
-            contact_id = await _upsert_contact_by_email(
-                db, email=em, name=req.name, title=req.title, company=req.company
-            )
-            from app.services.contact_intelligence import ingest_contact
-            await ingest_contact(db, actor_id=user["id"], origin="user_supplied",
-                                 contact={"id": contact_id, "email": em, "name": req.name,
-                                          "title": req.title, "company": req.company})
-            signature = await get_member_setting(user["id"], "signature") or ""
             await db.execute(
-                """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature, evidence_json)
+                """INSERT INTO generated_emails
+                   (user_id, contact_id, subject, body, evidence_json, brief_hash)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (user["id"], contact_id, subject, body, signature, json.dumps(evidence)),
+                (user["id"], contact_id, subject, body, json.dumps(evidence), brief_hash),
             )
             await db.commit()
         finally:
             await db.close()
-    return EmailGenerateResponse(
-        subject=subject,
-        body=body,
-        contact_id=contact_id,
-    )
+    return EmailGenerateResponse(subject=subject, body=body, contact_id=contact_id)
 
 
 @router.post("/test-send")
 async def test_send_email(req: TestSendRequest, user: dict = Depends(get_current_user)):
-    """Send a test email via Gmail API. Uses multipart (plain + HTML) with signature and signature image when set."""
+    """Send a one-off test of exactly what a recipient would receive."""
     from app.services.gmail_api import send_via_gmail_api_multipart
     try:
-        signature = await get_member_setting(user["id"], "signature")
-        signature_image_url = await get_member_setting(user["id"], "signature_image_url") or None
         attachments_data = []
         if req.attachment_ids:
             from app.routers.attachments import get_attachment_data_for_send
-            attachments_data = await get_attachment_data_for_send(req.attachment_ids)
+            attachments_data = await get_attachment_data_for_send(req.attachment_ids, user["id"])
+        from app.services.settings_service import load_sign_off
         await send_via_gmail_api_multipart(
             user_id=user["id"],
             to_email=req.to_email,
             subject=req.subject,
             body=req.body,
-            signature=signature,
-            signature_image_url=signature_image_url,
             attachments=attachments_data if attachments_data else None,
+            sign_off=await load_sign_off(user["id"]),
         )
         return {"ok": True, "message": f"Test email sent to {req.to_email}"}
     except ValueError as e:
@@ -227,9 +283,9 @@ async def save_generated_email_draft(
         if not await cursor.fetchone():
             raise HTTPException(404, "Contact not found")
         cursor = await db.execute(
-            """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature)
-               VALUES (?, ?, ?, ?, ?)""",
-            (user["id"], req.contact_id, req.subject, req.body, await get_member_setting(user["id"], "signature") or ""),
+            """INSERT INTO generated_emails (user_id, contact_id, subject, body)
+               VALUES (?, ?, ?, ?)""",
+            (user["id"], req.contact_id, req.subject, req.body),
         )
         await db.commit()
         return {"id": int(cursor.lastrowid), "contact_id": req.contact_id, "subject": req.subject, "body": req.body}

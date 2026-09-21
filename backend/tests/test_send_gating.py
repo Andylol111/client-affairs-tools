@@ -66,8 +66,6 @@ async def _passthrough_claim(db, key, sender):
         "recipient": row["email"],
         "subject": row["email_subject"],
         "body": row["email_body"],
-        "signature": None,
-        "signature_image_url": None,
     }
 
 

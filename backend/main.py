@@ -38,8 +38,7 @@ from app.services.yucgoutreach_discovery import (
 )
 from app.services.outreach_flow import drain_outreach_flows
 from app.services.company_register import drain_company_register
-from app.services.assistant_service import drain_document_index_queue,recover_document_indexes
-from app.routers import research, segments
+from app.routers import research
 from app.services.research_service import recover_research_jobs, drain_research_queue
 from app.services.roster_watch import drain_roster_queue, enroll_prospect_companies
 from app.services.roster_email import drain_roster_emails, drain_roster_verification
@@ -58,7 +57,6 @@ CORS_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _co
 async def lifespan(app: FastAPI):
     await init_db()
     await recover_interrupted_yucgoutreach_runs()
-    await recover_document_indexes()
     await recover_research_jobs()
     await enroll_prospect_companies()
     scheduler = AsyncIOScheduler()
@@ -85,14 +83,6 @@ async def lifespan(app: FastAPI):
         "interval",
         seconds=10,
         id="outreach_flow_queue",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        drain_document_index_queue,
-        "interval",
-        seconds=15,
-        id="assistant_document_index",
         max_instances=1,
         coalesce=True,
     )
@@ -212,10 +202,9 @@ app.include_router(contacts.router, prefix="/api/contacts", tags=["contacts"], d
 app.include_router(emails.router, prefix="/api/emails", tags=["emails"], dependencies=_require_user)
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"], dependencies=_require_user)
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"], dependencies=_require_user)
-from app.routers import invitations, workspace, activity, assistant
+from app.routers import invitations, workspace, activity
 app.include_router(activity.router, prefix="/api/activity", tags=["activity"])
 app.include_router(workspace.router, prefix="/api/workspace", tags=["workspace"])
-app.include_router(assistant.router, prefix="/api/assistant", tags=["assistant"])
 app.include_router(invitations.router, prefix="/api/admin/invitations", tags=["invitations"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
@@ -229,7 +218,6 @@ app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgo
 app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
 app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases"], dependencies=_require_user)
 app.include_router(research.router, prefix="/api/research", tags=["research"], dependencies=_require_user)
-app.include_router(segments.router, prefix="/api/segments", tags=["segments"], dependencies=_require_user)
 
 
 @app.get("/api/health")

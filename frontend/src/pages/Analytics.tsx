@@ -1,45 +1,50 @@
-import OutreachLedger from '../components/OutreachLedger';
-import SegmentBreakdown from '../components/analytics/SegmentBreakdown';
 import { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
-import { api, type Campaign } from '../api';
+import { api, type Campaign, type BreakdownSection, type OutcomeSplit } from '../api';
 import PageHeader from '../components/PageHeader';
+import SectionChart from '../components/SectionChart';
+import OutcomePie from '../components/OutcomePie';
+import OutreachLedger from '../components/OutreachLedger';
 import { Button, EmptyState, Notice, StatusBadge } from '../components/ui/Primitives';
 
-type DashboardMetrics = {
-  total_sent?: number;
-  opened?: number;
-  open_rate?: number;
-  reply_rate?: number;
-};
+type Breakdown = { sections: BreakdownSection[]; mine?: OutcomeSplit | null; club?: OutcomeSplit };
 
-type PipelineMetric = { pipeline_status: string; count: number };
-type TimeSeries = { labels: string[]; sent: number[]; opened: number[]; replied: number[] };
+function outcomeSlices(split: OutcomeSplit | null | undefined) {
+  return [
+    { label: 'replied', value: split?.replied ?? 0, colour: 'var(--chart-good)' },
+    { label: 'awaiting a reply', value: split?.awaiting ?? 0, colour: 'var(--chart-4)' },
+    { label: 'bounced', value: split?.bounced ?? 0, colour: 'var(--chart-bad)' },
+    { label: 'still queued', value: split?.queued ?? 0, colour: 'var(--chart-idle)' },
+  ];
+}
 
 export default function Analytics() {
   const { user } = useOutletContext<{ user: { id: number } }>();
-  const [dashboard, setDashboard] = useState<DashboardMetrics>({});
+  const [breakdown, setBreakdown] = useState<Breakdown>({ sections: [] });
   const [insights, setInsights] = useState<string[]>([]);
-  const [pipelineMetrics, setPipelineMetrics] = useState<PipelineMetric[]>([]);
-  const [timeSeries, setTimeSeries] = useState<TimeSeries | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Whose numbers the outcome charts describe. The club is not the default
+  // view of a member's own work, and a member's work is not the club's.
+  const [scope, setScope] = useState<'mine' | 'club'>('mine');
 
   useEffect(() => {
     Promise.all([
-      api.analytics.dashboard(),
-      api.analytics.insights(),
-      api.analytics.timeSeries(30),
-      api.outreach.pipelineMetrics().catch(() => null),
-      api.campaigns.list().catch(() => []),
+      api.analytics.breakdown(),
+      api.analytics.insights().catch(() => ({ insights: [] as string[] })),
+      api.campaigns.list().catch(() => [] as Campaign[]),
     ])
-      .then(([metrics, insightResponse, series, pipeline, campaignRows]) => {
-        setDashboard(metrics);
-        setInsights(insightResponse.insights || []);
-        setTimeSeries(series);
-        setPipelineMetrics(pipeline?.by_status || []);
-        setCampaigns(campaignRows);
+      .then(([data, insightResponse, campaignRows]) => {
+        // Coerced at the boundary: this page is the club's statistics surface,
+        // and one unexpected payload must not blank all of it.
+        setBreakdown({
+          sections: Array.isArray(data?.sections) ? data.sections : [],
+          mine: data?.mine ?? null,
+          club: data?.club,
+        });
+        setInsights(Array.isArray(insightResponse?.insights) ? insightResponse.insights : []);
+        setCampaigns(Array.isArray(campaignRows) ? campaignRows : []);
       })
       .catch((requestError) => setError((requestError as Error).message))
       .finally(() => setLoading(false));
@@ -49,130 +54,136 @@ export default function Analytics() {
     return <div className="flex min-h-[60vh] items-center justify-center text-slate-500">Loading stats…</div>;
   }
 
-  const maxSent = timeSeries?.sent.length ? Math.max(...timeSeries.sent, 1) : 1;
-  const cards = [
-    ['Total sent', dashboard.total_sent ?? 0],
-    ['Opened', dashboard.opened ?? 0],
-    ['Open rate', `${dashboard.open_rate ?? 0}%`],
-    ['Reply rate', `${dashboard.reply_rate ?? 0}%`],
-  ] as const;
+  const split = scope === 'mine' ? breakdown.mine : breakdown.club;
+  const mailedAnything = (breakdown.club?.mailed ?? 0) > 0;
 
   return (
-    <div className="app-workspace max-w-6xl">
+    <div className="app-workspace max-w-6xl space-y-4">
       <PageHeader
-        title="Results"
-        subtitle="Delivery, opens, and replies after send. Opens are directional; replies are the stronger outcome."
+        title="Full breakdown"
+        subtitle="Every measurement the database can answer. Sections appear as the data exists."
         actions={
-          <Button
-            onClick={() => api.analytics.exportCsv().catch((requestError) => setError((requestError as Error).message))}
-          >
+          <Button onClick={() => api.analytics.exportCsv().catch((e) => setError((e as Error).message))}>
             Export CSV
           </Button>
         }
       />
 
-      {error && <Notice tone="danger" className="mb-5">{error}</Notice>}
+      {error && <Notice tone="danger" className="mb-4">{error}</Notice>}
 
-      <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {cards.map(([label, value]) => (
-          <div key={label} className="surface-card rounded-xl p-4 sm:p-6">
-            <div className="text-sm text-slate-500">{label}</div>
-            <div className="mt-1 text-2xl font-bold text-deep-navy">{value}</div>
+      <section className="surface-card p-5" aria-label="Outcomes">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="app-section-title">Outcomes</h2>
+          <div className="flex gap-1 rounded-lg bg-pale-sky/40 p-0.5" role="group" aria-label="Whose results">
+            {(['mine', 'club'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={scope === option}
+                onClick={() => setScope(option)}
+                // Matches the small-button height so the control row lines
+                // up; it keeps its own radius because .ui-button would break
+                // the segmented seam.
+                className={`min-h-9 rounded-md px-3 text-xs font-semibold ${
+                  scope === option ? 'bg-white text-deep-navy shadow-sm' : 'text-slate-600 hover:text-deep-navy'}`}
+              >
+                {option === 'mine' ? 'Mine' : 'The club'}
+              </button>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+        {/* The chart sat alone against a wide empty card. The headline figures
+            now occupy that space, so the row carries the summary a member
+            would otherwise have to compute from the slices. */}
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-[auto_1fr] md:items-center">
+          <OutcomePie
+            title={scope === 'mine' ? 'Yours' : 'The club'}
+            size={132}
+            slices={outcomeSlices(split)}
+            empty={scope === 'mine'
+              ? 'You have not mailed anyone yet.'
+              : 'Nobody has mailed anyone yet.'}
+          />
+          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              ['People mailed', split?.mailed ?? 0],
+              ['Replied', split?.replied ?? 0],
+              ['Reply rate', `${split?.reply_rate ?? 0}%`],
+              ['Bounced', split?.bounced ?? 0],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-lg bg-pale-sky/25 px-3 py-2">
+                <dt className="text-xs text-slate-500">{label}</dt>
+                <dd className="mt-0.5 text-xl font-bold text-deep-navy">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
 
-      {(dashboard.total_sent ?? 0) === 0 && (
+      {!mailedAnything && (
         <EmptyState
-          className="mb-8"
+          className=""
           title="No send activity yet"
-          body="Release a reviewed campaign. Delivery and reply activity will appear here after the server sends it."
-          action={<Link to="/campaigns" className="ui-button ui-button--primary">Open Send</Link>}
+          body="Release a reviewed campaign. Delivery and reply activity appear here once the server sends it."
+          action={<Link to="/campaigns" className="ui-button ui-button--primary">Open Campaigns</Link>}
         />
       )}
 
-      <section className="surface-card mb-8 rounded-xl p-5 sm:p-6">
-        <h2 className="app-section-title mb-4">Sent in the last 30 days</h2>
-        {timeSeries?.labels.length ? (
-          <>
-            <div className="flex h-32 items-end gap-0.5" aria-label="Daily sent email volume">
-              {timeSeries.sent.map((sent, index) => (
-                <div key={timeSeries.labels[index]} className="group flex min-w-0 flex-1 flex-col items-center" title={`${timeSeries.labels[index]}: ${sent} sent`}>
-                  <div className="w-full rounded-t bg-steel-blue/70 transition-colors group-hover:bg-steel-blue" style={{ height: `${(sent / maxSent) * 100}%`, minHeight: sent ? 4 : 0 }} />
-                </div>
-              ))}
-            </div>
-            <div className="mt-2 flex justify-between text-xs text-slate-500">
-              <span>{timeSeries.labels[0]}</span>
-              <span>{timeSeries.labels.at(-1)}</span>
-            </div>
-          </>
-        ) : (
-          <p className="py-8 text-center text-sm text-slate-500">No activity in this date range.</p>
-        )}
-      </section>
+      {/* Whatever the server measured, in the order it measured it. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {breakdown.sections.map((section) => (
+          <SectionChart key={section.id} section={section} />
+        ))}
+      </div>
 
-      <section className="surface-card mb-8 rounded-xl p-5 sm:p-6">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <section className="surface-card p-5" aria-label="Campaign drilldown">
+        <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="app-section-title">Campaign drilldown</h2>
           <Link to="/campaigns" className="text-sm font-semibold text-[var(--accent)] hover:underline">All campaigns</Link>
         </div>
         {campaigns.length === 0 ? (
-          <p className="py-8 text-center text-sm text-slate-500">No campaigns to compare.</p>
+          <p className="py-6 text-center text-sm text-slate-500">No campaigns to compare.</p>
         ) : (
           <ul className="divide-y divide-[var(--border)]">
             {campaigns.map((campaign) => {
-              const content = <>
+              const content = (
+                <>
                   <span className="min-w-0">
                     <span className="block truncate font-semibold">{campaign.name}</span>
-                    <span className="block text-xs text-slate-500">{campaign.sent_count ?? 0} sent · {campaign.pending_count ?? 0} queued · {campaign.failed_count ?? 0} failed</span>
+                    <span className="block text-xs text-slate-500">
+                      {campaign.sent_count ?? 0} sent · {campaign.pending_count ?? 0} queued · {campaign.failed_count ?? 0} failed
+                    </span>
                   </span>
                   <StatusBadge tone={campaign.status === 'sent' ? 'success' : campaign.status === 'needs_attention' ? 'danger' : 'neutral'}>
                     {campaign.status.replace('_', ' ')}
                   </StatusBadge>
-                </>;
-              return <li key={campaign.id}>
-                {campaign.owner_user_id === user.id
-                  ? <Link to={`/campaigns/${campaign.id}`} className="flex min-h-14 items-center justify-between gap-4 py-3 hover:text-[var(--accent)]">{content}</Link>
-                  : <div className="flex min-h-14 items-center justify-between gap-4 py-3">{content}</div>}
-              </li>;
+                </>
+              );
+              return (
+                <li key={campaign.id}>
+                  {campaign.owner_user_id === user.id ? (
+                    <Link to={`/campaigns/${campaign.id}`} className="flex min-h-14 items-center justify-between gap-4 py-3 hover:text-[var(--accent)]">
+                      {content}
+                    </Link>
+                  ) : (
+                    <div className="flex min-h-14 items-center justify-between gap-4 py-3">{content}</div>
+                  )}
+                </li>
+              );
             })}
           </ul>
         )}
       </section>
 
-      {pipelineMetrics.length > 0 && (
-        <section className="surface-card mb-8 rounded-xl p-5 sm:p-6">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="app-section-title">Pipeline</h2>
-            <Link to="/outreach" className="text-sm font-semibold text-[var(--accent)] hover:underline">Open board</Link>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {pipelineMetrics.map((metric) => (
-              <div key={metric.pipeline_status} className="rounded-lg bg-pale-sky/30 px-4 py-2">
-                <span className="capitalize text-slate-600">{metric.pipeline_status}</span>
-                <strong className="ml-2 text-deep-navy">{metric.count}</strong>
-              </div>
-            ))}
-          </div>
+      {insights.length > 0 && (
+        <section className="surface-card p-5" aria-label="Notes from the data">
+          <h2 className="app-section-title mb-3">Notes from the data</h2>
+          <ul className="space-y-2">
+            {insights.map((insight) => <li key={insight} className="text-sm text-slate-600">• {insight}</li>)}
+          </ul>
         </section>
       )}
 
-      <section className="surface-card mb-8 rounded-xl p-5 sm:p-6">
-        <h2 className="app-section-title mb-4">Companies by segment</h2>
-        <SegmentBreakdown />
-      </section>
-
-      <section className="surface-card rounded-xl p-5 sm:p-6">
-        <h2 className="app-section-title mb-4">Notes from the data</h2>
-        {insights.length ? (
-          <ul className="space-y-2">
-            {insights.map((insight) => <li key={insight} className="text-slate-600">• {insight}</li>)}
-          </ul>
-        ) : (
-          <p className="text-sm text-slate-500">No data-backed notes yet.</p>
-        )}
-      </section>
       <OutreachLedger />
     </div>
   );

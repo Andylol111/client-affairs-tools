@@ -12,6 +12,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from typing import Optional, Any
 import httpx
+from app.services.email_body import SignOff
 from app.services.mail_address import validate_recipient, validate_header
 from app.services.delivery_policy import require_delivery_enabled
 
@@ -97,22 +98,6 @@ async def get_valid_access_token(user_id: int) -> tuple[str, str] | None:
         await db.close()
 
 
-def append_signature(body: str, signature: Optional[str]) -> str:
-    """Append signature to email body (plain text part). If signature is HTML, strip tags for plain."""
-    if not signature or not signature.strip():
-        return body
-    sig = signature.strip()
-    # For plain-text part, use plain version of signature (strip HTML if present)
-    if "<" in sig and ">" in sig:
-        sig_plain = _strip_html_to_plain(sig)
-    else:
-        sig_plain = sig.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    if not sig_plain:
-        return body.rstrip()
-    if body.rstrip().endswith("--") or body.rstrip().endswith("---"):
-        return body.rstrip() + "\n\n" + sig_plain
-    return body.rstrip() + "\n\n--\n\n" + sig_plain
-
 
 def _attach_files(msg: MIMEMultipart, attachments: list[tuple[bytes, str, str]]) -> None:
     """Attach files to MIME message. Each tuple is (content, filename, mime_type)."""
@@ -125,6 +110,30 @@ def _attach_files(msg: MIMEMultipart, attachments: list[tuple[bytes, str, str]])
         part.add_header("Content-Disposition", "attachment", filename=filename)
         msg.attach(part)
 
+def _build_message(
+    subject: str,
+    from_value: str,
+    to_email: str,
+    plain: str,
+    html_body: str,
+    attachments: list[tuple[bytes, str, str]] | None = None,
+    message_id: str | None = None,
+) -> MIMEMultipart:
+    """Build a valid MIME tree: alternatives nested inside multipart/mixed."""
+    alternatives = MIMEMultipart("alternative")
+    alternatives.attach(MIMEText(plain, "plain", "utf-8"))
+    alternatives.attach(MIMEText(html_body, "html", "utf-8"))
+    msg = MIMEMultipart("mixed") if attachments else alternatives
+    msg["Subject"] = subject
+    msg["From"] = from_value
+    msg["To"] = to_email
+    if message_id:
+        msg["Message-ID"] = message_id
+    if attachments:
+        msg.attach(alternatives)
+        _attach_files(msg, attachments)
+    return msg
+
 
 async def send_via_gmail_api(
     user_id: int,
@@ -132,7 +141,6 @@ async def send_via_gmail_api(
     subject: str,
     body: str,
     from_name: Optional[str] = None,
-    signature: Optional[str] = None,
     attachments: Optional[list[tuple[bytes, str, str]]] = None,
 ) -> bool:
     """
@@ -150,7 +158,7 @@ async def send_via_gmail_api(
         )
     access_token, from_email = result
 
-    full_body = append_signature(body, signature)
+    full_body = body
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -182,36 +190,23 @@ async def send_via_gmail_api(
     return True
 
 
-def _strip_html_to_plain(html_fragment: str) -> str:
-    """Convert HTML to plain text for the plain-part of the email."""
-    import re
-    text = re.sub(r"<br\s*/?>", "\n", html_fragment, flags=re.I)
-    text = re.sub(r"</p>", "\n", text, flags=re.I)
-    text = re.sub(r"<[^>]+>", "", text)
-    return (text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').strip())
 
 
-def _signature_html(signature: Optional[str], image_url: Optional[str]) -> str:
-    """Build HTML fragment for signature. Signature may be plain text or HTML (e.g. with embedded images)."""
-    import html
-    import re
-    parts = []
-    if signature and signature.strip():
-        sig = signature.strip()
-        # If it looks like HTML (e.g. contains tags or data URLs), use as-is but sanitize (remove script/style)
-        if "<" in sig and ">" in sig:
-            sanitized = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", sig, flags=re.I)
-            sanitized = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", sanitized, flags=re.I)
-            sanitized = re.sub(r"on\w+\s*=", "", sanitized, flags=re.I)  # strip event handlers
-            parts.append(sanitized)
-        else:
-            parts.append(html.escape(sig).replace(chr(10), "<br>"))
-    if image_url and image_url.strip():
-        url = image_url.strip()
-        parts.append(f'<img src="{html.escape(url)}" alt="" style="max-width:200px;height:auto;" />')
-    if not parts:
-        return ""
-    return "<br><br>--<br><br>" + "".join(parts)
+def _compose(
+    body: str,
+    sign_off: SignOff | None = None,
+    attachment_names: Optional[list[str]] = None,
+) -> tuple[str, str]:
+    """One renderer for every send path.
+
+    The three paths previously disagreed with each other and with the editor:
+    one attached the editor's HTML as the plain-text part, another escaped it
+    so recipients saw literal tags. All of them now produce a real text
+    alternative and real HTML.
+    """
+    from app.services.email_body import render_email
+
+    return render_email(body, sign_off=sign_off, attachments=attachment_names)
 
 
 async def send_via_gmail_api_multipart(
@@ -220,11 +215,10 @@ async def send_via_gmail_api_multipart(
     subject: str,
     body: str,
     from_name: Optional[str] = None,
-    signature: Optional[str] = None,
-    signature_image_url: Optional[str] = None,
     attachments: Optional[list[tuple[bytes, str, str]]] = None,
+    sign_off: SignOff | None = None,
 ) -> bool:
-    """Send email as multipart (plain + HTML) with optional signature and signature image. No tracking pixel."""
+    """Send the composed message plus its sign-off. No tracking pixel."""
     require_delivery_enabled()
     validate_recipient(to_email)
     validate_header(subject)
@@ -236,18 +230,18 @@ async def send_via_gmail_api_multipart(
         )
     access_token, from_email = result
 
-    full_body = append_signature(body, signature)
-    sig_html = _signature_html(signature, signature_image_url)
-    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{body.replace(chr(10), "<br>")}{sig_html}</body></html>"""
+    full_body, html_body = _compose(
+        body, sign_off, [name for _, name, _ in (attachments or [])],
+    )
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = formataddr((from_name or "YUCG Outreach", from_email))
-    msg["To"] = to_email
-    msg.attach(MIMEText(full_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-    if attachments:
-        _attach_files(msg, attachments)
+    msg = _build_message(
+        subject,
+        formataddr((from_name or "YUCG Outreach", from_email)),
+        to_email,
+        full_body,
+        html_body,
+        attachments,
+    )
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii").rstrip("=")
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -277,9 +271,9 @@ async def send_via_gmail_api_with_tracking(
     body: str,
     campaign_contact_id: int,
     from_name: Optional[str] = None,
-    signature: Optional[str] = None,
-    signature_image_url: Optional[str] = None,
     dispatch_key: Optional[str] = None,
+    sign_off: SignOff | None = None,
+    attachments: Optional[list[tuple[bytes, str, str]]] = None,
 ) -> dict[str, Any]:
     """Send HTML email with open-tracking pixel for campaigns.
 
@@ -299,8 +293,9 @@ async def send_via_gmail_api_with_tracking(
         )
     access_token, from_email = result
 
-    full_body = append_signature(body, signature)
-    sig_html = _signature_html(signature, signature_image_url)
+    full_body, composed_html = _compose(
+        body, sign_off, [name for _, name, _ in (attachments or [])],
+    )
     token = secrets.token_urlsafe(32)
     tracking_url = get_tracking_pixel_url(token)
     rfc_message_id = make_msgid(domain=from_email.rsplit('@', 1)[-1])
@@ -313,9 +308,7 @@ async def send_via_gmail_api_with_tracking(
             intent = await (await db.execute('SELECT * FROM outreach_dispatches WHERE dispatch_key=?',(dispatch_key,))).fetchone()
             if (not intent or intent['state']!='claimed' or intent['sender_user_id']!=user_id
                     or intent['campaign_contact_id']!=campaign_contact_id or intent['recipient']!=to_email
-                    or intent['subject']!=subject or intent['body']!=body
-                    or (intent['signature'] or '')!=(signature or '')
-                    or (intent['signature_image_url'] or '')!=(signature_image_url or '')):
+                    or intent['subject']!=subject or intent['body']!=body):
                 raise ValueError('Send does not match its claimed immutable dispatch')
         cursor = await db.execute(
             """INSERT INTO outreach_messages
@@ -327,17 +320,18 @@ async def send_via_gmail_api_with_tracking(
         await db.commit()
     finally:
         await db.close()
-    # HTML: body only (no duplicate signature) + signature HTML + tracking pixel
-    html_body = f"""<html><body style="font-family: sans-serif; white-space: pre-wrap;">{escape(body).replace(chr(10), '<br>')}{sig_html}
-<img src="{tracking_url}" width="1" height="1" alt="" style="display:none" /></body></html>"""
+    pixel = f'<img src="{tracking_url}" width="1" height="1" alt="" style="display:none" />'
+    html_body = composed_html.replace("</body></html>", pixel + "</body></html>")
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = formataddr((from_name or "YUCG Outreach", from_email))
-    msg["To"] = to_email
-    msg["Message-ID"] = rfc_message_id
-    msg.attach(MIMEText(full_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    msg = _build_message(
+        subject,
+        formataddr((from_name or "YUCG Outreach", from_email)),
+        to_email,
+        full_body,
+        html_body,
+        attachments,
+        rfc_message_id,
+    )
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii").rstrip("=")
 

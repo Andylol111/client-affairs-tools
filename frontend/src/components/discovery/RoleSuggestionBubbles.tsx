@@ -20,11 +20,14 @@ export default function RoleSuggestionBubbles({
   domain,
   hints,
   onAdd,
+  onObserved,
 }: {
   company: string;
   domain: string;
   hints: string;
   onAdd: (title: string) => void;
+  /** The titles this company actually uses, once known. */
+  onObserved?: (titles: string[]) => void;
 }) {
   const [rawData, setData] = useState<RoleSuggestions | null>(null);
   const [loading, setLoading] = useState(false);
@@ -64,7 +67,6 @@ export default function RoleSuggestionBubbles({
     };
   }, [company, domain, hints]);
 
-  if (company.trim().length < 2) return null;
   // While a new company's request is in flight, the previous company's
   // suggestions must not be shown under the new name. A payload missing
   // these fields is treated as no data rather than crashing the page.
@@ -72,7 +74,16 @@ export default function RoleSuggestionBubbles({
     && rawData.company.toLowerCase() === company.trim().toLowerCase()
     && Array.isArray(rawData.roles) && Array.isArray(rawData.equivalents);
   const data = usable ? rawData : null;
+  // Titles this company is observed to use, handed up so the field can fill
+  // itself rather than making the member guess the house vocabulary.
+  const observedKey = data ? data.roles.map((r) => r.title).join('|') : '';
+  useEffect(() => {
+    if (!observedKey || !onObserved) return;
+    const timer = window.setTimeout(() => onObserved(observedKey.split('|')), 0);
+    return () => window.clearTimeout(timer);
+  }, [observedKey, onObserved]);
 
+  if (company.trim().length < 2) return null;
   const present = new Set(
     hints.split(/[,;/]|\band\b|\bor\b/i).map((s) => s.trim().toLowerCase()).filter(Boolean),
   );

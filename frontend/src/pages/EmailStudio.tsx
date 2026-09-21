@@ -1,14 +1,24 @@
-import { sanitizeRichText, insertSafeTransfer, safeImageUrl } from '../lib/richText';
+import { sanitizeRichText, insertSafeTransfer } from '../lib/richText';
 import type { Sentiment, Attachment, Release, OneDriveItem, Sequence } from '../api';
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { api, type Contact, type GeneratedEmail } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import AiModelSelect from '../components/AiModelSelect';
+import EmailToolbar from '../components/EmailToolbar';
 import AddressCheck from '../components/AddressCheck';
 import { useAiModel } from '../contexts/useAiModel';
 import { useUrlTab } from '../lib/useUrlTab';
+
+
+/** One screen of companies. The catalogue can hold tens of thousands, so the
+ *  picker pages the server instead of holding them all in the browser. */
+const COMPANY_PAGE = 200;
+
+/** The editor's default text size; the toolbar sets any other size per
+ *  selection, exactly as Gmail does. */
+const BASE_FONT_SIZE = 14;
 
 function lastSendHint(c: { last_sent_at?: string | null; last_campaign_name?: string | null }) {
   if (!c.last_sent_at) return '';
@@ -128,12 +138,10 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
         >
           <span className="truncate min-w-0">{company}</span>
           <span className="text-[var(--text-muted)] text-xs shrink-0">({contacts.length})</span>
-          <span className={`inline-block text-[var(--text-muted)] transition-transform duration-300 ease-out motion-reduce:transition-none shrink-0 ml-auto ${expanded ? 'rotate-0' : '-rotate-90'}`} aria-hidden>▼</span>
+          <span className="ui-disclosure-chevron text-[var(--text-muted)] text-xs shrink-0 ml-auto" data-open={expanded} aria-hidden>▼</span>
         </button>
       </div>
-      <div
-        className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
-      >
+      <div className="ui-disclosure" data-open={expanded}>
         <div className="overflow-hidden min-h-0">
           <div className="divide-y divide-slate-100 dark:divide-slate-600">
           {contacts.map((c) => (
@@ -169,13 +177,16 @@ function CompanyFolder({ company, contacts, selected, onSelect, bulkSelectedIds,
 }
 
 export default function EmailStudio() {
+  const navigate = useNavigate();
   const { user } = useOutletContext<{ user: { email: string; name?: string; role?: string } }>();
   const { modelId } = useAiModel();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selected, setSelected] = useState<Contact | null>(null);
   const [email, setEmail] = useState<{ subject: string; body: string } | null>(null);
-  const [signature, setSignature] = useState('');
-  const [signatureImageUrl, setSignatureImageUrl] = useState('');
+  const [signOff, setSignOff] = useState({
+    name: '', pronouns: '', role: '', organization: 'Yale Undergraduate Consulting Group',
+    linkedin: '', phone: '', logoUrl: '',
+  });
   const [loading, setLoading] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [testSending, setTestSending] = useState(false);
@@ -188,7 +199,8 @@ export default function EmailStudio() {
   const [sortBy, setSortBy] = useState('created_desc');
   const [activeTab, setActiveTab] = useUrlTab<'editor' | 'cache'>(['editor', 'cache'], 'editor', 'panel');
   const [quickCompose, setQuickCompose] = useState({ name: '', company: '', title: '', email: '' });
-  const [emailFontSize, setEmailFontSize] = useState(14);
+  // The toolbar sets size per selection; this is only the editor's default,
+  // matched by the preview so both read at the same scale.
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
   const [draftMessage, setDraftMessage] = useState('');
@@ -201,9 +213,9 @@ export default function EmailStudio() {
   const [sentimentAnalysis, setSentimentAnalysis] = useState<Sentiment | null>(null);
   const [sentimentLoading, setSentimentLoading] = useState(false);
   const [sentimentIndustry, setSentimentIndustry] = useState('');
-  const [attachmentsEnabled, setAttachmentsEnabled] = useState(false);
   const [attachmentLibrary, setAttachmentLibrary] = useState<Attachment[]>([]);
   const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<Set<number>>(new Set());
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [contactsPanelExpanded, setContactsPanelExpanded] = useState(true);
   const [aiGeneratorExpanded, setAiGeneratorExpanded] = useState(true);
@@ -219,6 +231,7 @@ export default function EmailStudio() {
   const [studioCampaignContacts, setStudioCampaignContacts] = useState<Contact[]>([]);
   const [selectedCampaignContactIds, setSelectedCampaignContactIds] = useState<Set<number>>(new Set());
   const [sequences, setSequences] = useState<Sequence[]>([]);
+  const [companySearch, setCompanySearch] = useState('');
   const [campaignSequenceId, setCampaignSequenceId] = useState('');
   const [campaignName, setCampaignName] = useState('');
   const [campaignBusy, setCampaignBusy] = useState(false);
@@ -234,11 +247,17 @@ export default function EmailStudio() {
 
   useEffect(() => {
     api.settings.get().then((s) => {
-      setSignature(s.signature || '');
-      setSignatureImageUrl(s.signature_image_url || '');
-      setAttachmentsEnabled(s.attachments_enabled === '1' || s.attachments_enabled === true);
+      setSignOff({
+        name: s.sign_off_name || user?.name || '',
+        pronouns: s.sign_off_pronouns || '',
+        role: s.sign_off_role || '',
+        organization: s.sign_off_organization || 'Yale Undergraduate Consulting Group',
+        linkedin: s.sign_off_linkedin || '',
+        phone: s.sign_off_phone || '',
+        logoUrl: s.sign_off_logo_url || '',
+      });
     }).catch(() => {});
-  }, []);
+  }, [user?.name]);
 
   const contactListParams = useCallback(() => ({
     ...(contactSearch.trim() ? { q: contactSearch.trim() } : {}),
@@ -288,14 +307,24 @@ export default function EmailStudio() {
   }, [contacts, sidebarBulkIds]);
 
   useEffect(() => {
-    api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      api.contacts.companiesSummary({ q: companySearch, limit: COMPANY_PAGE }, controller.signal)
+        .then(setCompaniesSummary)
+        .catch((error) => {
+          if (!(error instanceof DOMException && error.name === 'AbortError')) setCompaniesSummary([]);
+        });
+    }, companySearch ? 250 : 0);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [companySearch]);
+
+  useEffect(() => {
     api.outreach.sequences.list().then(setSequences).catch(() => setSequences([]));
   }, []);
 
   useEffect(() => {
-    if (!attachmentsEnabled) return;
     api.attachments.list().then(setAttachmentLibrary).catch(() => setAttachmentLibrary([]));
-  }, [attachmentsEnabled]);
+  }, []);
 
   useEffect(() => {
     api.emails.generated({ sort: sortBy }).then(setGeneratedEmails).catch(() => setGeneratedEmails([]));
@@ -439,7 +468,7 @@ export default function EmailStudio() {
         to_email: toEmail,
         subject: email.subject,
         body: email.body,
-        attachment_ids: attachmentsEnabled && selectedAttachmentIds.size > 0 ? Array.from(selectedAttachmentIds) : undefined,
+        attachment_ids: selectedAttachmentIds.size > 0 ? Array.from(selectedAttachmentIds) : undefined,
       });
       alert(`Test email sent to ${toEmail}. Check your inbox to verify delivery.`);
     } catch (e) {
@@ -520,7 +549,7 @@ export default function EmailStudio() {
       const res = await api.contacts.bulkDelete(ids);
       const page = await api.contacts.list(contactListParams());
       setContacts(page.items);
-      api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
+      api.contacts.companiesSummary({ q: companySearch, limit: COMPANY_PAGE }).then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
       await refreshStudioCampaignContacts();
       if (res.skipped > 0) {
         window.alert(
@@ -570,8 +599,11 @@ export default function EmailStudio() {
         email_subjects: subjects,
         email_bodies: bodies,
       });
-      if (campaignSequenceId) {
-        await api.campaigns.update(camp.id, { sequence_id: Number(campaignSequenceId) });
+      if (campaignSequenceId || selectedAttachmentIds.size > 0) {
+        await api.campaigns.update(camp.id, {
+          ...(campaignSequenceId ? { sequence_id: Number(campaignSequenceId) } : {}),
+          ...(selectedAttachmentIds.size > 0 ? { attachment_ids: [...selectedAttachmentIds] } : {}),
+        });
       }
       setCreatedCampaignId(camp.id);
       const personalized = Object.keys(subjects).length;
@@ -608,6 +640,28 @@ export default function EmailStudio() {
       else next.add(id);
       return next;
     });
+  };
+
+  const addAttachmentFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setAttachmentUploading(true);
+    try {
+      const uploaded = await Promise.all(files.map((file) => api.attachments.upload(file, file.name)));
+      setAttachmentLibrary((current) => {
+        const byId = new Map(current.map((item) => [item.id, item]));
+        uploaded.forEach((item) => byId.set(item.id, item));
+        return [...byId.values()];
+      });
+      setSelectedAttachmentIds((current) => {
+        const next = new Set(current);
+        uploaded.forEach((item) => next.add(item.id));
+        return next;
+      });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Attachment upload failed');
+    } finally {
+      setAttachmentUploading(false);
+    }
   };
 
   const toggleSidebarBulk = (id: number) => {
@@ -653,7 +707,7 @@ export default function EmailStudio() {
       setCompaniesSummary([]);
       const page = await api.contacts.list(contactListParams());
       setContacts(page.items);
-      api.contacts.companiesSummary().then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
+      api.contacts.companiesSummary({ q: companySearch, limit: COMPANY_PAGE }).then(setCompaniesSummary).catch(() => setCompaniesSummary([]));
       if (res.skipped > 0) {
         window.alert(`Deleted ${res.deleted}. ${res.skipped} could not be removed (permission or not found).`);
       }
@@ -682,25 +736,13 @@ export default function EmailStudio() {
     }
   };
 
-  const previewBody = email
-    ? (signature ? `${email.body.trim()}\n\n--\n\n${signature}` : email.body)
-    : '';
-  const signatureHtmlPart = !signature
-    ? ''
-    : signature.includes('<') && signature.includes('>')
-      ? `<br><br>--<br><br>${signature}`
-      : `<br><br>--<br><br>${signature.replace(/\n/g, '<br>')}`;
-  const previewBodyHtml = email?.body
-    ? email.body + signatureHtmlPart + (signatureImageUrl ? `<br><img src="${signatureImageUrl}" alt="" width="200" />` : '')
-    : '';
+  const previewBody = email?.body || '';
+  const selectedAttachments = attachmentLibrary.filter((item) => selectedAttachmentIds.has(item.id));
   const bodyRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className={`email-studio app-workspace w-full max-w-[1920px] ${focusWriting ? 'studio-focus' : ''} ${previewOpen ? 'studio-preview-open' : ''}`}>
-      <PageHeader
-        title="Drafts"
-        subtitle="Write, review, and save your outreach. AI assistance is optional."
-      />
+      <PageHeader title="Drafts" />
       <div className="studio-workbench-bar">
         <span>Writing as <strong>{user?.email}</strong></span>
         <div>
@@ -725,33 +767,41 @@ export default function EmailStudio() {
         ))}
       </nav>
       <div className="email-studio-layout">
-        <div className={`studio-step ${mobileStep === 'contacts' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex-shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none ${contactsPanelExpanded ? 'w-full xl:w-[280px] email-studio-contacts' : 'w-full xl:w-14'}`}>
+        <div
+          data-collapsed={!contactsPanelExpanded}
+          className={`studio-step studio-panel email-studio-contacts w-full ${mobileStep === 'contacts' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex-shrink-0`}
+        >
           {contactsPanelExpanded ? (
             <>
-              <div className="px-4 py-3 border-b border-[var(--border)] flex gap-2 flex-wrap items-stretch bg-white dark:bg-[var(--bg-card)]">
-                <button
-                  onClick={() => setContactsPanelExpanded(false)}
-                  className="app-nav-util-btn px-2 shrink-0"
-                  title="Collapse panel"
-                  aria-label="Collapse contacts panel"
-                >
-                  ◀
-                </button>
-                <AppSubnav
-                  className="app-subnav--stretch min-w-0"
-                  items={[
-                    { id: 'editor', label: 'Contacts' },
-                    { id: 'cache', label: 'Drafts' },
-                  ]}
-                  active={activeTab}
-                  onChange={(id) => setActiveTab(id as 'editor' | 'cache')}
-                  label="Draft contact sources"
-                />
+              {/* Two rows of one control height. Collapse, New and the tab
+                  pair used to share a wrapping row, so at sidebar width the
+                  pills stacked and stretched the buttons beside them. */}
+              <div className="px-4 py-3 border-b border-[var(--border)] space-y-2 bg-white dark:bg-[var(--bg-card)]">
+                <div className="flex gap-2 items-stretch">
+                  <button
+                    onClick={() => setContactsPanelExpanded(false)}
+                    className="app-nav-util-btn w-9 shrink-0 grid place-items-center p-0"
+                    title="Collapse panel"
+                    aria-label="Collapse contacts panel"
+                  >
+                    ◀
+                  </button>
+                  <AppSubnav
+                    className="app-subnav--stretch min-w-0"
+                    items={[
+                      { id: 'editor', label: 'Contacts' },
+                      { id: 'cache', label: 'Drafts' },
+                    ]}
+                    active={activeTab}
+                    onChange={(id) => setActiveTab(id as 'editor' | 'cache')}
+                    label="Draft contact sources"
+                  />
+                </div>
                 <button
                   onClick={startNewEmail}
-                  className="app-nav-util-btn shrink-0 font-bold uppercase tracking-wide text-[var(--btn-primary-text)] bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] border-[var(--deep-navy)]"
+                  className="ui-button ui-button--primary ui-button--sm w-full"
                 >
-                  + New
+                  + New draft
                 </button>
               </div>
               <div className="min-w-0 email-studio-contacts-body">
@@ -788,22 +838,43 @@ export default function EmailStudio() {
                     <button
                       type="button"
                       onClick={selectAllSidebarContacts}
-                      className="text-xs font-medium text-[var(--accent)] hover:text-[var(--accent-hover)] hover:underline"
+                      className="ui-button ui-button--ghost ui-button--sm"
                     >
                       Select all
                     </button>
                     <button
                       type="button"
                       onClick={() => setSidebarBulkIds(new Set())}
-                      className="text-xs font-medium text-[var(--text-muted)] hover:text-[var(--accent)] hover:underline"
+                      className="ui-button ui-button--ghost ui-button--sm"
                     >
                       Clear ticks
                     </button>
+                    {/* Ticking several people used to offer only deletion,
+                        which made a multiple selection look like a drafting
+                        tool it was not. Studio writes to one named person;
+                        writing to a group is the pipeline, and this hands the
+                        selection to it rather than leaving the member to
+                        retype the companies. */}
+                    {sidebarSelectedIds.size > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const companies = [...new Set(
+                            contacts.filter((c) => sidebarSelectedIds.has(c.id))
+                              .map((c) => (c.company || '').trim()).filter(Boolean),
+                          )];
+                          navigate(`/scraper?view=company&companies=${encodeURIComponent(companies.join(','))}`);
+                        }}
+                        className="ui-button ui-button--ghost ui-button--sm"
+                      >
+                        Write to these {sidebarSelectedIds.size} together →
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={sidebarSelectedIds.size === 0 || sidebarDeleting}
                       onClick={bulkDeleteSidebarContacts}
-                      className="btn-danger-solid text-xs px-2 py-1.5"
+                      className="ui-button ui-button--danger ui-button--sm"
                     >
                       {sidebarDeleting ? 'Deleting…' : 'Delete selected'}
                     </button>
@@ -894,7 +965,7 @@ export default function EmailStudio() {
                     type="button"
                     onClick={clearGeneratedEmailCache}
                     disabled={generatedClearBusy}
-                    className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-700 hover:bg-pale-sky/20 dark:hover:bg-slate-600 disabled:opacity-50"
+                    className="ui-button ui-button--secondary ui-button--sm"
                   >
                     {generatedClearBusy ? 'Clearing…' : 'Delete all drafts'}
                   </button>
@@ -941,7 +1012,8 @@ export default function EmailStudio() {
         <div className="email-studio-main">
           <div
             id="email-generator-section"
-            className={`studio-step ${mobileStep === 'generate' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex flex-col min-w-0 ${aiGeneratorExpanded ? 'w-full email-studio-generator' : 'w-full xl:w-14 flex-shrink-0'}`}
+            data-collapsed={!aiGeneratorExpanded}
+            className={`studio-step studio-panel email-studio-generator w-full ${mobileStep === 'generate' ? 'is-active' : ''} surface-card shadow-sm rounded-xl flex flex-col min-w-0`}
           >
             {aiGeneratorExpanded ? (
             <>
@@ -958,9 +1030,6 @@ export default function EmailStudio() {
               <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">AI assistance</h2>
             </div>
             <div className="email-studio-generator-body">
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Add the outcome and facts the draft may use. Claude will create a starting point; review every claim before saving or sending.
-            </p>
             {generationError && <p className="ui-notice ui-notice--danger" role="alert">{generationError}</p>}
             <div className="email-studio-field email-studio-field--grow">
                 <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Email goal</label>
@@ -1091,7 +1160,7 @@ export default function EmailStudio() {
               <button
                 onClick={generateEmail}
                 disabled={loading}
-                className="studio-generate-row__go py-3.5 px-4 bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] active:scale-[0.98] text-[var(--btn-primary-text)] font-semibold disabled:opacity-50 transition-all"
+                className="ui-button ui-button--primary studio-generate-row__go active:scale-[0.98] transition-all"
               >
                 {loading ? 'Generating…' : 'Generate email'}
               </button>
@@ -1126,20 +1195,18 @@ export default function EmailStudio() {
                 className="w-full px-4 py-2.5 flex items-center justify-between text-left text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] bg-white dark:bg-[var(--bg-card)] hover:bg-pale-sky/10 dark:hover:bg-slate-700/40"
               >
                 <span>Add this draft to a campaign</span>
-                <span className={`inline-block text-[var(--text-muted)] transition-transform duration-300 ease-out motion-reduce:transition-none ${campaignPanelOpen ? 'rotate-0' : '-rotate-90'}`} aria-hidden>▼</span>
+                <span className="ui-disclosure-chevron text-[var(--text-muted)]" data-open={campaignPanelOpen} aria-hidden>▼</span>
               </button>
-              <div
-                className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${campaignPanelOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
-              >
+              <div className="ui-disclosure" data-open={campaignPanelOpen}>
                 <div className="overflow-hidden min-h-0">
                 <div className="px-4 py-3 space-y-2 text-sm border-t border-[var(--border)] bg-white dark:bg-[var(--bg-card)]">
                   <p className="text-xs text-[var(--text-muted)] leading-relaxed">
                     Load employees for the companies you tick (generic inboxes like info@ are skipped). Write below, then save or send. Follow-ups run on the daily job only for people who have not replied — sync Gmail on Pipeline.
                   </p>
-                  {companiesSummary.length === 0 ? (
-                    <p className="text-xs text-amber-700 dark:text-amber-400">No companies in the database yet — scrape or import contacts first.</p>
-                  ) : (
-                    <div className="rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden bg-white dark:bg-[var(--bg-card)]">
+                  {/* The picker asks the server for a page of companies that
+                      match what is typed. Loading every distinct company was
+                      fine at a few dozen and unusable at five figures. */}
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden bg-white dark:bg-[var(--bg-card)]">
                       <button
                         type="button"
                         onClick={() => setStudioCompanyListOpen((v) => !v)}
@@ -1149,24 +1216,30 @@ export default function EmailStudio() {
                         <span className="text-sm font-semibold text-deep-navy dark:text-[var(--text-primary)] min-w-0">
                           Companies to include{' '}
                           <span className="font-normal text-[var(--text-muted)]">
-                            ({companiesSummary.length})
+                            ({companiesSummary.length}{companiesSummary.length >= COMPANY_PAGE ? '+' : ''})
                             {selectedCompanyNames.size > 0 ? ` · ${selectedCompanyNames.size} selected` : ''}
                           </span>
                         </span>
-                        <span
-                          className={`inline-block text-[var(--text-muted)] transition-transform duration-300 ease-out motion-reduce:transition-none shrink-0 ${studioCompanyListOpen ? 'rotate-0' : '-rotate-90'}`}
-                          aria-hidden
-                        >
-                          ▼
-                        </span>
+                        <span className="ui-disclosure-chevron text-[var(--text-muted)] shrink-0" data-open={studioCompanyListOpen} aria-hidden>▼</span>
                       </button>
-                      <div
-                        className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
-                          studioCompanyListOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                        }`}
-                      >
+                      <div className="ui-disclosure" data-open={studioCompanyListOpen}>
                         <div className="overflow-hidden min-h-0">
-                          <div className="max-h-48 overflow-y-auto p-2 space-y-1.5 bg-white dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-700/60">
+                          <div className="p-2 border-t border-slate-100 dark:border-slate-700/60 bg-white dark:bg-slate-800/40">
+                            <input
+                              type="search"
+                              value={companySearch}
+                              onChange={(e) => setCompanySearch(e.target.value)}
+                              placeholder="Search companies"
+                              aria-label="Search companies"
+                              className="ui-input ui-input--sm w-full"
+                            />
+                          </div>
+                          <div className="max-h-48 overflow-y-auto p-2 space-y-1.5 bg-white dark:bg-slate-800/40">
+                            {companiesSummary.length === 0 && (
+                              <p className="text-xs text-[var(--text-muted)] px-1 py-2">
+                                {companySearch.trim() ? 'No company matches that search.' : 'No companies in the database yet — find or import contacts first.'}
+                              </p>
+                            )}
                             {companiesSummary.map((row) => (
                               <label
                                 key={`${row.company}-${row.company_domain || ''}`}
@@ -1182,17 +1255,21 @@ export default function EmailStudio() {
                                 <span className="text-xs text-[var(--text-muted)] shrink-0">({row.contact_count})</span>
                               </label>
                             ))}
+                            {companiesSummary.length >= COMPANY_PAGE && (
+                              <p className="text-xs text-[var(--text-muted)] px-1 pt-1">
+                                Showing the first {COMPANY_PAGE}. Search to narrow.
+                              </p>
+                            )}
                           </div>
                         </div>
                       </div>
-                    </div>
-                  )}
+                  </div>
                   <div className="flex flex-wrap gap-2 items-center">
                     <button
                       type="button"
                       onClick={loadStudioContactsForCompanies}
                       disabled={campaignBusy}
-                      className="px-3 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-xs font-medium disabled:opacity-50"
+                      className="ui-button ui-button--primary ui-button--sm"
                     >
                       Load employee contacts
                     </button>
@@ -1202,7 +1279,7 @@ export default function EmailStudio() {
                         <button
                           type="button"
                           onClick={() => setSelectedCampaignContactIds(new Set(studioCampaignContacts.map((c) => c.id)))}
-                          className="text-xs font-medium text-[var(--accent)] hover:text-[var(--accent-hover)] underline underline-offset-2"
+                          className="ui-button ui-button--ghost ui-button--sm"
                         >
                           Select all
                         </button>
@@ -1210,7 +1287,7 @@ export default function EmailStudio() {
                           type="button"
                           title="Clear ticked selection for this loaded list only"
                           onClick={() => setSelectedCampaignContactIds(new Set())}
-                          className="text-xs font-medium text-[var(--text-muted)] hover:text-[var(--accent)] underline underline-offset-2"
+                          className="ui-button ui-button--ghost ui-button--sm"
                         >
                           Clear
                         </button>
@@ -1219,7 +1296,7 @@ export default function EmailStudio() {
                           disabled={studioListDeleting || selectedCampaignContactIds.size === 0}
                           title="Permanently remove selected contacts from the database"
                           onClick={deleteSelectedStudioContactsFromDb}
-                          className="btn-danger-solid text-xs px-2.5 py-1 rounded-md disabled:opacity-45 disabled:pointer-events-none"
+                          className="ui-button ui-button--danger ui-button--sm"
                         >
                           {studioListDeleting ? 'Deleting…' : 'Delete from database'}
                         </button>
@@ -1238,18 +1315,9 @@ export default function EmailStudio() {
                           Loaded contacts{' '}
                           <span className="font-normal text-slate-600">({studioCampaignContacts.length})</span>
                         </span>
-                        <span
-                          className={`inline-block text-slate-500 transition-transform duration-300 ease-out motion-reduce:transition-none shrink-0 ${studioContactsListOpen ? 'rotate-0' : '-rotate-90'}`}
-                          aria-hidden
-                        >
-                          ▼
-                        </span>
+                        <span className="ui-disclosure-chevron text-slate-500 shrink-0" data-open={studioContactsListOpen} aria-hidden>▼</span>
                       </button>
-                      <div
-                        className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${
-                          studioContactsListOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                        }`}
-                      >
+                      <div className="ui-disclosure" data-open={studioContactsListOpen}>
                         <div className="overflow-hidden min-h-0">
                           <div className="max-h-64 overflow-y-auto bg-white divide-y divide-slate-100">
                             {studioCampaignContacts.map((c) => (
@@ -1320,7 +1388,7 @@ export default function EmailStudio() {
                       type="button"
                       disabled={campaignBusy}
                       onClick={buildCampaignFromStudio}
-                      className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-semibold disabled:opacity-50"
+                      className="ui-button ui-button--primary"
                     >
                       Save campaign draft
                     </button>
@@ -1341,33 +1409,10 @@ export default function EmailStudio() {
             <div className="email-studio-compose divide-x divide-pale-sky dark:divide-slate-600">
               <div className="p-4 min-w-0 email-studio-editor-column">
                 <h3 className="text-sm font-medium text-deep-navy dark:text-slate-400 mb-2">Your draft</h3>
-                {/* Text formatting toolbar - white in light mode */}
-                <div className="email-studio-block flex flex-wrap items-center gap-1 mb-2 p-2 rounded-lg border dark:bg-slate-700/50 dark:border-slate-600">
-                  <button type="button" onClick={() => document.execCommand('bold')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] font-bold text-sm" title="Bold">B</button>
-                  <button type="button" onClick={() => document.execCommand('italic')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] italic text-sm" title="Italic">I</button>
-                  <button type="button" onClick={() => document.execCommand('underline')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] underline text-sm" title="Underline">U</button>
-                  <button type="button" onClick={() => document.execCommand('strikeThrough')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] line-through text-sm" title="Strikethrough">S</button>
-                  <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
-                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'h2')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm font-semibold" title="Heading 2">H2</button>
-                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'h3')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm font-semibold" title="Heading 3">H3</button>
-                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'blockquote')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm border-l-2 border-slate-400 dark:border-slate-500 pl-1" title="Blockquote">"</button>
-                  <button type="button" onClick={() => document.execCommand('formatBlock', false, 'pre')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-xs" title="Code block">{"</>"}</button>
-                  <button type="button" onClick={() => document.execCommand('insertUnorderedList')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm" title="Bullet list">• List</button>
-                  <button type="button" onClick={() => document.execCommand('insertOrderedList')} className="px-2 py-1.5 rounded hover:bg-pale-sky/35 dark:hover:bg-slate-600 text-deep-navy dark:text-[var(--text-primary)] text-sm" title="Numbered list">1. List</button>
-                  <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
-                  <input type="color" defaultValue="#000000" onInput={(e) => { document.execCommand('foreColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Text color" />
-                  <input type="color" defaultValue="#ffff00" onInput={(e) => { document.execCommand('backColor', false, (e.target as HTMLInputElement).value); }} className="w-7 h-7 rounded border border-slate-300 dark:border-slate-500 cursor-pointer p-0" title="Highlight" />
-                  <span className="w-px h-5 bg-slate-300 dark:bg-slate-500 mx-1" />
-                  <select aria-label="Email font size"
-                    value={emailFontSize}
-                    onChange={(e) => setEmailFontSize(Number(e.target.value))}
-                    className="px-2 py-1 rounded border border-slate-300 dark:border-slate-600 text-sm bg-white dark:bg-slate-700 text-deep-navy dark:text-[var(--text-primary)]"
-                  >
-                    {[12, 14, 16, 18, 20, 24].map((s) => (
-                      <option key={s} value={s}>{s}px</option>
-                    ))}
-                  </select>
-                </div>
+                <EmailToolbar
+                  editorRef={bodyRef}
+                  onChange={(html) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: sanitizeRichText(html) }))}
+                />
                 <div className="email-studio-editor-stack">
                   <div className="min-w-0">
                     <label htmlFor="studio-subject" className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Subject</label>
@@ -1391,9 +1436,14 @@ export default function EmailStudio() {
                       aria-multiline="true"
                       suppressContentEditableWarning
                       onPaste={event => { event.preventDefault(); insertSafeTransfer(event.clipboardData); }}
-                      onDrop={event => { event.preventDefault(); insertSafeTransfer(event.dataTransfer); }}
+                      onDrop={event => {
+                        event.preventDefault();
+                        const files = Array.from(event.dataTransfer.files || []);
+                        if (files.length) void addAttachmentFiles(files);
+                        else insertSafeTransfer(event.dataTransfer);
+                      }}
                       onInput={(e) => setEmail((prev) => ({ ...(prev || { subject: '', body: '' }), body: sanitizeRichText((e.target as HTMLDivElement).innerHTML) }))}
-                      style={{ fontFamily: "'Lato', system-ui, sans-serif", fontSize: emailFontSize }}
+                      style={{ fontFamily: "'Lato', system-ui, sans-serif", fontSize: BASE_FONT_SIZE }}
                       className="email-studio-body min-h-[280px] h-full w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-deep-navy caret-deep-navy resize-y overflow-auto focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-0 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:caret-slate-200 dark:focus:ring-offset-transparent"
                     />
                     {(!email?.body || email.body === '' || (email.body.replace(/<[^>]*>/g, '').trim() === '')) && (
@@ -1403,102 +1453,119 @@ export default function EmailStudio() {
                     )}
                   </div>
                   </div>
-                  {attachmentsEnabled && (
-                    <div className="email-studio-block w-full p-3 rounded-lg border dark:border-slate-600">
-                      <h4 className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)] mb-2">Test-send attachments</h4>
-                      <p className="text-xs text-deep-navy/80 dark:text-slate-400 mb-2">These files apply only to the next one-off test email. For campaign files, insert a reviewed private document share link into the message.</p>
-                      {attachmentLibrary.length === 0 ? (
-                        <p className="text-xs text-deep-navy/70 dark:text-slate-400">No attachments in library. Admins can upload in Profile → Settings.</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {attachmentLibrary.map((a) => (
-                            <label
-                              key={a.id}
-                              className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm transition-colors ${
-                                selectedAttachmentIds.has(a.id)
-                                  ? 'border-deep-navy dark:border-[var(--accent)] bg-white dark:bg-slate-600/50 ring-1 ring-[var(--border)] text-deep-navy dark:text-[var(--text-primary)]'
-                                  : 'border-slate-200 dark:border-slate-600 hover:bg-pale-sky/[0.08] dark:hover:bg-slate-600/50 text-deep-navy dark:text-slate-300 bg-white dark:bg-transparent'
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedAttachmentIds.has(a.id)}
-                                onChange={() => toggleAttachment(a.id)}
-                                className="rounded"
-                              />
-                              <span className="truncate max-w-[180px]" title={a.display_name || a.filename}>
-                                {a.display_name || a.filename}
-                              </span>
-                              {a.file_size && (
-                                <span className="text-xs text-slate-500">
-                                  ({(a.file_size / 1024).toFixed(1)} KB)
-                                </span>
-                              )}
-                            </label>
+                    <div className="email-studio-block w-full rounded-lg border border-dashed border-slate-300 dark:border-slate-600 bg-slate-50/60 dark:bg-slate-800/30 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-deep-navy dark:text-[var(--text-primary)]">Attachments</span>
+                        <label className="ui-button ui-button--secondary ui-button--sm cursor-pointer">
+                          {attachmentUploading ? 'Uploading…' : 'Add files'}
+                          <input
+                            type="file"
+                            multiple
+                            className="sr-only"
+                            disabled={attachmentUploading}
+                            accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.gif"
+                            onChange={(event) => {
+                              void addAttachmentFiles(Array.from(event.target.files || []));
+                              event.target.value = '';
+                            }}
+                          />
+                        </label>
+                        <span className="text-xs text-[var(--text-muted)]">or drop files into the message</span>
+                      </div>
+                      {attachmentLibrary.length > selectedAttachments.length && (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs text-[var(--accent)]">Choose from saved files</summary>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {attachmentLibrary.filter((item) => !selectedAttachmentIds.has(item.id)).map((item) => (
+                              <button key={item.id} type="button" onClick={() => toggleAttachment(item.id)} className="ui-button ui-button--ghost ui-button--sm">
+                                + {item.display_name || item.filename}
+                              </button>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {selectedAttachments.length > 0 && (
+                        <ul className="mt-3 border-t border-slate-200 dark:border-slate-600 pt-2 space-y-1" aria-label="Attached files">
+                          {selectedAttachments.map((item) => (
+                            <li key={item.id} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                              <span className="text-xs font-medium text-[var(--text-muted)]">File</span>
+                              <span className="truncate">{item.display_name || item.filename}</span>
+                              <button type="button" onClick={() => toggleAttachment(item.id)} className="ml-auto text-xs text-[var(--text-muted)] hover:text-red-700">Remove</button>
+                            </li>
                           ))}
-                        </div>
+                        </ul>
                       )}
-                      {selectedAttachmentIds.size > 0 && (
-                        <p className="text-xs text-deep-navy/80 dark:text-slate-400 mt-2">{selectedAttachmentIds.size} file(s) will be attached to the next test send only</p>
-                      )}
-                      {user.role === 'admin' && <div className="mt-3 pt-3 border-t border-pale-sky/50 dark:border-slate-600 flex flex-wrap gap-2 items-center">
-                        <span className="text-xs text-deep-navy dark:text-slate-400">Cloud:</span>
+                      {user.role === 'admin' && (
                         <button
                           type="button"
-                          disabled={!attachmentsEnabled || onedriveBusy}
+                          disabled={onedriveBusy}
                           onClick={async () => {
                             setOnedriveBusy(true);
                             try {
-                              const res = await api.attachments.onedrive.list();
-                              setOnedriveConfigured(res.configured);
-                              setOnedriveItems(res.items || []);
+                              const response = await api.attachments.onedrive.list();
+                              setOnedriveConfigured(response.configured);
+                              setOnedriveItems(response.items || []);
                               setOnedriveOpen(true);
-                            } catch (e) {
-      const eMessage = e instanceof Error ? e.message : 'Request failed';
-                              setCampaignMessage(eMessage || 'OneDrive list failed');
+                            } catch (error) {
+                              setCampaignMessage(error instanceof Error ? error.message : 'OneDrive list failed');
                             } finally {
                               setOnedriveBusy(false);
                             }
                           }}
-                          className="text-xs px-2 py-1.5 rounded border border-slate-200 dark:border-slate-600 text-deep-navy dark:text-slate-200 disabled:opacity-50"
+                          className="mt-2 text-xs text-[var(--accent)] hover:underline"
                         >
                           Import from club OneDrive
                         </button>
-                      </div>}
+                      )}
+                    </div>
+                  {(signOff.name || signOff.role) && (
+                    <div className="w-full border-t border-slate-200 dark:border-slate-600 pt-3 flex items-start gap-3 text-xs text-slate-600 dark:text-slate-300">
+                      {signOff.logoUrl && <img src={signOff.logoUrl} alt="YUCG" className="w-14 h-auto object-contain" />}
+                      <div>
+                        <div className="font-bold text-deep-navy dark:text-slate-100">{signOff.name} {signOff.pronouns && <em className="font-normal">({signOff.pronouns})</em>}</div>
+                        {signOff.role && <div>{signOff.role}</div>}
+                        <div>{signOff.organization}</div>
+                        {(signOff.linkedin || signOff.phone) && <div>{signOff.linkedin ? 'LinkedIn' : ''}{signOff.linkedin && signOff.phone ? ' | ' : ''}{signOff.phone}</div>}
+                      </div>
                     </div>
                   )}
-                  <div className="studio-draft-actions flex gap-2 flex-wrap items-center">
+                  {/* One row, one height. The delivery target used to sit in a
+                      sentence beside the buttons, which wrapped the row onto a
+                      second line; it belongs on the button that uses it. */}
+                  <div className="studio-draft-actions flex items-center gap-2 min-w-0">
                     <button
                       onClick={saveCurrentAsDraft}
                       disabled={draftSaving || (!email?.subject && !email?.body)}
-                      className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50 transition-all"
+                      className="ui-button ui-button--primary shrink-0"
                     >
-                      {draftSaving ? 'Saving…' : selectedDraftId ? 'Update Draft' : 'Save Draft'}
+                      {draftSaving ? 'Saving…' : selectedDraftId ? 'Update draft' : 'Save draft'}
                     </button>
                     <button
-                      onClick={analyzeSentiment}
-                      disabled={sentimentLoading || (!email?.subject && !email?.body)}
-                      className="px-4 py-2 rounded-lg bg-[var(--btn-primary-hover)] hover:bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50 transition-all"
+                      onClick={testSend}
+                      disabled={testSending || !email?.body}
+                      title={`Sends this draft to ${user?.email || 'your inbox'} so you can check delivery`}
+                      className="ui-button ui-button--secondary min-w-0"
                     >
-                      {sentimentLoading ? 'Analyzing...' : 'Analyze Sentiment'}
+                      <span className="truncate">
+                        {testSending ? 'Sending…' : `Send test to ${user?.email || 'myself'}`}
+                      </span>
                     </button>
                     <input
                       type="text"
                       value={sentimentIndustry}
                       onChange={(e) => setSentimentIndustry(e.target.value)}
-                      placeholder="Industry (optional)"
-                      className="w-32 px-2 py-1.5 rounded-lg border border-pale-sky dark:border-slate-600 bg-white dark:bg-slate-700 text-deep-navy dark:text-slate-200 text-sm placeholder:text-slate-500 dark:placeholder-slate-500 caret-deep-navy dark:caret-slate-200"
+                      placeholder="Industry"
+                      aria-label="Industry for sentiment analysis"
+                      style={{ width: '6.5rem' }}
+                      className="ui-input ml-auto shrink-0"
                     />
                     <button
-                      onClick={testSend}
-                      disabled={testSending || !email?.body}
-                      className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] text-sm font-medium disabled:opacity-50 transition-all"
+                      onClick={analyzeSentiment}
+                      disabled={sentimentLoading || (!email?.subject && !email?.body)}
+                      className="ui-button ui-button--secondary shrink-0"
                     >
-                      {testSending ? 'Sending...' : 'Send test to myself'}
+                      {sentimentLoading ? 'Analyzing…' : 'Analyze'}
                     </button>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
-                      Sends to {user?.email || 'your email'} to verify delivery
-                    </span>
                   </div>
                   {draftMessage && <p role="status" className="text-sm text-slate-600 dark:text-slate-300">{draftMessage}</p>}
                   {sentimentAnalysis && (
@@ -1563,17 +1630,31 @@ export default function EmailStudio() {
                       className="text-slate-700 leading-relaxed prose prose-sm max-w-none"
                       style={{
                         fontFamily: "'Lato', system-ui, sans-serif",
-                        fontSize: `${emailFontSize}px`,
+                        fontSize: `${BASE_FONT_SIZE}px`,
                       }}
                     >
                       {email?.body && /<[a-z][\s\S]*>/i.test(email.body) ? (
-                        <div dangerouslySetInnerHTML={{ __html: sanitizeRichText(previewBodyHtml || '') }} />
+                        <div dangerouslySetInnerHTML={{ __html: sanitizeRichText(previewBody) }} />
                       ) : (
-                        <span className="whitespace-pre-wrap">{previewBody || 'Start typing above or generate with AI to see a live preview.'}</span>
+                        <span className="whitespace-pre-wrap">{previewBody || 'Start typing above or generate a draft.'}</span>
                       )}
                     </div>
-                    {signatureImageUrl && (
-                      <img src={safeImageUrl(signatureImageUrl) || undefined} alt="" className="mt-2 max-h-16 object-contain" />
+                    {selectedAttachments.length > 0 && (
+                      <div className="mt-4 text-xs text-slate-500">
+                        <strong>Attached</strong>
+                        <ul className="list-disc ml-5 mt-1">{selectedAttachments.map((item) => <li key={item.id}>{item.display_name || item.filename}</li>)}</ul>
+                      </div>
+                    )}
+                    {(signOff.name || signOff.role) && (
+                      <div className="mt-5 border-t border-slate-200 pt-3 flex items-start gap-3 text-xs text-slate-700">
+                        {signOff.logoUrl && <img src={signOff.logoUrl} alt="YUCG" className="w-[72px] h-auto object-contain" />}
+                        <div>
+                          <div className="font-bold text-deep-navy">{signOff.name} {signOff.pronouns && <em className="font-normal">({signOff.pronouns})</em>}</div>
+                          {signOff.role && <div>{signOff.role}</div>}
+                          <div>{signOff.organization}</div>
+                          {(signOff.linkedin || signOff.phone) && <div className="mt-0.5 text-deep-navy">{signOff.linkedin ? 'LinkedIn' : ''}{signOff.linkedin && signOff.phone ? ' | ' : ''}{signOff.phone}</div>}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1587,7 +1668,7 @@ export default function EmailStudio() {
           <div className="surface-card w-full max-w-lg rounded-xl p-5 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="font-semibold text-deep-navy">OneDrive</h2>
-              <button type="button" className="text-sm text-slate-600 hover:underline" onClick={() => setOnedriveOpen(false)}>
+              <button type="button" className="ui-button ui-button--ghost" onClick={() => setOnedriveOpen(false)}>
                 Close
               </button>
             </div>
@@ -1603,7 +1684,7 @@ export default function EmailStudio() {
                     <button
                       type="button"
                       disabled={onedriveBusy}
-                      className="text-xs px-2 py-1 rounded border border-pale-sky"
+                      className="ui-button ui-button--secondary ui-button--sm"
                       onClick={async () => {
                         setOnedriveBusy(true);
                         try {

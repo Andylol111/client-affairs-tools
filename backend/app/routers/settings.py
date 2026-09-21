@@ -1,11 +1,13 @@
 """
-Settings API - Signature, custom formats. Admin-only for config changes.
+Settings API - member sign-off, send pacing, custom formats.
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
-from app.services.settings_service import get_setting, set_setting, get_all_settings, get_member_setting, set_member_setting
+from app.services.settings_service import (
+    SIGN_OFF_KEYS, get_member_setting, set_member_setting,
+)
 from app.auth_deps import get_current_user, get_current_admin
 from app.services.audit_service import log_audit
 
@@ -13,9 +15,13 @@ router = APIRouter()
 
 
 class SettingsUpdate(BaseModel):
-    signature: Optional[str] = None
-    signature_image_url: Optional[str] = None
-    attachments_enabled: Optional[bool] = None
+    sign_off_name: Optional[str] = None
+    sign_off_pronouns: Optional[str] = None
+    sign_off_role: Optional[str] = None
+    sign_off_organization: Optional[str] = None
+    sign_off_linkedin: Optional[str] = None
+    sign_off_phone: Optional[str] = None
+    sign_off_logo_url: Optional[str] = None
     daily_send_limit: Optional[int] = None
     daily_send_warn_at: Optional[int] = None
 
@@ -28,41 +34,33 @@ class CustomFormatCreate(BaseModel):
 
 @router.get("")
 async def get_settings(user: dict = Depends(get_current_user)):
-    """Get all settings. Any authenticated user can read."""
+    """Read this member's own settings."""
     from app.services.settings_service import member_daily_send_limit
 
-    result = await get_all_settings()
-    for key in ("signature", "signature_image_url"):
-        result[key] = await get_member_setting(user["id"], key) or ""
+    result = {key: await get_member_setting(user["id"], key) or "" for key in SIGN_OFF_KEYS}
     result["daily_send_limit"] = await member_daily_send_limit(user["id"])
     result["daily_send_warn_at"] = await get_member_setting(user["id"], "daily_send_warn_at") or ""
     return result
 
 
 @router.put("")
-async def update_settings(payload: SettingsUpdate, admin: dict = Depends(get_current_user)):
-    """Update settings. Admin only."""
-    if payload.attachments_enabled is not None and admin.get("role") != "admin":
-        raise HTTPException(403, "Only administrators can change club settings")
-    if payload.signature is not None:
-        await set_member_setting(admin["id"], "signature", payload.signature)
-        await log_audit(admin["id"], "settings_update", "settings", "signature", "Updated signature")
-    if payload.signature_image_url is not None:
-        await set_member_setting(admin["id"], "signature_image_url", payload.signature_image_url or "")
-        await log_audit(admin["id"], "settings_update", "settings", "signature_image_url", "Updated signature image URL")
-    if payload.attachments_enabled is not None:
-        await set_setting("attachments_enabled", "1" if payload.attachments_enabled else "0")
-        await log_audit(admin["id"], "settings_update", "settings", "attachments_enabled", f"Set to {payload.attachments_enabled}")
+async def update_settings(payload: SettingsUpdate, user: dict = Depends(get_current_user)):
+    """Update this member's own settings."""
+    for key in SIGN_OFF_KEYS:
+        value = getattr(payload, key)
+        if value is not None:
+            await set_member_setting(user["id"], key, value.strip())
+            await log_audit(user["id"], "settings_update", "settings", key, f"Updated {key}")
     if payload.daily_send_limit is not None:
         if payload.daily_send_limit < 1:
             raise HTTPException(400, "Daily send limit must be at least 1")
-        await set_member_setting(admin["id"], "daily_send_limit", str(payload.daily_send_limit))
-        await log_audit(admin["id"], "settings_update", "settings", "daily_send_limit", f"Set to {payload.daily_send_limit}")
+        await set_member_setting(user["id"], "daily_send_limit", str(payload.daily_send_limit))
+        await log_audit(user["id"], "settings_update", "settings", "daily_send_limit", f"Set to {payload.daily_send_limit}")
     if payload.daily_send_warn_at is not None:
         if payload.daily_send_warn_at < 0:
             raise HTTPException(400, "Warning threshold cannot be negative")
-        await set_member_setting(admin["id"], "daily_send_warn_at", str(payload.daily_send_warn_at))
-        await log_audit(admin["id"], "settings_update", "settings", "daily_send_warn_at", f"Set to {payload.daily_send_warn_at}")
+        await set_member_setting(user["id"], "daily_send_warn_at", str(payload.daily_send_warn_at))
+        await log_audit(user["id"], "settings_update", "settings", "daily_send_warn_at", f"Set to {payload.daily_send_warn_at}")
     return {"ok": True}
 
 

@@ -1,5 +1,6 @@
 import PageHeader from '../components/PageHeader';
 import Invitations from '../components/Invitations';
+import ContactMaintenance from '../components/admin/ContactMaintenance';
 import { useEffect, useState, Fragment } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import QRCode from 'qrcode';
@@ -227,7 +228,7 @@ export default function Admin() {
                     toast.addToast((e as Error)?.message || 'Export failed', 'error');
                   }
                 }}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-white font-medium"
+                className="ui-button ui-button--primary"
               >
                 Export to Excel
               </button>
@@ -279,7 +280,7 @@ export default function Admin() {
                                 alert((err as Error)?.message);
                               }
                             }}
-                            className="text-red-600 text-xs hover:underline"
+                            className="ui-button ui-button--danger ui-button--sm"
                           >
                             {u.is_active ? 'Deactivate' : 'Activate'}
                           </button>
@@ -334,7 +335,7 @@ export default function Admin() {
                     setError((e as Error)?.message || 'Failed');
                   }
                 }}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
+                className="ui-button ui-button--primary"
               >
                 Add Project
               </button>
@@ -382,7 +383,7 @@ export default function Admin() {
                                   alert((e as Error)?.message);
                                 }
                               }}
-                              className="text-red-600 text-xs hover:underline"
+                              className="ui-button ui-button--danger ui-button--sm"
                             >
                               Remove
                             </button>
@@ -393,7 +394,7 @@ export default function Admin() {
                     </ul>
                     <button
                       onClick={() => setAssignUserModal({ projectId: selectedProject.id, projectName: selectedProject.semester ? `${selectedProject.semester} — ${selectedProject.name}` : selectedProject.name })}
-                      className="px-3 py-1.5 rounded-lg border border-pale-sky text-sm font-medium hover:bg-pale-sky/20"
+                      className="ui-button ui-button--secondary ui-button--sm"
                     >
                       + Assign user
                     </button>
@@ -437,7 +438,7 @@ export default function Admin() {
                     <p className="text-slate-500 text-sm">All users already assigned.</p>
                   )}
                 </div>
-                <button onClick={() => setAssignUserModal(null)} className="text-slate-600 text-sm">Cancel</button>
+                <button onClick={() => setAssignUserModal(null)} className="ui-button ui-button--ghost">Cancel</button>
               </div>
             </div>
           )}
@@ -450,7 +451,7 @@ export default function Admin() {
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">Audit Log</h2>
             <button
               onClick={() => api.admin.exportAuditLogExcel().then(() => toast.addToast('Audit log export downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-              className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
+              className="ui-button ui-button--primary"
             >
               Export to Excel
             </button>
@@ -482,7 +483,7 @@ export default function Admin() {
                 placeholder="Key name (e.g. SharePoint)"
                 className="flex-1 px-3 py-2 rounded-lg border border-pale-sky"
               />
-              <button onClick={handleCreateKey} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
+              <button onClick={handleCreateKey} className="ui-button ui-button--primary">
                 Create
               </button>
             </div>
@@ -511,7 +512,7 @@ export default function Admin() {
                         }
                       }
                     }}
-                    className="text-red-600 text-sm hover:underline"
+                    className="ui-button ui-button--danger ui-button--sm"
                   >
                     Revoke
                   </button>
@@ -532,7 +533,7 @@ export default function Admin() {
           <div className="space-y-4">
             {(twoFactorStatus === 'not_setup' || twoFactorStatus === 'pending' || twoFactorStatus === null) && (
               <div className="flex gap-2 flex-wrap">
-                <button onClick={handle2FASetup} className="btn-press px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
+                <button onClick={handle2FASetup} className="ui-button ui-button--primary btn-press">
                   {twoFactorStatus === 'pending' && !qrDataUrl ? 'Regenerate QR Code' : twoFactorStatus === 'pending' ? 'Regenerate QR Code' : 'Setup 2FA'}
                 </button>
               </div>
@@ -559,18 +560,18 @@ export default function Admin() {
                 maxLength={6}
               />
               {(twoFactorStatus === 'pending' || twoFactorStatus === null) && (
-                <button onClick={handle2FAVerify} className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium">
+                <button onClick={handle2FAVerify} className="ui-button ui-button--primary">
                   Verify
                 </button>
               )}
               {twoFactorStatus === 'enabled' && (
-                <button onClick={handle2FADisable} className="px-4 py-2 rounded-lg border border-red-300 text-red-600 font-medium">
+                <button onClick={handle2FADisable} className="ui-button ui-button--danger">
                   Disable 2FA
                 </button>
               )}
             </div>
             <div className="pt-4 border-t border-pale-sky">
-              <button onClick={handle2FAReset} className="text-sm text-slate-500 hover:text-red-600">
+              <button onClick={handle2FAReset} className="ui-button ui-button--ghost">
                 Reset 2FA (If Stuck, e.g. Lost Phone Before Verifying)
               </button>
             </div>
@@ -612,6 +613,7 @@ export default function Admin() {
 
       {activeTab === 'operations' && (
         <div className="space-y-8 max-w-6xl">
+          <ContactMaintenance />
           <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-4">Operations Intelligence</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
@@ -633,19 +635,19 @@ export default function Admin() {
               </label>
               <button
                 onClick={() => api.admin.operations.exportInsightsExcel(opsDays).then(() => toast.addToast('Export downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
+                className="ui-button ui-button--primary"
               >
                 Export to Excel
               </button>
               <button
                 onClick={() => api.admin.operations.exportChartsZip(opsDays).then(() => toast.addToast('Charts ZIP downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
+                className="ui-button ui-button--primary"
               >
                 Download charts (ZIP)
               </button>
               <button
                 onClick={() => api.admin.operations.exportFullZip(opsDays).then(() => toast.addToast('Full export (ZIP with cache) downloaded.', 'success')).catch((e) => toast.addToast((e as Error).message, 'error'))}
-                className="px-4 py-2 rounded-lg bg-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] text-[var(--btn-primary-text)] font-medium"
+                className="ui-button ui-button--primary"
               >
                 Download full export (ZIP + cache)
               </button>
@@ -779,7 +781,7 @@ export default function Admin() {
           <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy dark:text-[var(--text-primary)] mb-2">Assistant knowledge</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">The shared Assistant uses the same private document register as Projects. Access is checked for every retrieval, and Amazon Bedrock receives only the short source excerpts needed for an answer.</p>
-            <div className="flex flex-wrap gap-2"><Link to="/documents" className="ui-button ui-button--secondary">Manage documents</Link><Link to="/?assistant=1" className="ui-button ui-button--primary">Open assistant</Link></div>
+            <div className="flex flex-wrap gap-2"><Link to="/documents" className="ui-button ui-button--secondary">Manage documents</Link></div>
           </div>
 
           <div className="surface-card rounded-xl p-6">

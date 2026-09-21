@@ -31,27 +31,48 @@ async def set_setting(key: str, value: str | None) -> None:
         await db.close()
 
 
-async def get_all_settings() -> dict[str, str]:
-    """Get all settings as key-value dict."""
+# The structured sign-off the club signs with. Stored as fields rather than a
+# pasted blob so the block is consistent between members and can never be a
+# generated guess.
+SIGN_OFF_KEYS = (
+    "sign_off_name", "sign_off_pronouns", "sign_off_role",
+    "sign_off_organization", "sign_off_linkedin", "sign_off_phone",
+    "sign_off_logo_url",
+)
+
+MEMBER_SETTING_KEYS = frozenset({"daily_send_limit", "daily_send_warn_at", *SIGN_OFF_KEYS})
+
+
+async def load_sign_off(user_id: int):
+    """Load the complete sender block with one database connection."""
+    from app.services.email_body import SignOff
+
+    prefix = f"member:{user_id}:"
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT key, value FROM settings")
-        rows = await cursor.fetchall()
-        result = {}
-        for r in rows:
-            if r["key"] in {"signature", "signature_image_url", "attachments_enabled"}:
-                result[r["key"]] = r["value"] or ""
-        # Defaults for optional keys
-        if "attachments_enabled" not in result:
-            result["attachments_enabled"] = "0"
-        return result
+        rows = await (await db.execute(
+            "SELECT key, value FROM settings WHERE key LIKE ?",
+            (prefix + "sign_off_%",),
+        )).fetchall()
+        values = {
+            row["key"][len(prefix):]: (row["value"] or "").strip()
+            for row in rows
+        }
+        user = await (await db.execute(
+            "SELECT name FROM users WHERE id=?", (user_id,)
+        )).fetchone()
     finally:
         await db.close()
 
-
-MEMBER_SETTING_KEYS = frozenset(
-    {"signature", "signature_image_url", "daily_send_limit", "daily_send_warn_at"}
-)
+    return SignOff(
+        name=values.get("sign_off_name") or ((user["name"] or "").strip() if user else ""),
+        pronouns=values.get("sign_off_pronouns", ""),
+        role=values.get("sign_off_role", ""),
+        organization=values.get("sign_off_organization") or "Yale Undergraduate Consulting Group",
+        linkedin_url=values.get("sign_off_linkedin", ""),
+        phone=values.get("sign_off_phone", ""),
+        logo_url=values.get("sign_off_logo_url", ""),
+    )
 
 
 async def get_member_setting(user_id: int, key: str) -> str | None:

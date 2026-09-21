@@ -241,12 +241,41 @@ async def init_db():
         except Exception:
             pass
         try:
+            # Fingerprint of the exact inputs a draft was generated from, so a
+            # repeated Generate with nothing changed is answered from the last
+            # result instead of being billed as a fresh model call.
+            await db.execute("ALTER TABLE generated_emails ADD COLUMN brief_hash TEXT")
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_generated_emails_brief "
+                "ON generated_emails(user_id, contact_id, brief_hash)"
+            )
+            await db.commit()
+        except Exception:
+            pass
+        try:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_campaign_contacts_contact ON campaign_contacts(contact_id)"
             )
             await db.commit()
         except Exception:
             pass
+        # Paging and company filtering at catalogue scale. The list orders by
+        # created_at and filters on LOWER(TRIM(company)); without these the
+        # first page of a 200k-row catalogue is a full scan.
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS idx_contacts_created ON contacts(created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_contacts_company_key ON contacts(LOWER(TRIM(company)))",
+            "CREATE INDEX IF NOT EXISTS idx_campaign_contacts_sent ON campaign_contacts(contact_id, sent_at)",
+        ):
+            try:
+                await db.execute(statement)
+                await db.commit()
+            except Exception:
+                pass
         # Migration: add OAuth token columns for Gmail API
         for col, col_type in [("access_token", "TEXT"), ("refresh_token", "TEXT"), ("token_expires_at", "REAL")]:
             try:
@@ -520,10 +549,16 @@ async def init_db():
                 storage_path TEXT NOT NULL UNIQUE,
                 file_size INTEGER,
                 mime_type TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                owner_user_id INTEGER REFERENCES users(id)
             );
         """)
         await db.commit()
+        try:
+            await db.execute("ALTER TABLE email_attachments ADD COLUMN owner_user_id INTEGER REFERENCES users(id)")
+            await db.commit()
+        except Exception:
+            pass
 
         # Usage/telemetry events for Operations Intelligence (private, internal only)
         await db.executescript("""
@@ -813,6 +848,11 @@ async def init_db():
         for column in ("owner_user_id", "sender_user_id"):
             if column not in campaign_columns:
                 await db.execute(f"ALTER TABLE campaigns ADD COLUMN {column} INTEGER REFERENCES users(id)")
+        try:
+            await db.execute("ALTER TABLE campaigns ADD COLUMN attachment_ids_json TEXT")
+            await db.commit()
+        except Exception:
+            pass
         await db.commit()
 
         try:
@@ -950,12 +990,10 @@ async def init_db():
         from app.services.research_schema import init_research_schema
         from app.services.roster_schema import init_roster_schema
         from app.services.mail_domain_map import ensure_mail_domain_schema
-        from app.services.segment_schema import init_segment_schema
         await init_contact_intelligence_schema(db)
         await init_research_schema(db)
         await init_roster_schema(db)
         await ensure_mail_domain_schema(db)
-        await init_segment_schema(db)
         await db.commit()
     finally:
         await db.close()

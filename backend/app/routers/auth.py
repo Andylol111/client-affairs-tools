@@ -8,7 +8,7 @@ import secrets
 logger = logging.getLogger(__name__)
 from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 import httpx
 from datetime import datetime, timedelta
@@ -261,6 +261,56 @@ async def _do_google_callback(code: str, challenge: dict | None = None):
         return resp
     token = create_token(user_id, email, name, picture, role)
     resp = RedirectResponse(url=f"{FRONTEND_URL}/")
+    ck = session_cookie_kwargs()
+    resp.set_cookie(ck.pop("key"), token, **ck)
+    return resp
+
+
+def _dev_login_email() -> str:
+    """The account a local dev server signs in as, or empty when disabled.
+
+    Google will only redirect to the registered production callback, so a
+    frontend served from localhost can never complete a real sign-in and the
+    whole app is unreviewable locally. This is the way in, and it is fenced
+    twice: the variable is unset everywhere except a developer's own machine,
+    and the route additionally refuses any request that did not arrive on a
+    loopback host. Production sets neither.
+    """
+    return (os.getenv("DEV_LOGIN_EMAIL") or "").strip()
+
+
+@router.post("/dev-login")
+async def dev_login(request: Request):
+    """Sign in as DEV_LOGIN_EMAIL, on a loopback host only."""
+    email = _dev_login_email()
+    if not email:
+        raise HTTPException(404, "Not found")
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host not in {"localhost", "127.0.0.1", "[::1]", "::1"}:
+        # A misconfigured deployment that set the variable still cannot be
+        # signed into from outside the machine it runs on.
+        raise HTTPException(404, "Not found")
+
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT id, email, name, picture, role FROM users WHERE email = ? AND is_active = 1",
+            (email,),
+        )).fetchone()
+        if not row:
+            cur = await db.execute(
+                "INSERT INTO users (email, name, role, is_active) VALUES (?, ?, 'admin', 1)",
+                (email, email.split("@")[0]),
+            )
+            await db.commit()
+            row = await (await db.execute(
+                "SELECT id, email, name, picture, role FROM users WHERE id = ?", (cur.lastrowid,),
+            )).fetchone()
+    finally:
+        await db.close()
+
+    token = create_token(row["id"], row["email"], row["name"], row["picture"], row["role"])
+    resp = JSONResponse({"ok": True, "email": row["email"], "dev": True})
     ck = session_cookie_kwargs()
     resp.set_cookie(ck.pop("key"), token, **ck)
     return resp

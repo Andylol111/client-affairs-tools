@@ -157,7 +157,7 @@ test('the nonprofit tier shows that the organisation already pays for outside ad
   await expect(row.getByRole('button', { name: /12 officer\(s\) on file/ })).toBeVisible();
 });
 
-test('companies picked in the register become a target list the rest of the app can use', async ({ page }) => {
+test('companies picked in the register go straight into the campaign pipeline', async ({ page }) => {
   const { created } = await mockRegister(page);
   await page.goto('/scraper');
   await page.getByRole('tab', { name: 'Companies' }).click();
@@ -176,15 +176,13 @@ test('companies picked in the register become a target list the rest of the app 
   await page.getByRole('checkbox', { name: 'Select Hansford Sensors Limited' }).check();
   await expect(page.getByText('2 companies selected')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Create target list' }).click();
-  await expect.poll(() => created.length).toBe(1);
-  // Register companies travel by register id, not by a spreadsheet row that
-  // does not exist for them.
-  expect(created[0].register_ids).toEqual([1, 3]);
-  expect(created[0].row_indexes).toBeUndefined();
-
-  await expect(page.getByText('Target list created with 2 companies.')).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open it to find people/ })).toHaveAttribute('href', /release_id=77/);
-  // The selection is consumed, so the next list starts clean.
-  await expect(page.getByText(/compan(y|ies) selected/)).toHaveCount(0);
+  // Choosing companies starts the work rather than filing it. This used to
+  // create a "target list" on another page - an object production had never
+  // once used, its table empty - so the picks now go straight into the
+  // campaign pipeline.
+  await page.getByRole('button', { name: 'Find people and write to them' }).click();
+  await expect(page).toHaveURL(/\/scraper\?view=company&companies=/);
+  await expect(page).toHaveURL(/Gilgamesh/);
+  await expect(page).toHaveURL(/Hansford/);
+  expect(created).toHaveLength(0);
 });
