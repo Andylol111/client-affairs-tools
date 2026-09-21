@@ -86,10 +86,7 @@ export default function Dashboard() {
 
   return (
     <div className="app-workspace max-w-[1920px]">
-      <PageHeader
-        title="Home"
-        actions={<Link to="/scraper" className="ui-button ui-button--primary">Find companies and people</Link>}
-      />
+      <PageHeader title="Home" />
       {apiError && (
         <p className="ui-notice ui-notice--warning mb-4">
           Live metrics are temporarily unavailable. The work pages remain usable.
