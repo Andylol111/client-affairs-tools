@@ -860,8 +860,21 @@ async def scrape_contacts_stream(req: ScrapeRequest, request: Request, user: dic
 
 
 @router.get("/companies/summary")
-async def companies_summary(user: dict | None = Depends(get_current_user_optional)):
-    """Distinct companies in the DB with contact counts (for campaign / studio targeting)."""
+async def companies_summary(
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+    user: dict | None = Depends(get_current_user_optional),
+):
+    """Companies with contact counts and send outcomes, searchable and paged.
+
+    This used to return every distinct company in one response. A club with a
+    six-figure catalogue has tens of thousands of them, so the picker that
+    reads this was handed a list no member can scroll and the browser had to
+    keep it all in memory. Callers ask for what they can show.
+    """
+    limit = max(1, min(limit, 1000))
+    offset = max(0, offset)
     db = await get_db()
     try:
         conditions, params = [], []
@@ -872,42 +885,64 @@ async def companies_summary(user: dict | None = Depends(get_current_user_optiona
             params.append(user["id"])
             campaign_join = "AND cc.sent_by_user_id = ?"
             join_params.append(user["id"])
+        if q and q.strip():
+            conditions.append("c.company LIKE ?")
+            params.append(f"%{q.strip()}%")
         vis = (" AND ".join(conditions)) if conditions else "1=1"
-        cursor = await db.execute(
-            f"""SELECT TRIM(c.company) AS company, c.company_domain,
-                       COUNT(DISTINCT c.id) AS contact_count,
-                       MAX(cc.sent_at) AS last_sent_at,
-                       COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN cc.campaign_id END) AS campaign_count,
-                       COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN c.id END) AS mailed_count,
-                       COUNT(DISTINCT CASE WHEN cc.replied_at IS NOT NULL THEN c.id END) AS replied_count,
-                       COUNT(DISTINCT CASE WHEN cc.status = 'bounced' THEN c.id END) AS bounced_count,
-                       COUNT(DISTINCT CASE WHEN cc.status IN ('pending','sending') THEN c.id END) AS queued_count
+        # Page the companies off the LOWER(TRIM(company)) index, then ask the
+        # send ledger about that page only. Grouping the whole catalogue
+        # against campaign_contacts to answer one screen scaled with the
+        # catalogue rather than with what is shown.
+        page = await (await db.execute(
+            f"""SELECT LOWER(TRIM(c.company)) AS company_key,
+                       MIN(TRIM(c.company)) AS company,
+                       MIN(c.company_domain) AS company_domain
                 FROM contacts c
-                LEFT JOIN campaign_contacts cc ON cc.contact_id = c.id {campaign_join}
                 WHERE ({vis})
                   AND c.company IS NOT NULL AND TRIM(c.company) != ''
-                GROUP BY LOWER(TRIM(c.company)), IFNULL(c.company_domain, '')
-                ORDER BY company ASC""",
-            [*join_params, *params],
-        )
-        rows = await cursor.fetchall()
-        return [
-            {
-                "company": r["company"],
-                "company_domain": r["company_domain"],
-                "contact_count": r["contact_count"],
-                "last_sent_at": r["last_sent_at"],
-                "campaign_count": r["campaign_count"],
-                # Outcomes come from the send ledger, not from a field on the
-                # contact: a contact row says who we know, campaign_contacts
-                # says what actually happened to them.
-                "mailed_count": r["mailed_count"],
-                "replied_count": r["replied_count"],
-                "bounced_count": r["bounced_count"],
-                "queued_count": r["queued_count"],
-            }
-            for r in rows
-        ]
+                GROUP BY LOWER(TRIM(c.company))
+                ORDER BY company_key ASC
+                LIMIT ? OFFSET ?""",
+            [*params, limit, offset],
+        )).fetchall()
+        if not page:
+            return []
+        keys = [r["company_key"] for r in page]
+        placeholders = ",".join("?" * len(keys))
+        stats = {
+            r["company_key"]: r
+            for r in await (await db.execute(
+                f"""SELECT LOWER(TRIM(c.company)) AS company_key,
+                           COUNT(DISTINCT c.id) AS contact_count,
+                           MAX(cc.sent_at) AS last_sent_at,
+                           COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN cc.campaign_id END) AS campaign_count,
+                           COUNT(DISTINCT CASE WHEN cc.sent_at IS NOT NULL THEN c.id END) AS mailed_count,
+                           COUNT(DISTINCT CASE WHEN cc.replied_at IS NOT NULL THEN c.id END) AS replied_count,
+                           COUNT(DISTINCT CASE WHEN cc.status = 'bounced' THEN c.id END) AS bounced_count,
+                           COUNT(DISTINCT CASE WHEN cc.status IN ('pending','sending') THEN c.id END) AS queued_count
+                    FROM contacts c
+                    LEFT JOIN campaign_contacts cc ON cc.contact_id = c.id {campaign_join}
+                    WHERE LOWER(TRIM(c.company)) IN ({placeholders}) AND ({vis})
+                    GROUP BY LOWER(TRIM(c.company))""",
+                [*join_params, *keys, *params],
+            )).fetchall()
+        }
+        empty = {
+            "contact_count": 0, "last_sent_at": None, "campaign_count": 0,
+            "mailed_count": 0, "replied_count": 0, "bounced_count": 0, "queued_count": 0,
+        }
+        # Outcomes come from the send ledger, not from a field on the contact:
+        # a contact row says who we know, campaign_contacts says what actually
+        # happened to them.
+        result = []
+        for row in page:
+            measured = stats.get(row["company_key"])
+            result.append({
+                "company": row["company"],
+                "company_domain": row["company_domain"],
+                **{key: (measured[key] if measured is not None else default) for key, default in empty.items()},
+            })
+        return result
     finally:
         await db.close()
 
@@ -1069,10 +1104,12 @@ async def list_contacts(
             conditions.append("c.company LIKE ?")
             params.append(f"%{company}%")
         if companies and companies.strip():
-            parts = [p.strip() for p in companies.split(",") if p.strip()]
+            parts = [p.strip().lower() for p in companies.split(",") if p.strip()]
             if parts:
                 placeholders = ",".join(["?" for _ in parts])
-                conditions.append(f"TRIM(c.company) IN ({placeholders})")
+                # Matches the LOWER(TRIM(company)) index; a bare TRIM() filter
+                # could not use one and scanned the whole catalogue.
+                conditions.append(f"LOWER(TRIM(c.company)) IN ({placeholders})")
                 params.extend(parts)
         if q and q.strip():
             q_term = f"%{q.strip()}%"
@@ -1081,13 +1118,14 @@ async def list_contacts(
         if pipeline_status and pipeline_status.strip():
             conditions.append("(c.pipeline_status = ? OR (c.pipeline_status IS NULL AND ? = 'cold'))")
             params.extend([pipeline_status.strip().lower(), pipeline_status.strip().lower()])
-        if user and user.get("role") != "admin":
-            if mine_only:
-                conditions.append("c.owner_id = ?")
-                params.append(user["id"])
-            else:
-                conditions.append("(c.owner_id = ? OR c.owner_id IS NULL)")
-                params.append(user["id"])
+        # "Mine" means mine for everybody. Scoping it only for non-admins made
+        # an admin asking for their own work receive the whole club's.
+        if user and mine_only:
+            conditions.append("c.owner_id = ?")
+            params.append(user["id"])
+        elif user and user.get("role") != "admin":
+            conditions.append("(c.owner_id = ? OR c.owner_id IS NULL)")
+            params.append(user["id"])
         if release_id is not None:
             conditions.append(
                 "c.id IN (SELECT contact_id FROM outreach_release_people WHERE release_id = ? AND kept = 1 AND contact_id IS NOT NULL)"
@@ -1096,34 +1134,43 @@ async def list_contacts(
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         count_cursor = await db.execute(f"SELECT COUNT(*) AS n FROM contacts c {where}", params)
         total = int((await count_cursor.fetchone())["n"] or 0)
-        query_params = [*params, limit, offset]
-        last_send_scope = "" if user and user.get("role") == "admin" else "AND sent_by_user_id = ?"
-        if last_send_scope:
-            query_params = [user["id"] if user else -1, *params, limit, offset]
+        # Page first, enrich second. Joining the whole send ledger to the whole
+        # catalogue to find each contact's last send cost 214 seconds for one
+        # page of 100 at 200k contacts: the join ran before the LIMIT. The page
+        # is at most 2000 rows, so the ledger is asked about those rows only.
         cursor = await db.execute(
-            f"""SELECT c.*,
-                       ls.sent_at AS last_sent_at,
-                       ls.status AS last_send_status,
-                       ls.campaign_id AS last_campaign_id,
-                       camp.name AS last_campaign_name,
-                       ls.sent_by_user_id AS last_sent_by_user_id
-                FROM contacts c
-                LEFT JOIN (
-                    SELECT cc.contact_id, cc.sent_at, cc.status, cc.campaign_id, cc.sent_by_user_id
-                    FROM campaign_contacts cc
-                    WHERE cc.id IN (
-                        SELECT MAX(id) FROM campaign_contacts
-                        WHERE sent_at IS NOT NULL {last_send_scope}
-                        GROUP BY contact_id
-                    )
-                ) ls ON ls.contact_id = c.id
-                LEFT JOIN campaigns camp ON camp.id = ls.campaign_id
-                {where}
-                ORDER BY c.created_at DESC LIMIT ? OFFSET ?""",
-            query_params,
+            f"SELECT c.* FROM contacts c {where} ORDER BY c.created_at DESC, c.id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         )
         rows = await cursor.fetchall()
         result = [dict(r) for r in rows]
+        page_ids = [r["id"] for r in result]
+        if page_ids:
+            scope_args: list[object] = []
+            scope = ""
+            if not (user and user.get("role") == "admin"):
+                scope = "AND cc.sent_by_user_id = ?"
+                scope_args.append(user["id"] if user else -1)
+            placeholders = ",".join(["?" for _ in page_ids])
+            sends = await (await db.execute(
+                f"""SELECT cc.contact_id, cc.sent_at, cc.status, cc.campaign_id,
+                           cc.sent_by_user_id, camp.name AS campaign_name
+                    FROM campaign_contacts cc
+                    LEFT JOIN campaigns camp ON camp.id = cc.campaign_id
+                    WHERE cc.contact_id IN ({placeholders})
+                      AND cc.sent_at IS NOT NULL {scope}
+                    ORDER BY cc.id""",
+                [*page_ids, *scope_args],
+            )).fetchall()
+            # Ordered by id, so the last row seen for a contact is their latest.
+            last_send = {row["contact_id"]: row for row in sends}
+            for r in result:
+                send = last_send.get(r["id"])
+                r["last_sent_at"] = send["sent_at"] if send else None
+                r["last_send_status"] = send["status"] if send else None
+                r["last_campaign_id"] = send["campaign_id"] if send else None
+                r["last_campaign_name"] = send["campaign_name"] if send else None
+                r["last_sent_by_user_id"] = send["sent_by_user_id"] if send else None
         for r in result:
             if r.get("email"):
                 r["email"] = sanitize_email(r["email"])

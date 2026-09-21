@@ -478,13 +478,11 @@ async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int,
     from app.services.contact_scraper import normalize_domain
     from app.services.generation_policy import draft_evidence, reserve_generation
     from app.services.ollama_email_service import generate_email
-    from app.services.settings_service import get_member_setting
 
     angle = flow.get("angle") or "pain_point"
     drafted = 0
     rejected = 0
     quota_hit = False
-    signature = await get_member_setting(user_id, "signature") or ""
     for idx, cid in enumerate(contact_ids):
         db = await get_db()
         try:
@@ -516,9 +514,9 @@ async def _draft_all(flow: dict[str, Any], contact_ids: list[int], user_id: int,
                 continue
             subject, body = result
             await db.execute(
-                """INSERT INTO generated_emails (user_id, contact_id, subject, body, signature, evidence_json)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (user_id, cid, subject, body, signature, json.dumps(evidence)),
+                """INSERT INTO generated_emails (user_id, contact_id, subject, body, evidence_json)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (user_id, cid, subject, body, json.dumps(evidence)),
             )
             await db.commit()
             drafted += 1

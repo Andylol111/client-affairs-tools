@@ -4,7 +4,7 @@ import { getNavItems } from '../../lib/navConfig';
 import AppShellHeader from './AppShellHeader';
 import AppShellMobile from './AppShellMobile';
 import AppShellDrawer from './AppShellDrawer';
-import AssistantBubble from '../AssistantBubble';
+import GuideBubble from '../GuideBubble';
 
 type AppShellProps = {
   user: { id?: number; email: string; name?: string; picture?: string; role?: string };
@@ -42,7 +42,7 @@ export default function AppShell({ user, onLogout, pageKey, headerExtra }: AppSh
         items={navItems}
         onLogout={handleLogout}
       />
-      <AssistantBubble user={user} />
+      <GuideBubble />
     </div>
   );
 }

@@ -130,7 +130,8 @@ def tests() -> None:
         assert 'Product Lead' in eq['healthcare PMs']['note']
         assert eq['VPs']['at_company'] == []
         assert 'Member of Technical Staff' in llm_prompts[0] and 'choose ONLY from these' in llm_prompts[0]
-        assert result['sources'] == {'run': 2, 'roster': 2, 'catalog': 1, 'search': 2, 'jobs': 1}  # distinct titles per source
+        # distinct titles per source; 'by_band' counts the escalation, unused here
+        assert result['sources'] == {'run': 2, 'roster': 2, 'catalog': 1, 'search': 2, 'jobs': 1, 'by_band': 0}
 
         # --- no hints and enough observed titles: no search, no model call ---
         search_calls.clear()
@@ -163,6 +164,67 @@ def tests() -> None:
         assert any(r['title'] == 'Member of Technical Staff' for r in limited['roles'])
 
 
+def unknown_company_escalates_within_linkedin_not_to_its_website() -> None:
+    """When one broad LinkedIn query finds nobody, ask LinkedIn again per
+    seniority band. A company's own team page is not the answer: it lists a
+    handful of executives and nobody below them, and the people who reply to a
+    cold email are VPs, heads and managers who own a budget."""
+    import asyncio as _asyncio
+    from unittest.mock import patch
+
+    from app.services import role_suggestions as rs
+
+    asked: list[str] = []
+
+    async def no_observations(company, domain=None):
+        return []
+
+    async def search_finds_nothing(company, hints, *, user_id=None):
+        return [], None
+
+    async def per_band(query, max_results=10, user_id=None):
+        asked.append(query)
+        if query.startswith('Cheekwood Botanical Garden VP '):
+            return [{'url': 'https://www.linkedin.com/in/jane-roe',
+                     'title': 'Jane Roe - VP Partnerships - Cheekwood Botanical Garden | LinkedIn'}]
+        if 'Head of' in query:
+            return [{'url': 'https://www.linkedin.com/in/ada',
+                     'title': 'Ada Lovelace - Head of Insight - Cheekwood Botanical Garden | LinkedIn'}]
+        return []
+
+    with patch.object(rs, 'observed_titles', no_observations), \
+         patch.object(rs, 'search_titles', search_finds_nothing), \
+         patch('app.services.web_fetch.web_search', per_band):
+        out = _asyncio.run(rs.suggest_roles(
+            user_id=1, company='Cheekwood Botanical Garden', domain='cheekwood.org', hints=None))
+
+    # Every escalation stays on LinkedIn profiles, one band per query.
+    assert asked, 'no escalation happened'
+    assert all(q.endswith('site:linkedin.com/in') for q in asked), asked
+    assert any(' VP ' in q for q in asked) and any('Head of' in q for q in asked), asked
+    # Never the company website.
+    assert not any('cheekwood.org' in q for q in asked), asked
+
+    titles = [r['title'] for r in out['roles']]
+    assert 'VP Partnerships' in titles and 'Head of Insight' in titles, titles
+    assert all(r['source'] == 'band' for r in out['roles']), out['roles']
+    assert out['sources']['by_band'] == len(titles)
+    assert 'seniority band' in (out['note'] or ''), out['note']
+
+    # When even that finds nobody, say so rather than inventing roles.
+    async def nothing(query, max_results=10, user_id=None):
+        return []
+
+    with patch.object(rs, 'observed_titles', no_observations), \
+         patch.object(rs, 'search_titles', search_finds_nothing), \
+         patch('app.services.web_fetch.web_search', nothing):
+        blank = _asyncio.run(rs.suggest_roles(
+            user_id=1, company='Invisible Ltd', domain='invisible.example', hints=None))
+    assert blank['roles'] == []
+    assert 'returns nothing for this company' in (blank['note'] or ''), blank['note']
+
+
 if __name__ == '__main__':
     tests()
+    unknown_company_escalates_within_linkedin_not_to_its_website()
     print('role suggestions: ok')

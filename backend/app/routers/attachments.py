@@ -1,8 +1,8 @@
 """
 Attachments API - Email attachment library (intro PDFs, past workstreams, etc.)
 """
-import os
 import uuid
+import json
 import mimetypes
 from pathlib import Path
 
@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 from app.database import get_db, row_to_dict
 from app.auth_deps import get_current_user, get_current_admin
-from app.services.settings_service import get_setting
 from app.services.audit_service import log_audit
 
 router = APIRouter()
@@ -26,21 +25,17 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB (Gmail limit per attachment)
 def _ensure_dir():
     ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
-
-async def _attachments_enabled() -> bool:
-    val = await get_setting("attachments_enabled")
-    return val == "1" or val == "true"
-
-
 @router.get("")
 async def list_attachments(user: dict = Depends(get_current_user)):
-    """List all attachments in the library. Requires attachments_enabled."""
-    if not await _attachments_enabled():
-        return []
+    """List club files plus private files uploaded by this member."""
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, filename, display_name, file_size, mime_type, created_at FROM email_attachments ORDER BY display_name, filename"
+            """SELECT id, filename, display_name, file_size, mime_type, created_at, owner_user_id
+               FROM email_attachments
+               WHERE owner_user_id IS NULL OR owner_user_id = ?
+               ORDER BY display_name, filename""",
+            (user["id"],),
         )
         rows = await cursor.fetchall()
         return [row_to_dict(r) for r in rows]
@@ -63,11 +58,8 @@ async def list_onedrive(admin: dict = Depends(get_current_admin)):
 class OneDriveAttach(BaseModel):
     item_id: str
 
-
 @router.post("/onedrive/attach")
 async def attach_onedrive(body: OneDriveAttach, admin: dict = Depends(get_current_admin)):
-    if not await _attachments_enabled():
-        raise HTTPException(400, "Attachments are disabled. Enable in Settings.")
     from app.services.graph_onedrive import download_item, list_folder
 
     try:
@@ -111,16 +103,13 @@ async def attach_onedrive(body: OneDriveAttach, admin: dict = Depends(get_curren
     finally:
         await db.close()
 
-
 @router.post("")
 async def upload_attachment(
     file: UploadFile = File(...),
     display_name: str | None = Form(None),
-    admin: dict = Depends(get_current_admin),
+    user: dict = Depends(get_current_user),
 ):
-    """Upload a file to the attachment library. Admin only."""
-    if not await _attachments_enabled():
-        raise HTTPException(400, "Attachments are disabled. Enable in Settings.")
+    """Upload a private file for this member's drafts."""
     _ensure_dir()
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -135,15 +124,17 @@ async def upload_attachment(
     db = await get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO email_attachments (filename, display_name, storage_path, file_size, mime_type)
-               VALUES (?, ?, ?, ?, ?)""",
-            (file.filename or "unnamed", display_name or file.filename or "Unnamed", str(storage_path), len(content), mime_type),
+            """INSERT INTO email_attachments
+               (filename, display_name, storage_path, file_size, mime_type, owner_user_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (file.filename or "unnamed", display_name or file.filename or "Unnamed",
+             str(storage_path), len(content), mime_type, user["id"]),
         )
         await db.commit()
         row_id = cursor.lastrowid
         cursor = await db.execute("SELECT id, filename, display_name, file_size, mime_type, created_at FROM email_attachments WHERE id = ?", (row_id,))
         row = await cursor.fetchone()
-        await log_audit(admin["id"], "attachment_upload", "attachment", str(row_id), file.filename or "unnamed")
+        await log_audit(user["id"], "attachment_upload", "attachment", str(row_id), file.filename or "unnamed")
         return row_to_dict(row)
     except Exception:
         if storage_path.exists():
@@ -154,44 +145,61 @@ async def upload_attachment(
 
 
 @router.delete("/{attachment_id}")
-async def delete_attachment(attachment_id: int, admin: dict = Depends(get_current_admin)):
-    """Remove an attachment from the library. Admin only."""
+async def delete_attachment(attachment_id: int, user: dict = Depends(get_current_user)):
+    """Remove a private file, or any file when acting as an administrator."""
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT storage_path FROM email_attachments WHERE id = ?", (attachment_id,))
+        cursor = await db.execute(
+            "SELECT storage_path, owner_user_id FROM email_attachments WHERE id = ?",
+            (attachment_id,),
+        )
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(404, "Attachment not found")
+        if row["owner_user_id"] not in (None, user["id"]) and user.get("role") != "admin":
+            raise HTTPException(403, "You do not own this attachment")
+        if row["owner_user_id"] is None and user.get("role") != "admin":
+            raise HTTPException(403, "Only administrators can delete club attachments")
+        references = await (await db.execute(
+            "SELECT id, attachment_ids_json FROM campaigns WHERE attachment_ids_json IS NOT NULL"
+        )).fetchall()
+        if any(attachment_id in json.loads(item["attachment_ids_json"] or "[]") for item in references):
+            raise HTTPException(409, "Remove this file from its campaign before deleting it")
         storage_path = Path(row["storage_path"])
         await db.execute("DELETE FROM email_attachments WHERE id = ?", (attachment_id,))
         await db.commit()
         if storage_path.exists():
             storage_path.unlink()
-        await log_audit(admin["id"], "attachment_delete", "attachment", str(attachment_id), "Deleted")
+        await log_audit(user["id"], "attachment_delete", "attachment", str(attachment_id), "Deleted")
         return {"ok": True}
     finally:
         await db.close()
 
 
-async def get_attachment_data_for_send(attachment_ids: list[int]) -> list[tuple[bytes, str, str]]:
-    """Get (content, filename, mime_type) for each attachment. Used when sending emails."""
+async def get_attachment_data_for_send(
+    attachment_ids: list[int], user_id: int
+) -> list[tuple[bytes, str, str]]:
+    """Read only club files or files owned by the sending member."""
     if not attachment_ids:
         return []
-    from app.database import get_db
     db = await get_db()
     try:
         placeholders = ",".join("?" * len(attachment_ids))
         cursor = await db.execute(
-            f"SELECT id, storage_path, filename, mime_type FROM email_attachments WHERE id IN ({placeholders})",
-            attachment_ids,
+            f"""SELECT id, storage_path, filename, mime_type FROM email_attachments
+                WHERE id IN ({placeholders})
+                  AND (owner_user_id IS NULL OR owner_user_id = ?)""",
+            [*attachment_ids, user_id],
         )
         rows = await cursor.fetchall()
+        if len(rows) != len(set(attachment_ids)):
+            raise HTTPException(404, "One or more attachments are unavailable")
         result = []
         for r in rows:
             path = Path(r["storage_path"])
-            if path.exists():
-                content = path.read_bytes()
-                result.append((content, r["filename"] or "attachment", r["mime_type"] or "application/octet-stream"))
+            if not path.exists():
+                raise HTTPException(404, f"Attachment file is missing: {r['filename']}")
+            result.append((path.read_bytes(), r["filename"] or "attachment", r["mime_type"] or "application/octet-stream"))
         return result
     finally:
         await db.close()
@@ -199,14 +207,13 @@ async def get_attachment_data_for_send(attachment_ids: list[int]) -> list[tuple[
 
 @router.get("/{attachment_id}/download")
 async def download_attachment(attachment_id: int, user: dict = Depends(get_current_user)):
-    """Download an attachment file."""
-    if not await _attachments_enabled():
-        raise HTTPException(400, "Attachments are disabled.")
+    """Download a club file or one owned by this member."""
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT storage_path, filename, mime_type FROM email_attachments WHERE id = ?",
-            (attachment_id,),
+            """SELECT storage_path, filename, mime_type FROM email_attachments
+               WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)""",
+            (attachment_id, user["id"]),
         )
         row = await cursor.fetchone()
         if not row:

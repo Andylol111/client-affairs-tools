@@ -41,8 +41,6 @@ export default function CompanyRegister() {
   // app already works from. Selection survives filter and tier changes, so a
   // list can be assembled from several searches rather than one.
   const [picked, setPicked] = useState<Map<number, string>>(new Map());
-  const [listBusy, setListBusy] = useState(false);
-  const [listed, setListed] = useState<{ id: number; targets: number } | null>(null);
 
   useEffect(() => {
     api.yucgoutreach.registerSummary().then(setSummary).catch(() => setSummary(null));
@@ -108,27 +106,17 @@ export default function CompanyRegister() {
     }
   }, []);
 
-  // One action, not a row of them: the selection becomes a target list, which
-  // is the object Find people, Studio and Campaigns already consume. Nothing
-  // here sends mail.
-  const createList = useCallback(async () => {
+  // One action, and it starts the work rather than filing it. This used to
+  // create a "target list" on another page, an object nothing else in the
+  // club had ever used - the table was empty in production. The companies now
+  // go straight into the campaign pipeline, which is where choosing them
+  // leads anyway.
+  const workThese = useCallback(() => {
     if (picked.size === 0) return;
-    setListBusy(true);
-    setError('');
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const result = await api.yucg.createRelease({
-        name: `Register picks ${today}`,
-        register_ids: [...picked.keys()],
-      });
-      setListed({ id: result.id, targets: result.targets });
-      setPicked(new Map());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create that target list.');
-    } finally {
-      setListBusy(false);
-    }
-  }, [picked]);
+    const companies = [...picked.values()].join(',');
+    setPicked(new Map());
+    navigate(`/scraper?view=company&companies=${encodeURIComponent(companies)}`);
+  }, [picked, navigate]);
 
   const counts = Object.fromEntries((summary?.tiers || []).map((row) => [row.tier, row.n]));
 
@@ -136,13 +124,6 @@ export default function CompanyRegister() {
     <div className="space-y-5" data-section="company-register">
       <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm space-y-3">
         <h2 className="text-lg font-semibold text-deep-navy">Company register</h2>
-        <p className="text-sm text-slate-600">
-          US listed companies (SEC), US companies that recently raised under Reg D (SEC Form D),
-          US employers that file a benefit plan for their own staff (DOL Form 5500), US nonprofits
-          that already pay outside firms for advice (IRS Form 990), and active UK companies above
-          the small-company accounts thresholds (Companies House). Free public registers — no paid
-          data provider. Pick a company to start Find people there.
-        </p>
         {summary && Array.isArray(summary.tiers) && (
           <p className="text-[13px] text-slate-500">
             On record: {(counts.us_public || 0).toLocaleString()} listed ·{' '}
@@ -205,15 +186,6 @@ export default function CompanyRegister() {
 
       {error && <p className="text-sm text-red-700">{error}</p>}
 
-      {listed && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          Target list created with {listed.targets} compan{listed.targets === 1 ? 'y' : 'ies'}.{' '}
-          <a className="font-semibold underline" href={`/yucgoutreach?view=slate&release_id=${listed.id}`}>
-            Open it to find people and write to them
-          </a>
-        </div>
-      )}
-
       {picked.size > 0 && (
         <div className="sticky bottom-4 z-10 flex flex-wrap items-center gap-3 rounded-2xl border border-deep-navy bg-white px-4 py-3 shadow-lg">
           <span className="text-sm font-semibold text-deep-navy">
@@ -221,11 +193,10 @@ export default function CompanyRegister() {
           </span>
           <button
             type="button"
-            className="rounded-xl bg-deep-navy px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={listBusy}
-            onClick={() => void createList()}
+            className="rounded-xl bg-deep-navy px-4 py-2 text-sm font-semibold text-white"
+            onClick={workThese}
           >
-            {listBusy ? 'Creating…' : 'Create target list'}
+            Find people and write to them
           </button>
           <button
             type="button"

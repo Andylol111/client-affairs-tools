@@ -16,7 +16,7 @@ export const FALLBACK_AI_GROUPS: AiModelGroup[] = [
     id: 'anthropic',
     label: 'Claude on Bedrock',
     models: [
-      { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5', tier: 'haiku', blurb: 'Fast, grounded club work' },
+      { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude', tier: 'haiku', blurb: 'Fast, grounded club work' },
     ],
   },
 ];

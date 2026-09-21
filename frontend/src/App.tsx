@@ -115,7 +115,6 @@ function AppContent() {
         <Route path="admin" element={<Admin />} />
         <Route path="profile" element={<Profile />} />
         <Route path="documents" element={<Documents />} />
-        <Route path="assistant" element={<Navigate to="/?assistant=1" replace />} />
         <Route path="projects" element={<Documents projectsOnly />} />
         <Route path="settings" element={<Navigate to="/profile?tab=settings" replace />} />
       </Route>

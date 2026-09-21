@@ -102,6 +102,25 @@ export default function LoginPage() {
           Sign in with Google
         </button>
 
+        {/* Dev servers only. import.meta.env.DEV is false in every built
+            bundle, so this button cannot exist in the deployed app, and the
+            endpoint behind it 404s unless DEV_LOGIN_EMAIL is set on a
+            backend answering a loopback host. Google will only redirect to
+            the registered production callback, so without this the app
+            cannot be reviewed locally at all. */}
+        {import.meta.env.DEV && (
+          <button
+            type="button"
+            onClick={async () => {
+              await fetch('/api/auth/dev-login', { method: 'POST', credentials: 'include' });
+              window.location.assign('/');
+            }}
+            className="mt-3 w-full rounded-xl border border-dashed border-slate-400 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Dev sign-in (local only)
+          </button>
+        )}
+
         <p className="mt-6 text-center text-xs text-slate-500">
           Secure login via Google. Only @yale.edu accounts.
         </p>

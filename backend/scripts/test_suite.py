@@ -31,8 +31,6 @@ critical_modules = [
     'app/services/delivery_policy.py', 'app/services/generation_policy.py',
     'app/services/llm.py', 'app/services/email_verifier.py',
     'app/routers/telemetry.py',
-    'app/routers/assistant.py', 'app/services/assistant_service.py',
-    'app/services/assistant_operator.py',
 ]
 for module in critical_modules:
     if execute('report', '--include=' + module, '--fail-under=80'):

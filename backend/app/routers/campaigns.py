@@ -2,6 +2,7 @@
 Campaigns API - Campaign Manager & Mass Sender
 """
 import asyncio
+import json
 import os
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -9,12 +10,14 @@ from app.database import get_db
 from app.auth_deps import get_current_user, get_current_user_optional
 from app.services.audit_service import log_audit
 from app.services.usage_service import log_event
+from datetime import datetime
 from pydantic import BaseModel
 from app.models import CampaignCreate, CampaignContactAdd
 
 
 class CampaignUpdate(BaseModel):
     sequence_id: int | None = None
+    attachment_ids: list[int] | None = None
 
 
 class OwnershipConfirmation(BaseModel):
@@ -315,6 +318,162 @@ async def get_campaign(campaign_id: int, user: dict = Depends(get_current_user))
         await db.close()
 
 
+class BuildFromTemplate(BaseModel):
+    """One written message, many recipients, across one or more companies."""
+
+    name: str = ""
+    companies: list[str] = []
+    contact_ids: list[int] = []
+    subject: str
+    body: str
+    preview_only: bool = False
+
+
+# One campaign stays something a member can review before release. Beyond
+# this the work belongs in several releases, paced by the daily send cap.
+MAX_RECIPIENTS = 5_000
+MAX_COMPANIES = 500
+
+async def _pipeline_recipients(db, payload: BuildFromTemplate, user_id: int) -> list[dict]:
+    """The people this message would go to.
+
+    Chosen by company, because that is how the work is chosen: a member picks
+    companies and everyone found there is a candidate. Explicit contact_ids
+    narrow it when they have pruned the list by hand.
+    """
+    clauses = ["(owner_id IS NULL OR owner_id = ?)", "email IS NOT NULL", "TRIM(email) <> ''"]
+    args: list[object] = [user_id]
+    if payload.contact_ids:
+        ids = [int(i) for i in payload.contact_ids]
+        if len(ids) > MAX_RECIPIENTS:
+            # Silently keeping the first 500 shipped a campaign that was not
+            # the one the member selected. A batch this size is a company
+            # selection, not a hand-pruned list: say so instead of truncating.
+            raise HTTPException(
+                422,
+                f"{len(ids)} recipients selected by hand; at most {MAX_RECIPIENTS} per campaign. "
+                "Select the companies instead, or split the release.",
+            )
+        clauses.append(f"id IN ({','.join('?' * len(ids))})")
+        args.extend(ids)
+    elif payload.companies:
+        names = [c.strip().lower() for c in payload.companies if c.strip()]
+        if not names:
+            return []
+        if len(names) > MAX_COMPANIES:
+            raise HTTPException(
+                422,
+                f"{len(names)} companies chosen; at most {MAX_COMPANIES} per campaign.",
+            )
+        clauses.append(f"LOWER(TRIM(company)) IN ({','.join('?' * len(names))})")
+        args.extend(names)
+    else:
+        return []
+    rows = await (await db.execute(
+        f"""SELECT id, name, email, title, company FROM contacts WHERE {' AND '.join(clauses)}
+            ORDER BY company, name LIMIT ?""",
+        [*args, MAX_RECIPIENTS + 1],
+    )).fetchall()
+    if len(rows) > MAX_RECIPIENTS:
+        raise HTTPException(
+            422,
+            f"Those companies hold more than {MAX_RECIPIENTS} contacts. "
+            "Narrow the selection so one campaign stays reviewable.",
+        )
+    return [dict(r) for r in rows]
+
+
+class DraftGroupTemplate(BaseModel):
+    """Ask for one message that will personalise itself per recipient."""
+
+    companies: list[str] = []
+    roles: str = ""
+    goal: str
+    proof: str = ""
+    length: str = "short"
+
+
+@router.post("/draft-template")
+async def draft_group_template(payload: DraftGroupTemplate, user: dict = Depends(get_current_user)):
+    """Write one draft for a group, with merge fields instead of a name.
+
+    Studio drafts to one person, which is right for a bespoke email and wrong
+    for a campaign. Without this a member either writes the same message
+    twenty times or sends twenty identical notes addressed to nobody.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from app.services.generation_policy import reserve_generation
+    from app.services.ollama_email_service import generate_group_template
+
+    await reserve_generation(user["id"], None)
+    try:
+        subject, body = await run_in_threadpool(
+            generate_group_template,
+            companies=payload.companies,
+            goal=payload.goal,
+            proof=payload.proof,
+            roles=payload.roles,
+            length=payload.length,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"subject": subject, "body": body}
+
+
+@router.post("/build")
+async def build_campaign_from_template(payload: BuildFromTemplate, user: dict = Depends(get_current_user)):
+    """Render one message per recipient and, unless previewing, make the campaign.
+
+    Preview and build share this path deliberately: what the member reads
+    before pressing the button is produced by the code that will write the
+    drafts, so it cannot promise something different from what is created.
+    """
+    from app.services.merge_fields import render_for_each, unknown_fields
+
+    subject = (payload.subject or "").strip()
+    body = (payload.body or "").strip()
+    if not subject or not body:
+        raise HTTPException(422, "A subject and a message are required")
+    bad = sorted(set(unknown_fields(subject) + unknown_fields(body)))
+    if bad:
+        raise HTTPException(422, f"Unknown field(s): {', '.join('{' + b + '}' for b in bad)}")
+
+    db = await get_db()
+    try:
+        recipients = await _pipeline_recipients(db, payload, user["id"])
+        ready, held = render_for_each(subject, body, recipients)
+        if payload.preview_only:
+            return {
+                "recipients": len(recipients),
+                "ready": len(ready),
+                "held": held,
+                # A real rendered message, not the template, so the member
+                # reads what the first recipient will read.
+                "sample": ready[0] if ready else None,
+            }
+        if not ready:
+            raise HTTPException(422, "No recipient can receive this message yet")
+
+        from app.services.dispatch_service import begin_write
+        await begin_write(db)
+        label = (payload.name or "").strip() or f"Outreach {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+        cur = await db.execute(
+            "INSERT INTO campaigns (name, status, owner_user_id, sender_user_id) VALUES (?, 'draft', ?, ?)",
+            (label, user["id"], user["id"]),
+        )
+        campaign_id = int(cur.lastrowid)
+        await db.executemany(
+            """INSERT INTO campaign_contacts (campaign_id, contact_id, email_subject, email_body, status)
+               VALUES (?, ?, ?, ?, 'pending')""",
+            [(campaign_id, item["contact_id"], item["subject"], item["body"]) for item in ready],
+        )
+        await db.commit()
+        return {"campaign_id": campaign_id, "created": len(ready), "held": held, "name": label}
+    finally:
+        await db.close()
+
+
 @router.post("/{campaign_id}/contacts")
 async def add_contacts_to_campaign(
     campaign_id: int,
@@ -459,8 +618,7 @@ async def _claim_pending_rows(db, campaign_id: int, limit: int, user_id=None) ->
                 continue
             await db.execute("UPDATE campaign_contacts SET status='sending' WHERE id=?", (row["id"],))
             item = dict(row)
-            item.update(email=intent["recipient"], email_subject=intent["subject"], email_body=intent["body"],
-                        signature=intent["signature"], signature_image_url=intent["signature_image_url"])
+            item.update(email=intent["recipient"], email_subject=intent["subject"], email_body=intent["body"])
             claimed.append(item)
         await db.commit()
         return claimed, held
@@ -478,15 +636,22 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
     try:
         await require_campaign_owner(db, campaign_id, user_id)
         campaign = await (await db.execute(
-            "SELECT status FROM campaigns WHERE id = ?", (campaign_id,)
+            "SELECT status, attachment_ids_json FROM campaigns WHERE id = ?", (campaign_id,)
         )).fetchone()
         if not campaign:
             raise HTTPException(404, "Campaign not found")
         if campaign["status"] != "releasing":
             raise HTTPException(409, "Campaign must be released before it can send")
         pending, held = await _claim_pending_rows(db, campaign_id, limit, user_id)
-        signature = await get_member_setting(user_id, "signature")
-        signature_image_url = await get_member_setting(user_id, "signature_image_url") or None
+        # Loaded once for the whole release: the sign-off is a property of
+        # the sending member, not of each recipient.
+        from app.services.settings_service import load_sign_off
+        sign_off = await load_sign_off(user_id)
+        attachment_ids = json.loads(campaign["attachment_ids_json"] or "[]")
+        attachments = []
+        if attachment_ids:
+            from app.routers.attachments import get_attachment_data_for_send
+            attachments = await get_attachment_data_for_send(attachment_ids, user_id)
         send_delay = float(os.getenv("CAMPAIGN_SEND_DELAY_SEC", "2.0") or 0)
         sent = 0
         errors = []
@@ -498,9 +663,9 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
                     subject=row["email_subject"] or "Quick question",
                     body=row["email_body"] or "",
                     campaign_contact_id=row["id"],
-                    signature=row["signature"],
-                    signature_image_url=row["signature_image_url"],
                     dispatch_key=f"initial:{row['id']}",
+                    sign_off=sign_off,
+                    attachments=attachments or None,
                 )
                 tid = send_meta.get("thread_id")
                 mid = send_meta.get("message_id")
@@ -589,10 +754,7 @@ async def drain_campaign(campaign_id: int, user_id: int, limit: int = 5) -> dict
 @router.post("/{campaign_id}/release")
 async def release_campaign(campaign_id: int, user: dict = Depends(get_current_user)):
     """Validate and release a draft or paused campaign for scheduled draining."""
-    from app.services.dispatch_service import begin_write, snapshot
-    from app.services.settings_service import get_member_setting
-    signature = await get_member_setting(user["id"], "signature") or ""
-    image = await get_member_setting(user["id"], "signature_image_url") or None
+    from app.services.dispatch_service import begin_write, snapshot_many
     db = await get_db()
     try:
         await begin_write(db)
@@ -606,11 +768,12 @@ async def release_campaign(campaign_id: int, user: dict = Depends(get_current_us
             """SELECT cc.*,c.email FROM campaign_contacts cc JOIN contacts c ON c.id=cc.contact_id
             WHERE cc.campaign_id=? AND cc.status='pending'""", (campaign_id,),
         )).fetchall()
-        newly_snapshotted = set()
-        for row in rows:
-            if await snapshot(db, f"initial:{row['id']}", row["id"], user["id"], row["email"],
-                              row["email_subject"], row["email_body"], signature, image):
-                newly_snapshotted.add(row['id'])
+        fresh_keys = await snapshot_many(db, [
+            (f"initial:{row['id']}", row["id"], user["id"], row["email"],
+             row["email_subject"], row["email_body"], 0)
+            for row in rows
+        ])
+        newly_snapshotted = {int(key.split(":")[1]) for key in fresh_keys}
         sequence = await (await db.execute("SELECT sequence_id FROM campaigns WHERE id=?", (campaign_id,))).fetchone()
         steps = await (await db.execute(
             "SELECT * FROM follow_up_steps WHERE sequence_id=? ORDER BY step_order,days_after",
@@ -625,12 +788,12 @@ async def release_campaign(campaign_id: int, user: dict = Depends(get_current_us
                 validate_header(step['subject'] or '')
         except ValueError as exc:
             raise HTTPException(409,'Email subjects cannot contain control characters') from exc
-        for row in rows:
-            if row['id'] not in newly_snapshotted:
-                continue
-            for index, step in enumerate(steps):
-                key = f"followup:{row['id']}:{index}"
-                await snapshot(db, key, row["id"], user["id"], row["email"], step["subject"] or "Following up", step["body"] or "", signature, image, step["days_after"])
+        await snapshot_many(db, [
+            (f"followup:{row['id']}:{index}", row["id"], user["id"], row["email"],
+             step["subject"] or "Following up", step["body"] or "", step["days_after"])
+            for row in rows if row['id'] in newly_snapshotted
+            for index, step in enumerate(steps)
+        ])
         await db.execute(
             "UPDATE campaigns SET status = 'releasing', released_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (user["id"], campaign_id),
@@ -833,10 +996,28 @@ async def update_campaign(
         if in_flight:
             raise HTTPException(409, "Wait for in-flight sends to finish")
         data = payload.model_dump(exclude_unset=True)
+        assignments = []
+        values = []
         if "sequence_id" in data:
+            assignments.append("sequence_id = ?")
+            values.append(data["sequence_id"])
+        if "attachment_ids" in data:
+            attachment_ids = list(dict.fromkeys(data["attachment_ids"] or []))
+            if attachment_ids:
+                placeholders = ",".join("?" * len(attachment_ids))
+                visible = await (await db.execute(
+                    f"""SELECT id FROM email_attachments WHERE id IN ({placeholders})
+                        AND (owner_user_id IS NULL OR owner_user_id = ?)""",
+                    [*attachment_ids, user["id"]],
+                )).fetchall()
+                if len(visible) != len(attachment_ids):
+                    raise HTTPException(404, "One or more attachments are unavailable")
+            assignments.append("attachment_ids_json = ?")
+            values.append(json.dumps(attachment_ids))
+        if assignments:
             await db.execute(
-                "UPDATE campaigns SET sequence_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (data["sequence_id"], campaign_id),
+                f"UPDATE campaigns SET {', '.join(assignments)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                [*values, campaign_id],
             )
             await db.commit()
         cursor = await db.execute("SELECT * FROM campaigns WHERE id = ?", (campaign_id,))

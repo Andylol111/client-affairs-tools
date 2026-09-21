@@ -39,8 +39,7 @@ async def tests():
             )
             assert response.status_code == 403
 
-        with patch('app.routers.attachments._attachments_enabled', new=AsyncMock(return_value=True)), \
-             patch('app.services.graph_onedrive.list_folder', return_value=[{'id': 'allowed', 'folder': False}]), \
+        with patch('app.services.graph_onedrive.list_folder', return_value=[{'id': 'allowed', 'folder': False}]), \
              patch('app.services.graph_onedrive.download_item') as download:
             try:
                 await attach_onedrive(OneDriveAttach(item_id='outside'), {'id': 2, 'role': 'admin'})
