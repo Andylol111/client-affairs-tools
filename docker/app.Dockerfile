@@ -2,7 +2,18 @@
 FROM node:22-alpine AS fe
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# npm can silently skip a platform-specific optional dependency (npm/cli#4828).
+# The CSS minifier is a native module, so a skipped install does not fail here
+# — it fails minutes later inside `npm run build` with
+# "Cannot find module ../lightningcss.linux-x64-musl.node", and it fails only
+# sometimes: the identical tree built clean four minutes earlier. Install, then
+# prove both native bindings load before going on.
+RUN for attempt in 1 2 3; do \
+      npm ci --no-audit --no-fund && node -e "require('lightningcss'); const nested='./node_modules/@tailwindcss/node/node_modules/lightningcss'; if (require('fs').existsSync(nested)) require(nested);" && break; \
+      echo "npm skipped a native optional dependency; retrying (attempt $attempt)"; \
+      rm -rf node_modules; \
+    done; \
+    node -e "require('lightningcss'); const nested='./node_modules/@tailwindcss/node/node_modules/lightningcss'; if (require('fs').existsSync(nested)) require(nested);"
 COPY frontend ./
 RUN npm run build
 
