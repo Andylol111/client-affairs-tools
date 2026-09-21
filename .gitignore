@@ -14,6 +14,7 @@ backend/attachments/
 data/.cache/
 data/.yucg_cache/
 data/releases/
+data/archive/
 data/YUCG_Outreach_Pack.xlsx
 infra/cdk.out/
 infra/node_modules/
