@@ -2,7 +2,9 @@
 Daily notification digest: for users with admin_digest or campaign_summary enabled,
 build a short digest and send via Slack (if connected). Run daily after follow-ups.
 """
+import os
 from datetime import datetime, timezone, timedelta
+
 from app.database import get_db
 
 
@@ -33,11 +35,11 @@ async def run_notification_digests() -> dict:
             campaign_summary = row["campaign_summary"]
 
             cursor = await db.execute(
-                "SELECT access_token, user_slack_id FROM user_slack_tokens WHERE user_id = ?",
+                "SELECT user_slack_id FROM user_slack_tokens WHERE user_id = ?",
                 (user_id,),
             )
             slack_row = await cursor.fetchone()
-            if not slack_row or not slack_row["access_token"]:
+            if not slack_row:
                 continue
 
             parts = []
@@ -72,10 +74,20 @@ async def run_notification_digests() -> dict:
 
             text = "YUCG Outreach – Daily digest\n\n" + "\n".join(parts)
 
-            # Open DM with user and post
-            from app.token_crypto import decrypt_token
+            # Rotation means the token stored at install has almost certainly
+            # expired by the time this nightly job runs; ask for a live one.
+            from app.services.slack_tokens import (
+                SlackReauthorizationRequired, slack_access_token,
+            )
 
-            token = decrypt_token(slack_row["access_token"])
+            try:
+                token = await slack_access_token(user_id)
+            except SlackReauthorizationRequired as exc:
+                errors.append({"user_id": user_id, "error": f"Slack must be reconnected ({exc})"})
+                continue
+            if not token:
+                errors.append({"user_id": user_id, "error": "No usable Slack token"})
+                continue
             user_slack_id = slack_row["user_slack_id"]
             async with httpx.AsyncClient(timeout=10.0) as client:
                 try:
@@ -102,9 +114,13 @@ async def run_notification_digests() -> dict:
                 except Exception as e:
                     errors.append({"user_id": user_id, "error": str(e)})
 
-        # If no DMs were sent but bot token + channel are set, post one digest to the channel (use your Access Token here)
-        bot_token = (os.getenv("SLACK_BOT_TOKEN") or "").strip()
+        # If no DMs were sent, post one digest to the club channel. The token
+        # comes from an install where possible: with rotation enabled, a token
+        # pasted into SLACK_BOT_TOKEN stops working twelve hours later.
+        from app.services.slack_tokens import workspace_access_token
+
         channel_id = (os.getenv("SLACK_DIGEST_CHANNEL_ID") or "").strip()
+        bot_token = await workspace_access_token() if channel_id else None
         if sent == 0 and bot_token and channel_id:
             parts = []
             cursor = await db.execute(
