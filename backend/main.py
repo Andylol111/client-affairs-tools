@@ -210,6 +210,10 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(outreach.router, prefix="/api/outreach", tags=["outreach"], dependencies=_require_user)
 app.include_router(track.router, prefix="/api/track", tags=["track"])
+# Slack signs its own requests and carries no club session, so this door
+# authenticates itself rather than using the session dependency.
+from app.routers import slack as slack_router
+app.include_router(slack_router.router, prefix="/api/slack", tags=["slack"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(attachments.router, prefix="/api/attachments", tags=["attachments"])
 app.include_router(telemetry.router, prefix="/api/telemetry", tags=["telemetry"])

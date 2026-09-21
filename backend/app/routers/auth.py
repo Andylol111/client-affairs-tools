@@ -477,8 +477,15 @@ async def update_my_profile(payload: ProfileUpdate, user: dict = Depends(get_cur
 
 
 # --- Slack OAuth ---
-SLACK_SCOPES = "users:read,users:read.email,team:read"
-_slack_oauth_states: dict[str, int] = {}  # state -> user_id
+# Bot scopes. chat:write and im:write are what the daily digest needs: without
+# them the install succeeds and every DM then fails with missing_scope.
+# app_mentions:read plus im:history/im:read are what make the helper a bot a
+# member can talk to rather than a slash command they must remember.
+SLACK_SCOPES = (
+    "chat:write,im:write,im:history,im:read,app_mentions:read,"
+    "users:read,users:read.email,team:read"
+)
+SLACK_STATE_TTL = 600
 
 
 def _get_slack_credentials() -> tuple[str, str]:
@@ -491,6 +498,9 @@ def _get_slack_credentials() -> tuple[str, str]:
 @router.get("/slack/connect")
 async def slack_connect(user: dict = Depends(get_current_user)):
     """Return Slack OAuth URL for the frontend to redirect to. Requires auth."""
+    import time
+    from app.routers.invitations import digest
+
     SLACK_CLIENT_ID, SLACK_CLIENT_SECRET = _get_slack_credentials()
     if not SLACK_CLIENT_ID or not SLACK_CLIENT_SECRET:
         raise HTTPException(
@@ -498,9 +508,22 @@ async def slack_connect(user: dict = Depends(get_current_user)):
             "Slack integration not configured. Add SLACK_CLIENT_ID and SLACK_CLIENT_SECRET to backend/.env. "
             f"(Debug: client_id present={bool(SLACK_CLIENT_ID)}, client_secret present={bool(SLACK_CLIENT_SECRET)})"
         )
-    state = secrets.token_urlsafe(32)
-    _slack_oauth_states[state] = user["id"]
-    redirect_uri = f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/auth/slack/callback"
+    # The state lives in the database and is bound to a browser secret, the
+    # same way the Google flow works. It used to be a process dictionary, so a
+    # container replacement or a second worker between connect and callback
+    # turned a completed install into "slack=error".
+    state, browser = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM oauth_challenges WHERE expires_at<=?", (int(time.time()),))
+        await db.execute(
+            "INSERT INTO oauth_challenges(state_hash,browser_hash,purpose,user_id,invitation_id,expires_at) VALUES (?,?,?,?,?,?)",
+            (digest(state), digest(browser), "slack", user["id"], None, int(time.time()) + SLACK_STATE_TTL),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    redirect_uri = f"{BACKEND_URL}/api/auth/slack/callback"
     params = {
         "client_id": SLACK_CLIENT_ID,
         "scope": SLACK_SCOPES,
@@ -508,21 +531,55 @@ async def slack_connect(user: dict = Depends(get_current_user)):
         "state": state,
     }
     url = "https://slack.com/oauth/v2/authorize?" + urlencode(params)
-    return {"redirect_url": url}
+    response = JSONResponse({"redirect_url": url})
+    response.headers["Cache-Control"] = "no-store"
+    response.set_cookie(
+        "yucg_slack_browser", browser, max_age=SLACK_STATE_TTL, httponly=True,
+        samesite="lax", secure=BACKEND_URL.startswith("https"), path="/api/auth",
+    )
+    return response
 
 
 @router.get("/slack/callback")
-async def slack_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+async def slack_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
     """Exchange Slack OAuth code for token, store, redirect to frontend."""
-    if error:
-        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=denied")
-    if not code or not state or state not in _slack_oauth_states:
-        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
-    user_id = _slack_oauth_states.pop(state, None)
-    if not user_id:
-        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+    import time
+    from app.routers.invitations import digest
+    def failed(reason: str, detail: str = "") -> RedirectResponse:
+        # A silent redirect to ?slack=error costs a round trip to diagnose.
+        logger.warning("Slack callback rejected (%s): %s", reason, detail or "no detail")
+        response = RedirectResponse(url=f"{FRONTEND_URL}/profile?slack={reason}")
+        response.delete_cookie("yucg_slack_browser", path="/api/auth")
+        return response
 
-    redirect_uri = f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/auth/slack/callback"
+    if error:
+        return failed("denied")
+    browser = request.cookies.get("yucg_slack_browser", "")
+    user_id = None
+    db = await get_db()
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT * FROM oauth_challenges WHERE state_hash=? AND browser_hash=? AND purpose='slack' AND expires_at>?",
+            (digest(state or ""), digest(browser), int(time.time())),
+        )).fetchone()
+        if row and browser:
+            user_id = row["user_id"]
+            # Single use: a replayed code cannot install against another member.
+            await db.execute("DELETE FROM oauth_challenges WHERE state_hash=?", (row["state_hash"],))
+        await db.commit()
+    finally:
+        await db.close()
+    if not code:
+        return failed("error", "Slack returned no code")
+    if not user_id:
+        return failed(
+            "error",
+            "no live state for this browser — the connect request and this callback must reach "
+            f"the same database; callback host is BACKEND_URL={BACKEND_URL}",
+        )
+
+    redirect_uri = f"{BACKEND_URL}/api/auth/slack/callback"
     slack_client_id, slack_client_secret = _get_slack_credentials()
     async with httpx.AsyncClient(timeout=15.0) as client:
         res = await client.post(
@@ -536,10 +593,10 @@ async def slack_callback(code: str | None = None, state: str | None = None, erro
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     if res.status_code != 200:
-        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+        return failed("error", f"Slack token exchange HTTP {res.status_code}")
     data = res.json()
-    if not data.get("ok"):
-        return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=error")
+    if not data.get("ok") or not data.get("access_token"):
+        return failed("error", f"Slack token exchange said {data.get('error') or 'no access_token'}")
     access_token = data.get("access_token")
     team = data.get("team") or {}
     team_id = team.get("id")
@@ -547,18 +604,29 @@ async def slack_callback(code: str | None = None, state: str | None = None, erro
     authed_user = data.get("authed_user") or {}
     user_slack_id = authed_user.get("id")
     scope = data.get("scope")
+    # The app uses token rotation, so the install answers with a refresh token
+    # and a lifetime rather than a token that lasts forever. Both are part of
+    # the credential; a workspace without rotation simply sends neither.
+    refresh_token = data.get("refresh_token") or None
+    expires_in = data.get("expires_in")
+    expires_at = (time.time() + float(expires_in)) if expires_in else None
 
     db = await get_db()
     try:
         await db.execute(
-            """INSERT OR REPLACE INTO user_slack_tokens (user_id, access_token, team_id, team_name, user_slack_id, scope, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-            (user_id, encrypt_token(access_token), team_id, team_name, user_slack_id, scope),
+            """INSERT OR REPLACE INTO user_slack_tokens
+               (user_id, access_token, refresh_token, token_expires_at, team_id, team_name, user_slack_id, scope, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (user_id, encrypt_token(access_token),
+             encrypt_token(refresh_token) if refresh_token else None, expires_at,
+             team_id, team_name, user_slack_id, scope),
         )
         await db.commit()
     finally:
         await db.close()
-    return RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=connected")
+    response = RedirectResponse(url=f"{FRONTEND_URL}/profile?slack=connected")
+    response.delete_cookie("yucg_slack_browser", path="/api/auth")
+    return response
 
 
 @router.get("/slack/status")
