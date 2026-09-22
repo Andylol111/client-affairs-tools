@@ -195,6 +195,8 @@ export default function EmailStudio() {
   const [angle, setAngle] = useState('pain_point');
   const [valueProp, setValueProp] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
+  const [citeSuggestLoading, setCiteSuggestLoading] = useState(false);
+  const [citeSuggestMessage, setCiteSuggestMessage] = useState('');
   const [generatedEmails, setGeneratedEmails] = useState<GeneratedEmail[]>([]);
   const [sortBy, setSortBy] = useState('created_desc');
   const [activeTab, setActiveTab] = useUrlTab<'editor' | 'cache'>(['editor', 'cache'], 'editor', 'panel');
@@ -397,6 +399,34 @@ export default function EmailStudio() {
       setGenerationError(e instanceof Error ? e.message : 'Draft generation is unavailable. Your current draft was not changed.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSuggestCitations = async () => {
+    const company = selected?.company;
+    if (!company) return;
+    setCiteSuggestLoading(true);
+    setCiteSuggestMessage('');
+    try {
+      const res = await api.projects.suggestCitations(company);
+      const clientNames = res.projects.map((p) => p.client_name).filter((name): name is string => Boolean(name));
+      const teamLines = res.team_experience
+        .filter((t) => t.user_name)
+        .map((t) => `${t.user_name}${t.role_in_project ? ` (${t.role_in_project}` : ''}${t.client_name ? `${t.role_in_project ? ', ' : ' ('}${t.client_name} project` : ''}${t.role_in_project || t.client_name ? ')' : ''}`);
+      const parts = [
+        clientNames.length > 0 && `Past clients we can discuss: ${clientNames.join(', ')}.`,
+        teamLines.length > 0 && `Team members with relevant experience: ${teamLines.join(', ')}.`,
+      ].filter(Boolean);
+      if (parts.length === 0) {
+        setCiteSuggestMessage('No nameable past projects on file yet.');
+        return;
+      }
+      const suggestion = parts.join(' ');
+      setValueProp((prev) => (prev.trim() ? `${prev}\n\n${suggestion}` : suggestion));
+    } catch (e) {
+      setCiteSuggestMessage(e instanceof Error ? e.message : 'Could not load citation suggestions.');
+    } finally {
+      setCiteSuggestLoading(false);
     }
   };
 
@@ -1063,7 +1093,19 @@ export default function EmailStudio() {
                 />
             </div>
             <div className="email-studio-field">
-                <label className="block text-sm text-slate-600 dark:text-slate-400 mb-1">Relevant YUCG capability or proof</label>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label className="block text-sm text-slate-600 dark:text-slate-400">Relevant YUCG capability or proof</label>
+                  <button
+                    type="button"
+                    onClick={handleSuggestCitations}
+                    disabled={citeSuggestLoading || !selected?.company}
+                    title={selected?.company ? 'Suggest real past projects and team experience to cite' : 'Choose a contact with a company on file first'}
+                    className="ui-button ui-button--secondary ui-button--sm shrink-0"
+                  >
+                    {citeSuggestLoading ? 'Looking…' : 'Suggest what to cite'}
+                  </button>
+                </div>
+                {citeSuggestMessage && <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">{citeSuggestMessage}</p>}
                 <textarea
                   value={valueProp}
                   onChange={(e) => setValueProp(e.target.value)}

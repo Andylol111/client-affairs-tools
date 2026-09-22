@@ -47,3 +47,20 @@ test('grouping the pipeline by company reports what the send ledger says happene
   const quiet = page.getByRole('button').filter({ hasText: 'Quiet Inc' }).first();
   await expect(quiet).toContainText('not contacted yet');
 });
+
+test('ticking contacts across companies and writing to them together lands on the pipeline with those companies pre-chosen', async ({ page }) => {
+  await mockPipeline(page);
+  await page.goto('/outreach');
+
+  // Ada (Acme Corp) and Alan (Quiet Inc): two companies, deduplicated once
+  // handed to the multi-recipient flow, the same contract EmailStudio's own
+  // sidebar selection already uses.
+  await page.getByLabel('Select Ada Lovelace').check();
+  await page.getByLabel('Select Alan Turing').check();
+  await expect(page.getByText('2 selected')).toBeVisible();
+
+  await page.getByRole('button', { name: /Write to these 2 together/ }).click();
+  await expect(page).toHaveURL(/\/scraper\?view=company&companies=/);
+  await expect(page).toHaveURL(/Acme(%20|\+)Corp/);
+  await expect(page).toHaveURL(/Quiet(%20|\+)Inc/);
+});

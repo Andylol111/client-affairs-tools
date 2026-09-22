@@ -50,6 +50,16 @@ async function mockPipeline(page: Page) {
     else if (p === '/api/yucgoutreach/register') body = { items: [], total: 0, limit: 40, offset: 0 };
     else if (p === '/api/ai/models') body = { groups: [] };
     else if (p.startsWith('/api/yucg/rosters')) body = { rosters: [] };
+    else if (p === '/api/yucgoutreach/domain-guess') {
+      const company = url.searchParams.get('company') || '';
+      body = company === 'Meta' ? { domain: 'meta.com', verified: true } : { domain: null, verified: false };
+    }
+    else if (p === '/api/projects/suggest-citations') {
+      body = {
+        projects: [{ id: 1, client_name: 'Google', description: 'Brand refresh', semester: 'Spring 2026' }],
+        team_experience: [{ user_name: 'Aaron Combs', role_in_project: 'Market Analyst', client_name: 'Adidas', semester: 'Fall 2025' }],
+      };
+    }
     else if (/\/sequences$|\/custom-formats$/.test(p)) body = [];
     await route.fulfill({ json: body });
   });
@@ -179,4 +189,47 @@ test('a large company selection stays a count and a screenful, not a wall of chi
     Array.from({ length: 501 }, (_, i) => `Big ${i + 1}`).join(','))}`);
   await rail.getByRole('button', { name: /Choose companies/ }).click();
   await expect(rail.getByText(/at most 500/)).toBeVisible();
+});
+
+test('a company with no confirmed domain gets an honest, non-blocking search warning', async ({ page }) => {
+  await mockPipeline(page);
+  await page.goto('/scraper?view=company&companies=A24');
+
+  const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  await expect(pipeline.getByTestId('domain-guess-warning')).toContainText(
+    'No confirmed website found for A24', { timeout: 10_000 },
+  );
+  // Advisory only: the lane's own search button stays usable.
+  const lane = pipeline.locator('[data-lane="A24"]');
+  await lane.hover();
+  await expect(lane.getByRole('button', { name: /^Find (more|people)$/ })).toBeEnabled();
+});
+
+test('a verified domain guess offers a one-click accept that fills the domain field', async ({ page }) => {
+  await mockPipeline(page);
+  await page.goto('/scraper?view=company&companies=Meta');
+
+  const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  const rail = pipeline.locator('[data-rail]');
+  await rail.getByText('Search settings').click();
+  const suggestion = rail.getByTestId('domain-guess-suggestion');
+  await expect(suggestion).toContainText('meta.com', { timeout: 10_000 });
+  await suggestion.getByRole('button', { name: 'Use it' }).click();
+  await expect(rail.getByLabel('Company domain')).toHaveValue('meta.com');
+});
+
+test('suggest what to cite appends real past-project citations without erasing what was already typed', async ({ page }) => {
+  await mockPipeline(page);
+  await page.goto('/scraper?view=company&companies=A24');
+
+  const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  const rail = pipeline.locator('[data-rail]');
+  await rail.getByRole('button', { name: /Write the message/ }).click();
+  await rail.getByLabel('Verified proof').fill('We follow A24 closely.');
+  await rail.getByRole('button', { name: 'Suggest what to cite' }).click();
+
+  const proof = rail.getByLabel('Verified proof');
+  await expect(proof).toHaveValue(/We follow A24 closely\./, { timeout: 10_000 });
+  await expect(proof).toHaveValue(/Past clients we can discuss: Google\./);
+  await expect(proof).toHaveValue(/Aaron Combs \(Market Analyst, Adidas\)/);
 });

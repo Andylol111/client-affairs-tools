@@ -134,6 +134,16 @@ async def role_suggestions(
     return await suggest_roles(user_id=user["id"], company=company, domain=domain, hints=hints)
 
 
+@router.get("/domain-guess")
+async def domain_guess(company: str, user: dict = Depends(get_current_user)):
+    """Best-effort company website domain, confirmed live before it's
+    offered. Never authoritative - a member confirms or corrects it; the
+    search never uses it silently on its own."""
+    from app.services.company_email_cache import verify_domain_guess
+
+    return await verify_domain_guess(company)
+
+
 @router.get("/register")
 async def browse_register(
     q: str | None = None,
