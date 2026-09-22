@@ -83,6 +83,39 @@ async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any
     ]
 
 
+_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v", "phd", "md", "mba", "cpa", "cfa", "esq"})
+
+
+def _clean_title(title: str | None, name: str, company: str) -> str | None:
+    """A job title out of a LinkedIn headline.
+
+    Search results hand back the page title, "Matthew McGowan - Director,
+    Content Strategy & Analysis, HBO Max | LinkedIn", and that whole string was
+    saved as the title. Keep the first part that is neither the person's name,
+    the company's name, nor LinkedIn; a headline that is only name and company
+    ("Dana Lichtenstein - HBO & HBO Max") has no title at all.
+    """
+    from app.services.company_email_cache import text_names_brand
+
+    text = re.sub(r"\s*\|\s*LinkedIn\s*$", "", (title or "").strip(), flags=re.I)
+    if not text:
+        return None
+    people = {n.lower() for n in (name, " ".join(_split_first_last(name))) if n and n.strip()}
+    for part in re.split(r"\s+[-|–—·]\s+", text):
+        part = part.strip(" -|,")
+        if not part or part.lower() in people or part.lower() == "linkedin":
+            continue
+        # The company's own name, alone or with its sub-brands ("HBO & HBO
+        # Max", "Warner Bros. Discovery"), is where they work, not what they do.
+        if company and text_names_brand(part, company) and len(part.split()) <= 5 \
+                and not re.search(r"\b(?:head|director|manager|lead|officer|president|vp|chief|coordinator|analyst|engineer|associate|specialist|partner|producer|editor)\b", part, re.I):
+            continue
+        # A headline cut short leaves "Director of"; the dangling words go.
+        part = re.sub(r"(?:\s+(?:of|and|&|for|at|in|the|to|,))+\s*$", "", part, flags=re.I).strip(" ,")
+        return part[:300] or None
+    return None
+
+
 def _split_first_last(full_name: str) -> tuple[str, str]:
     name = (full_name or "").strip()
     if not name:
@@ -91,6 +124,10 @@ def _split_first_last(full_name: str) -> tuple[str, str]:
     # LinkedIn adds to a taken profile address ("maggie-schumann-55937b5a"),
     # which otherwise became the surname "55937b5a".
     parts = [p for p in re.split(r"[\s,]+", name) if p and not re.search(r"\d", p)]
+    # A generation or a degree is not a surname: "David King, III" was saved
+    # as David / III and shown as "David Iii".
+    while len(parts) > 1 and parts[-1].strip(".").lower() in _NAME_SUFFIXES:
+        parts.pop()
     if not parts:
         return "", ""
     if len(parts) == 1:
@@ -650,9 +687,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
                     email,
                     company,
                     linkedin or c.get("source_url"),
-                    # A "title" that is only the person's name says nothing.
-                    None if (c.get("title") or "").strip().lower() in {name.lower(), f"{first} {last}".strip().lower()}
-                    else c.get("title"),
+                    _clean_title(c.get("title"), name, company),
                     None,
                     None,
                     None,

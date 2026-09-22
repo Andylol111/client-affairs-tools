@@ -51,10 +51,15 @@ const TOP_OFFICER = /\b(?:c[efot]o|cmo|cio|ciso|cro|cpo|clo|chief\s+[a-z&,\s-]*o
  *  President" is often the right person at a smaller company and stays. */
 const SENIOR_VP = /\b(?:[escg]vp|(?:executive|senior|corporate|group)\s+vice[\s-]president)\b/i;
 
+/** Board work, however a filing words it: a proxy lists directors by their
+ *  committee ("Compensation and Talent Management Committee"), which read as
+ *  an unknown role and was ticked. */
+const BOARD_SEAT = /\b(?:committee|board\s+(?:of\s+directors|member|director)|independent\s+director|non-executive|trustee)\b/i;
+
 /** Too senior to answer a student's cold email: never ticked by default. */
 export function isTooSenior(person: Contact): boolean {
   const title = person.title || '';
-  return TOP_OFFICER.test(title) || SENIOR_VP.test(title);
+  return TOP_OFFICER.test(title) || SENIOR_VP.test(title) || BOARD_SEAT.test(title);
 }
 
 /** Words that a scraped page puts where a name should be - a job, a
