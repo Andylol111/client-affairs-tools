@@ -175,10 +175,47 @@ def advisory_drafts_propose_projects_from_the_club_notes():
     assert 'company_context is the club' in EMAIL_SYSTEM_PROMPT
 
 
+def a_rejected_draft_gets_one_repair_and_soft_asks_count():
+    """Advisory drafts closed with "I'd welcome a brief conversation", which
+    the checker did not see as an ask, so 19 of 20 in one batch failed and
+    each burned an hourly draft. The close is now recognised, and a draft
+    that still breaks a rule is sent back once with the reason.
+    """
+    from app.services.ollama_email_service import validate_draft
+
+    items = ''.join(f'<li><strong>Idea {n}:</strong> a team could build a scoped study of one question.</li>'
+                    for n in (1, 2, 3))
+    intro = ('<p>Dear Maya,</p><p>I am a member of the Yale Undergraduate Consulting Group and I am writing '
+             'because a student team could take on one scoped question with your group this semester. '
+             'Here are three directions we could take together:</p>')
+    filler = ('<p>Each would be scoped with you before the term begins and staffed by supervised '
+              'undergraduates who work through a single focused question with real data.</p>')
+    soft = intro + f'<ul>{items}</ul>' + filler + (
+        "<p>If any of these directions feel relevant, I'd welcome a brief conversation about what "
+        'would be most useful.</p>')
+    brief = {'evidence': {'sources': []},
+             'message': {'member_supplied_facts_and_goal': '', 'relevant_capability_or_proof': ''}}
+    validate_draft({'subject': 'Three projects for your team', 'body': soft, 'source_ids': []},
+                   brief, 'standard', angle='advisory')
+
+    # Four proposals break the house format; the repair pass fixes it without
+    # a second reservation.
+    four = soft.replace('</ul>', '<li><strong>Idea 4:</strong> one more.</li></ul>')
+    replies = [{'subject': 'Three projects for your team', 'body': four, 'source_ids': []},
+               {'subject': 'Three projects for your team', 'body': soft, 'source_ids': []}]
+    with patch('app.services.llm.complete_json', side_effect=replies) as complete:
+        subject, body = generate_email('Maya Chen', 'Strategy lead', 'Example Co', 'example.com',
+                                       angle='advisory', length='standard')
+    assert complete.call_count == 2
+    assert 'found 4' in complete.call_args.args[0]
+    assert body == soft
+
+
 if __name__ == '__main__':
     tests()
     benign_numbers_are_not_claims()
     prompt_forbids_the_closing_the_validator_rejects()
     every_offered_angle_can_produce_a_valid_draft()
     advisory_drafts_propose_projects_from_the_club_notes()
+    a_rejected_draft_gets_one_repair_and_soft_asks_count()
     print('email generation contract: ok')

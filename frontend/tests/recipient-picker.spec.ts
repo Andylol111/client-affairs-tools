@@ -223,3 +223,37 @@ test('seniority narrows who is shown and who select-all reaches', async ({ page 
   await pipeline.getByRole('button', { name: /^Select all shown/ }).click();
   await expect(pipeline.getByTestId('selected-count')).toHaveText('1 of 4 selected');
 });
+
+test('the very senior and names that are not people are shown but never ticked by default', async ({ page }) => {
+  await mockPicker(page);
+  // Registered after the shared mock, so it answers first.
+  await page.route('**/api/contacts?*', route => route.fulfill({ json: {
+    items: [
+      { id: 1, name: 'Jean Bartik', email: 'jean.bartik@a24films.com', title: 'Director of Operations', company: 'A24', person_level: 'working' },
+      { id: 6, name: 'Anat Ashkenazi', email: 'anat@a24films.com', title: 'SVP, Chief Financial Officer', company: 'A24', person_level: 'working' },
+      { id: 7, name: 'Kent Walker', email: 'kent@a24films.com', title: 'Vice President, Partnerships', company: 'A24', person_level: 'executive' },
+      { id: 8, name: 'Katy George', email: 'katy@a24films.com', title: 'Corporate Vice President', company: 'A24', person_level: 'executive' },
+      { id: 9, name: 'Transformation Leader', email: 'tl@a24films.com', title: 'Shaping the future of work', company: 'A24', person_level: 'working' },
+      { id: 10, name: 'Steve Mathias B1a579', email: 'steve@a24films.com', title: 'Account Manager', company: 'A24', person_level: 'working' },
+    ],
+    total: 6, limit: 800, offset: 0,
+  } }));
+  await page.goto('/scraper?view=company&companies=A24');
+
+  const picker = page.locator('[data-section="campaign-pipeline"]').getByTestId('recipient-picker');
+  const box = (name: string) => picker.getByRole('checkbox', { name: `Write to ${name}` });
+  await expect(box('Jean Bartik')).toBeChecked();
+  // A chief officer and a corporate VP: too senior to answer a cold email.
+  await expect(box('Anat Ashkenazi')).not.toBeChecked();
+  await expect(box('Katy George')).not.toBeChecked();
+  await expect(picker.getByText('Very senior · rarely replies')).toHaveCount(2);
+  // A plain vice president is often the right person, and stays.
+  await expect(box('Kent Walker')).toBeChecked();
+  // Page text stored as a name is flagged; a profile id on a real name is not.
+  await expect(box('Transformation Leader')).not.toBeChecked();
+  await expect(picker.getByText('Not a person? Check the name')).toHaveCount(1);
+  await expect(box('Steve Mathias B1a579')).toBeChecked();
+  // Still a deliberate choice away.
+  await box('Anat Ashkenazi').check();
+  await expect(box('Anat Ashkenazi')).toBeChecked();
+});

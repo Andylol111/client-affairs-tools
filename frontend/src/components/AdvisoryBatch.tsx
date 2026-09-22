@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type Contact } from '../api';
+import { looksLikePerson } from '../lib/recipients';
 
 /**
  * The people chosen in Find people, each written to on their own.
@@ -15,8 +16,12 @@ import { api, type Contact } from '../api';
 
 type Status = 'waiting' | 'drafting' | 'done' | 'failed';
 
-/** Drafts written at once. The server bills and rate-limits each one. */
-const WORKERS = 3;
+/** Drafts written at once. The server runs two model calls for the whole
+ *  club and refuses a third as busy, so a batch takes one at a time. */
+const WORKERS = 1;
+/** Waits before retrying a person the server was too busy to draft. */
+const BACKOFF_MS = [3000, 6000, 12000];
+const TRANSIENT = /busy|unavailable|please retry shortly/i;
 
 export default function AdvisoryBatch({ companies, contactIds, tone, model, valueProp, goal, onOpen, onDrafted, onDismiss }: {
   companies: string[];
@@ -61,7 +66,11 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
     }
     return out;
   }, [people, status]);
-  const remaining = people.filter((p) => status[p.id] !== 'done');
+  // A row whose name is page text ("Transformation Leader") would get an
+  // email opening "Dear Transformation,". It is listed, never drafted.
+  const skipped = people.filter((p) => !looksLikePerson(p));
+  const writable = people.filter(looksLikePerson);
+  const remaining = writable.filter((p) => status[p.id] !== 'done');
 
   const draftAll = async () => {
     stopRef.current = false;
@@ -86,7 +95,7 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
         setStatus((s) => ({ ...s, [id]: 'drafting' }));
         try {
           const cite = person.company ? await citeFor(person.company) : '';
-          await api.emails.generate({
+          const request = () => api.emails.generate({
             contact_id: id,
             angle: 'advisory',
             // Two or three proposals need the room; "short" cannot hold a list.
@@ -96,6 +105,18 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
             value_proposition: [valueProp.trim(), cite].filter(Boolean).join('\n\n') || undefined,
             custom_instructions: goal.trim() ? `Email purpose: ${goal.trim()}` : undefined,
           });
+          // A busy or throttled model is not a failed draft: wait and ask
+          // again. The server gives back the hourly draft for these.
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              await request();
+              break;
+            } catch (e) {
+              const message = e instanceof Error ? e.message : '';
+              if (!TRANSIENT.test(message) || attempt >= BACKOFF_MS.length || stopRef.current) throw e;
+              await new Promise((resolve) => window.setTimeout(resolve, BACKOFF_MS[attempt]));
+            }
+          }
           setStatus((s) => ({ ...s, [id]: 'done' }));
         } catch (e) {
           const message = e instanceof Error ? e.message : 'Draft failed';
@@ -139,7 +160,7 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
     failed: 'bg-amber-600',
   };
   const label: Record<Status, string> = { waiting: 'not drafted', drafting: 'writing…', done: 'drafted', failed: 'failed' };
-  const pct = people.length ? Math.round((counts.done / people.length) * 100) : 0;
+  const pct = writable.length ? Math.round((counts.done / writable.length) * 100) : 0;
 
   // On desktop Drafts is a fixed-height column and the workspace below takes
   // what is left, so this panel stays one short bar: the list of people is
@@ -182,10 +203,10 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
               className="ui-button ui-button--primary ui-button--sm"
             >
               {running
-                ? `Writing… ${counts.done} of ${people.length}`
+                ? `Writing… ${counts.done} of ${writable.length}`
                 : counts.done > 0
                   ? `Draft the remaining ${remaining.length}`
-                  : `Draft an advisory email for each of these ${people.length}`}
+                  : `Draft an advisory email for each of these ${writable.length}`}
             </button>
           )}
           {running && (
@@ -207,6 +228,11 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
           >
             {listOpen ? 'Hide the people' : `Show the ${people.length} people`}
           </button>
+          {skipped.length > 0 && (
+            <span className="text-amber-900" data-testid="skipped-note">
+              {skipped.length} skipped: the name is not a person&apos;s
+            </span>
+          )}
           {(running || counts.done > 0 || counts.failed > 0) && (
             <>
               <span className="h-1.5 w-40 overflow-hidden rounded-full bg-pale-sky/70" aria-hidden="true">
@@ -224,15 +250,17 @@ export default function AdvisoryBatch({ companies, contactIds, tone, model, valu
         <ul className="absolute inset-x-0 top-full z-30 mt-1 grid max-h-72 grid-cols-1 gap-1 overflow-y-auto rounded-xl border border-pale-sky bg-white p-2 shadow-lg sm:grid-cols-2 xl:grid-cols-3">
           {people.map((p) => {
             const st = status[p.id] || 'waiting';
+            const person = looksLikePerson(p);
             return (
               <li key={p.id} data-person={p.id}>
                 <button
                   type="button"
                   onClick={() => onOpen(p)}
                   className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left hover:bg-pale-sky/25"
-                  title={reason[p.id] || `${label[st]} - open ${p.name || p.email}`}
+                  title={person ? reason[p.id] || `${label[st]} - open ${p.name || p.email}` : 'Skipped: this name looks like page text, not a person'}
                 >
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${dot[st]}`} aria-label={label[st]} role="img" />
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${person ? dot[st] : 'bg-transparent ring-1 ring-amber-600'}`}
+                        aria-label={person ? label[st] : 'skipped'} role="img" />
                   <span className="min-w-0 flex-1 truncate text-sm text-deep-navy">
                     {p.name || p.email}
                     <span className="text-xs text-slate-500">{p.title ? ` · ${p.title}` : ''}</span>
