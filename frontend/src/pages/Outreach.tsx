@@ -1,6 +1,6 @@
 import type { Contact, Template, Sequence, PipelineMetrics, ContactNote, ContactActivity, ContactProfile, Worklist, CompanySummaryRow } from '../api';
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import AppTabMenu from '../components/AppTabMenu';
 import PageHeader from '../components/PageHeader';
@@ -42,6 +42,7 @@ function ContactCard({ c, selectedContact, selectedIds, onSelect, onToggleSelect
           checked={selectedIds.has(c.id)}
           onChange={(e) => { e.stopPropagation(); onToggleSelect(c.id); }}
           onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${c.name || c.email}`}
           className="rounded shrink-0"
         />
         <div className="min-w-0 flex-1">
@@ -112,6 +113,7 @@ function CompanyFolder({ company, contacts, outcome, selectedContact, selectedId
 }
 
 export default function Outreach() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useUrlTab<'pipeline' | 'worklists' | 'followups' | 'resources'>(['pipeline', 'worklists', 'followups', 'resources'], 'pipeline');
   const [groupByCompany, setGroupByCompany] = useState(false);
   const [mobileStatus, setMobileStatus] = useState('cold');
@@ -553,6 +555,24 @@ export default function Outreach() {
                       <option key={oc.id} value={oc.id}>{oc.name}</option>
                     ))}
                   </select>
+                  {/* The one working entry point into the multi-recipient
+                      drafting flow, mirrored from EmailStudio's own sidebar:
+                      hand the unique companies among what's ticked to the
+                      pipeline, which already pulls their on-file contacts in
+                      at step 2. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const companies = [...new Set(
+                        contacts.filter((c) => selectedContactIds.has(c.id))
+                          .map((c) => (c.company || '').trim()).filter(Boolean),
+                      )];
+                      navigate(`/scraper?view=company&companies=${encodeURIComponent(companies.join(','))}`);
+                    }}
+                    className="ui-button ui-button--ghost ui-button--sm"
+                  >
+                    Write to these {selectedContactIds.size} together →
+                  </button>
                   <button type="button" onClick={() => setSelectedContactIds(new Set())} className="ui-button ui-button--ghost ui-button--sm">
                     Clear
                   </button>

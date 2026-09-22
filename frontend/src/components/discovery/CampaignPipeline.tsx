@@ -150,6 +150,8 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   const [preview, setPreview] = useState<Preview | null>(null);
   const [goal, setGoal] = useState('');
   const [proof, setProof] = useState('');
+  const [citing, setCiting] = useState(false);
+  const [citeNote, setCiteNote] = useState('');
   const [drafting, setDrafting] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -301,6 +303,34 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   // last pointed at, else the first chosen.
   const focused = chosen.find((c) => companyKey(c.name) === focusedKey) ?? chosen[0] ?? null;
   const focusedDomain = focused ? (typedDomains[companyKey(focused.name)] || focused.domain || '') : '';
+
+  // Best-effort awareness of the one input the search leans on hardest: a
+  // company's own domain lets a search crawl the company's own pages
+  // instead of falling back to web search alone. Asked only for the
+  // company in view, only while its field is still blank, and debounced
+  // so it fires once per company rather than on every keystroke or for
+  // every chosen company on page load.
+  const [domainGuess, setDomainGuess] = useState<{ company: string; domain: string | null; verified: boolean } | null>(null);
+  useEffect(() => {
+    if (!focused || (step !== 1 && step !== 2) || focusedDomain) return;
+    const name = focused.name;
+    const timer = window.setTimeout(() => {
+      api.yucgoutreach.domainGuess(name)
+        .then((res) => {
+          // A malformed or absent payload (proxy hiccup, an endpoint an
+          // older deploy or an unrelated test never mocked) must read as
+          // no answer yet, never as a fabricated "nothing found".
+          if (typeof res?.verified !== 'boolean') return;
+          setDomainGuess({ company: name, domain: res.domain ?? null, verified: res.verified });
+        })
+        .catch(() => {});
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [focused, step, focusedDomain]);
+  const domainSuggestion = focused && (step === 1 || step === 2) && !focusedDomain
+      && domainGuess?.company === focused.name
+    ? domainGuess
+    : null;
 
   // One search, from wherever it is asked for: the lane, the group header in
   // the sheet. It takes the titles and settings from the step, and the
@@ -539,6 +569,18 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
                   />
                 </label>
               )}
+              {domainSuggestion?.verified && domainSuggestion.domain && (
+                <p className="mt-1 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2" data-testid="domain-guess-suggestion">
+                  We think this might be <strong>{domainSuggestion.domain}</strong> for {focused?.name}.{' '}
+                  <button
+                    type="button"
+                    onClick={() => focused && setTypedDomains((prev) => ({ ...prev, [companyKey(focused.name)]: domainSuggestion.domain || '' }))}
+                    className="font-semibold underline"
+                  >
+                    Use it
+                  </button>
+                </p>
+              )}
             </div>
           </details>
 
@@ -613,6 +655,41 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
               aria-label="Verified proof"
               className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
             />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={citing || chosenNames.length === 0}
+                onClick={async () => {
+                  setCiting(true);
+                  setCiteNote('');
+                  setError('');
+                  try {
+                    const res = await api.projects.suggestCitations(chosenNames[0]);
+                    const parts: string[] = [];
+                    const clients = (res.projects || []).map((p) => p.client_name).filter(Boolean);
+                    if (clients.length) parts.push(`Past clients we can discuss: ${clients.join(', ')}.`);
+                    const team = (res.team_experience || [])
+                      .filter((t) => t.user_name)
+                      .map((t) => `${t.user_name}${t.role_in_project ? ` (${t.role_in_project}${t.client_name ? `, ${t.client_name}` : ''})` : ''}`);
+                    if (team.length) parts.push(`Team members with relevant experience: ${team.join(', ')}.`);
+                    if (!parts.length) {
+                      setCiteNote('No nameable past projects on file yet');
+                    } else {
+                      const text = parts.join(' ');
+                      setProof((prev) => (prev.trim() ? `${prev}\n\n${text}` : text));
+                    }
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : 'Could not suggest what to cite');
+                  } finally {
+                    setCiting(false);
+                  }
+                }}
+                className="ui-button ui-button--ghost ui-button--sm"
+              >
+                {citing ? 'Suggesting…' : 'Suggest what to cite'}
+              </button>
+              {citeNote && <span className="text-xs text-slate-500" data-testid="cite-suggestion-note">{citeNote}</span>}
+            </div>
             {chosen.length > 1 && (
               <label className="flex items-start gap-2 text-[13px] text-deep-navy">
                 <input
@@ -811,6 +888,12 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
         )}
         {runError && (
           <p className="ui-notice ui-notice--danger text-sm" role="alert">{runError}</p>
+        )}
+        {domainSuggestion && !domainSuggestion.verified && (
+          <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" data-testid="domain-guess-warning">
+            No confirmed website found for {focused?.name} - people-search will rely on web search
+            alone and may find very few results. Add a domain above if you know one.
+          </p>
         )}
         <CompanyLanes
           lanes={lanes}

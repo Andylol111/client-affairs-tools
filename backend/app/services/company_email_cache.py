@@ -671,3 +671,56 @@ def pattern_for_email(email: str, full_name: str) -> str | None:
     first, last = _split_name(full_name)
     pair = infer_pattern_from_pair(email, first, last)
     return pair[0] if pair else None
+
+
+# Suffixes a company legally carries but never puts in its domain. Matched
+# against the last word(s) after stripping punctuation, so "Inc.", "Inc",
+# and "Incorporated" all fall away the same way.
+_LEGAL_SUFFIXES = frozenset({
+    "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+    "plc", "co", "company", "group",
+})
+
+
+def guess_domain_from_name(name: str) -> str | None:
+    """Best-effort .com guess from a company's legal name.
+
+    Pure and unverified: strips legal suffixes and punctuation, lowercases,
+    and concatenates what is left. Never checked to actually resolve - that
+    is the caller's job, so a guess never gets suggested as if it were fact.
+    """
+    cleaned = re.sub(r"[.,]", " ", (name or "")).strip()
+    words = [w for w in cleaned.split() if w]
+    while words and words[-1].lower() in _LEGAL_SUFFIXES:
+        words.pop()
+    if not words:
+        return None
+    stem = re.sub(r"[^a-z0-9]", "", "".join(words).lower())
+    return f"{stem}.com" if stem else None
+
+
+async def _head_ok(url: str) -> bool:
+    """Live 2xx/3xx check, isolated so tests can mock the network without
+    touching httpx itself."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+        response = await client.head(url)
+    return 200 <= response.status_code < 400
+
+
+async def verify_domain_guess(name: str) -> dict[str, Any]:
+    """Guess a domain from a company name and confirm it actually answers
+    before handing it back. A member sees this as a suggestion to confirm
+    or correct, never as something the search silently trusts on its own -
+    so an unreachable guess comes back null rather than fabricated.
+    """
+    guess = guess_domain_from_name(name)
+    if not guess:
+        return {"domain": None, "verified": False}
+    try:
+        if await _head_ok(f"https://{guess}"):
+            return {"domain": guess, "verified": True}
+    except Exception:
+        pass
+    return {"domain": None, "verified": False}

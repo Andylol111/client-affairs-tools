@@ -27,7 +27,7 @@ from app.services.llm import list_models
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.database import init_db
-from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach, yucg_prospects, releases
+from app.routers import contacts, emails, campaigns, analytics, settings, auth, outreach, track, admin, attachments, telemetry, operations, yucgoutreach, yucg_prospects, releases, projects
 from app.routers.campaigns import drain_releasing_campaigns
 from app.services.follow_up_job import run_follow_up_sequences
 from app.services.notification_digest_job import run_notification_digests
@@ -201,6 +201,7 @@ app.include_router(operations.router, prefix="/api/admin/operations", tags=["ope
 app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgoutreach"])
 app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
 app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases"], dependencies=_require_user)
+app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 
 
 @app.get("/api/health")

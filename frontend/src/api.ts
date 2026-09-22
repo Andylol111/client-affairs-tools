@@ -1,5 +1,5 @@
 export type MemberProfile = { projects?: string; experience?: string; role_title?: string; linkedin_url?: string; slack_handle?: string; other_handles?: string };
-export type Project = { id: number; name: string; semester?: string; description?: string; role_in_project?: string };
+export type Project = { id: number; name: string; semester?: string; description?: string; role_in_project?: string; client_name?: string; discussable?: boolean };
 export type Attachment = { id: number; filename: string; display_name?: string; file_size: number };
 export type Template = { id: number; name: string; subject: string; body: string; industry?: string; use_case?: string };
 export type Sequence = { id: number; name: string; steps?: { days_after: number; subject: string; body: string }[] };
@@ -11,6 +11,10 @@ export type Worklist = { owner_email?: string; owner_name?: string; id: number; 
 export type ReleasePerson = { id: number; full_name?: string; title?: string; email?: string; company?: string; company_domain?: string; kept: number; email_status?: string; vendor_check?: string };
 export type Release = { id: number; name: string; status: string; people?: ReleasePerson[]; targets?: { id: number; company: string; company_domain?: string }[] };
 export type InboxItem = { name?: string; email?: string; status?: string; email_verification_status?: string; id: number; subject?: string; body?: string; from_email?: string; received_at?: string };
+export type CitationSuggestions = {
+  projects: { id: number; client_name?: string; description?: string; semester?: string }[];
+  team_experience: { user_name?: string; role_in_project?: string; client_name?: string; semester?: string }[];
+};
 export type Member = { id: number; email: string; name?: string; role: string; is_active: number; last_login?: string };
 export type LogEntry = { user_id?: number; name?: string; id: number; created_at: string; email?: string; user_email?: string; action?: string; details?: string; ip_address?: string; event_type?: string; resource_type?: string };
 export type ApiKey = { key_prefix?: string; id: number; name: string; scopes?: string; created_at?: string; last_used_at?: string };
@@ -456,6 +460,8 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
 export const api = {
   projects: {
     list: () => fetchApi<Project[]>('/api/workspace/projects'),
+    suggestCitations: (company: string) =>
+      fetchApi<CitationSuggestions>(`/api/projects/suggest-citations?company=${encodeURIComponent(company)}`),
   },
   health: () => fetchApi<{ status: string }>('/api/health'),
   ai: {
@@ -934,8 +940,10 @@ export const api = {
     },
     projects: {
       list: () => fetchApi<Project[]>('/api/admin/projects'),
-      create: (data: { name: string; semester?: string; description?: string }) =>
+      create: (data: { name: string; semester?: string; description?: string; client_name?: string; discussable?: boolean }) =>
         fetchApi<Project>('/api/admin/projects', { method: 'POST', body: JSON.stringify(data) }),
+      update: (id: number, data: { name?: string; semester?: string; description?: string; client_name?: string; discussable?: boolean }) =>
+        fetchApi<Project>(`/api/admin/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
       delete: (id: number) => fetchApi<unknown>(`/api/admin/projects/${id}`, { method: 'DELETE' }),
       assignments: (projectId: number) => fetchApi<(Member & { user_id: number; role_in_project?: string })[]>(`/api/admin/projects/${projectId}/assignments`),
       assignUser: (userId: number, data: { project_id: number; role_in_project?: string }) =>
@@ -1200,6 +1208,10 @@ export const api = {
       if (params.hints) q.set('hints', params.hints);
       return fetchApi<RoleSuggestions>(`/api/yucgoutreach/role-suggestions?${q.toString()}`, signal ? { signal } : undefined);
     },
+    domainGuess: (company: string, signal?: AbortSignal) =>
+      fetchApi<{ domain: string | null; verified: boolean }>(
+        `/api/yucgoutreach/domain-guess?company=${encodeURIComponent(company)}`, signal ? { signal } : undefined
+      ),
     listRosters: (q: string, limit = 10) =>
       fetchApi<{ rosters: Record<string, unknown>[] }>(
         `/api/yucg/rosters?q=${encodeURIComponent(q)}&limit=${limit}`
