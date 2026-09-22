@@ -10,10 +10,12 @@ const FOUND = [
   { id: 5, name: 'Grace Hopper', email: '', title: 'Head of Insight', company: 'A24', person_level: 'working' },
 ];
 
-/** What the NEON search finds: two people, one of whom the import refuses. */
+/** What the NEON search finds: two people, one of whom the import refuses,
+ *  and a CEO the page leaves for the member to add on purpose. */
 const PROSPECTS = [
   { id: 91, run_id: 9, first_name: 'Margaret', last_name: 'Hamilton', email: 'margaret@neon.com', title: 'Head of Partnerships', score: 90 },
   { id: 92, run_id: 9, first_name: 'Dorothy', last_name: 'Vaughan', email: 'dorothy@neon.com', title: 'Programme Lead', score: 80 },
+  { id: 93, run_id: 9, first_name: 'Grace', last_name: 'Murray', email: 'grace@neon.com', title: 'Chief Executive Officer', score: 70 },
 ];
 
 const AFTER_ADD = {
@@ -21,7 +23,7 @@ const AFTER_ADD = {
   company: 'NEON', person_level: 'working',
 };
 
-async function mockPicker(page: Page, opts: { busy?: boolean } = {}) {
+async function mockPicker(page: Page, opts: { busy?: boolean; earlierRun?: boolean } = {}) {
   const built: Record<string, unknown>[] = [];
   const drafted: Record<string, unknown>[] = [];
   const runsCreated: Record<string, unknown>[] = [];
@@ -51,6 +53,8 @@ async function mockPicker(page: Page, opts: { busy?: boolean } = {}) {
       } else {
         body = { id: 9, status: 'queued' };
       }
+    } else if (p === '/api/yucgoutreach/runs' && method === 'GET' && opts.earlierRun) {
+      body = [{ id: 9, company_name: 'NEON', status: 'completed', progress_pct: 100, progress_message: 'Done' }];
     } else if (p === '/api/yucgoutreach/runs' && method === 'GET') {
       body = opts.busy && attempted
         ? [{ id: 8, company_name: 'Acme Corp', status: 'running', progress_pct: 30, progress_message: 'Website and web search…' }]
@@ -138,7 +142,7 @@ test('the campaign is written to the people who were ticked, not to everyone fou
   await expect(page).toHaveURL(/contact_ids=1%2C3$/);
 });
 
-test('a company with nobody on file is searched from its lane, and its people are added one by one', async ({ page }) => {
+test('a company with nobody on file is searched from its lane, and the people it finds are ticked, not queued for adding', async ({ page }) => {
   const { runsCreated, imported } = await mockPicker(page);
   await page.goto('/scraper?view=company&companies=A24,NEON');
 
@@ -166,33 +170,23 @@ test('a company with nobody on file is searched from its lane, and its people ar
   expect(runsCreated[0].title_hints).toBe('Head of Partnerships');
   expect(runsCreated[0].max_prospects).toBe(60);
 
-  // Found is not on file. The people the search turned up sit under NEON,
-  // marked as found, and nothing is imported until somebody is added.
+  // A search started here adds the people the default tick would choose as
+  // soon as it finishes, so they are ticked, not waiting under "Add". The
+  // CEO is left under found: reaching one is a deliberate act.
   await expect(neonLane).toHaveAttribute('data-state', 'done', { timeout: 15000 });
-  await expect(neon.getByText('2 found · not on file yet')).toBeVisible();
-  await expect(neonLane.getByTestId('lane-state')).toHaveText('2 found');
-  expect(imported).toHaveLength(0);
-
-  // Clear, then add one person: the selection is exactly that person. A
-  // refresh must not re-tick everyone the member just cleared.
-  await picker.getByRole('button', { name: /^Clear$/ }).click();
-  await expect(pipeline.getByTestId('selected-count')).toHaveText('0 of 4 selected');
-  await neon.getByRole('button', { name: 'Add Margaret Hamilton' }).click();
-
   await expect.poll(() => imported.length).toBe(1);
-  expect(imported[0]).toEqual({ prospect_ids: [91] });
+  expect(imported[0]).toEqual({ prospect_ids: [91, 92] });
   await expect(picker.getByRole('checkbox', { name: 'Write to Margaret Hamilton' })).toBeChecked();
-  await expect(pipeline.getByTestId('selected-count')).toHaveText('1 of 5 selected');
-  // Added, so no longer "found"; Dorothy is still there to be added.
   await expect(neon.locator('[data-found="91"]')).toHaveCount(0);
-  await expect(neon.getByRole('button', { name: 'Add Dorothy Vaughan' })).toBeVisible();
-  await expect(neonLane.getByTestId('lane-state')).toHaveText('2 found · 1 ticked');
 
   // A person the server refuses stays listed with the reason, and cannot be
   // added again.
-  await neon.getByRole('button', { name: 'Add Dorothy Vaughan' }).click();
   await expect(neon.getByText('not added: already worked by Alice')).toBeVisible();
   await expect(neon.getByRole('button', { name: 'Add Dorothy Vaughan' })).toHaveCount(0);
+
+  // The CEO is still one click away, never added for the member.
+  await expect(neon.getByRole('button', { name: 'Add Grace Murray' })).toBeVisible();
+
 });
 
 test('a second search while one is running waits its turn, and a 409 is never shown as an error', async ({ page }) => {
@@ -237,8 +231,10 @@ test('the very senior and names that are not people are shown but never ticked b
       { id: 8, name: 'Katy George', email: 'katy@a24films.com', title: 'Corporate Vice President', company: 'A24', person_level: 'executive' },
       { id: 9, name: 'Transformation Leader', email: 'tl@a24films.com', title: 'Shaping the future of work', company: 'A24', person_level: 'working' },
       { id: 10, name: 'Steve Mathias B1a579', email: 'steve@a24films.com', title: 'Account Manager', company: 'A24', person_level: 'working' },
+      // A proxy names a director by their committee; it read as unknown and was ticked.
+      { id: 11, name: 'Fidji Simo', email: 'fidji@a24films.com', title: 'Compensation and Talent Management Committee', company: 'A24' },
     ],
-    total: 6, limit: 800, offset: 0,
+    total: 7, limit: 800, offset: 0,
   } }));
   await page.goto('/scraper?view=company&companies=A24');
 
@@ -248,7 +244,8 @@ test('the very senior and names that are not people are shown but never ticked b
   // A chief officer and a corporate VP: too senior to answer a cold email.
   await expect(box('Anat Ashkenazi')).not.toBeChecked();
   await expect(box('Katy George')).not.toBeChecked();
-  await expect(picker.getByText('Very senior · rarely replies')).toHaveCount(2);
+  await expect(box('Fidji Simo')).not.toBeChecked();
+  await expect(picker.getByText('Very senior · rarely replies')).toHaveCount(3);
   // A plain vice president is often the right person, and stays.
   await expect(box('Kent Walker')).toBeChecked();
   // Page text stored as a name is flagged; a profile id on a real name is not.
@@ -258,4 +255,15 @@ test('the very senior and names that are not people are shown but never ticked b
   // Still a deliberate choice away.
   await box('Anat Ashkenazi').check();
   await expect(box('Anat Ashkenazi')).toBeChecked();
+});
+
+test("what an earlier visit's search found is shown, never added behind the member's back", async ({ page }) => {
+  const { imported } = await mockPicker(page, { earlierRun: true });
+  await page.goto('/scraper?view=company&companies=A24,NEON');
+
+  const neon = page.locator('[data-section="campaign-pipeline"]').getByTestId('recipient-picker').locator('[data-company="NEON"]');
+  await expect(neon.getByText('3 found · not on file yet')).toBeVisible();
+  await expect(neon.getByRole('button', { name: 'Add Margaret Hamilton' })).toBeVisible();
+  await page.waitForTimeout(1000);
+  expect(imported).toHaveLength(0);
 });

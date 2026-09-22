@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError, api,
-  type DiscoveryProspect, type DiscoveryRun, type ImportOutcome,
+  type Contact, type DiscoveryProspect, type DiscoveryRun, type ImportOutcome,
 } from '../api';
-import { companyKey } from './recipients';
+import { companyKey, isTooSenior, looksLikePerson } from './recipients';
 
 /**
  * The durable Find people searches behind the campaign pipeline, one per
@@ -13,9 +13,11 @@ import { companyKey } from './recipients';
  * the member moved on or reloaded: a run still working on the server had no
  * lane to report to, and its people, once found, were imported wholesale
  * whether or not anybody wanted them. Here the runs are read back from the
- * server on arrival, so a reload resumes the progress bar, and what a run
- * found stays "found" - visible, but not on file - until the member adds the
- * people they actually want.
+ * server on arrival, so a reload resumes the progress bar. What a search
+ * started in this sitting finds is added to the club's contacts straight away
+ * - the people the default tick would choose - so the member ticks rather
+ * than adds; anyone else, and anything an earlier visit's search found, stays
+ * "found" until the member adds them on purpose.
  *
  * The server allows one search per member at a time. Asking for a second
  * one is not a mistake, so it is queued here and started when the first
@@ -87,6 +89,10 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
   const [notice, setNotice] = useState('');
   const queueRef = useRef<Queued[]>([]);
   const loadedProspects = useRef<Set<number>>(new Set());
+  // Searches started here, in this sitting. Their people are added to the
+  // club's contacts as soon as they are found, so they can be ticked without
+  // an "Add all" step; a search from an earlier visit only shows what it found.
+  const startedHere = useRef<Set<number>>(new Set());
   const onImportedRef = useRef(onImported);
   useEffect(() => { onImportedRef.current = onImported; }, [onImported]);
 
@@ -104,17 +110,43 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
     return map;
   }, [runsById]);
 
+  // What an import did to a company's found list: the people who landed leave
+  // it, and anyone refused says why.
+  const applyImport = useCallback((key: string, results: ImportOutcome[]) => {
+    const landed = new Set(results.filter((r) => r.outcome !== 'skipped').map((r) => r.prospect_id));
+    const reasons = new Map(results.filter((r) => r.outcome === 'skipped').map((r) => [r.prospect_id, r.reason || 'skipped']));
+    setFound((prev) => ({
+      ...prev,
+      [key]: (prev[key] || [])
+        .filter((p) => !landed.has(p.id))
+        .map((p) => (reasons.has(p.id) ? { ...p, skippedReason: reasons.get(p.id) } : p)),
+    }));
+  }, []);
+
   const loadFound = useCallback(async (run: DiscoveryRun) => {
     if (loadedProspects.current.has(run.id)) return;
     loadedProspects.current.add(run.id);
     try {
-      const rows = await api.yucgoutreach.listProspects(run.id, 800);
-      setFound((prev) => ({ ...prev, [companyKey(run.company_name)]: usable(rows) }));
+      const rows = usable(await api.yucgoutreach.listProspects(run.id, 800));
+      const key = companyKey(run.company_name);
+      setFound((prev) => ({ ...prev, [key]: rows }));
+      if (!startedHere.current.has(run.id)) return;
+      startedHere.current.delete(run.id);
+      // The same people the default tick would choose: a real name, not too
+      // senior to answer. The rest stay under "found" for a deliberate add.
+      const wanted = rows.filter((p) => {
+        const person = { name: [p.first_name, p.last_name].filter(Boolean).join(' '), title: p.title } as Contact;
+        return looksLikePerson(person) && !isTooSenior(person);
+      });
+      if (!wanted.length) return;
+      const res = await api.yucgoutreach.importContacts(run.id, wanted.map((p) => p.id));
+      applyImport(key, res.results);
+      await onImportedRef.current(res.results);
     } catch (e) {
       loadedProspects.current.delete(run.id);
       setError(e instanceof Error ? e.message : 'Could not read what that search found');
     }
-  }, []);
+  }, [applyImport]);
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -169,6 +201,7 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
         max_prospects: options.maxProspects,
       });
       loadedProspects.current.delete(res.id);
+      startedHere.current.add(res.id);
       setRunsById((prev) => ({
         ...prev,
         [res.id]: {
@@ -273,19 +306,12 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
     setError('');
     try {
       const res = await api.yucgoutreach.importContacts(run.id, wanted);
-      const landed = new Set(res.results.filter((r) => r.outcome !== 'skipped').map((r) => r.prospect_id));
-      const reasons = new Map(res.results.filter((r) => r.outcome === 'skipped').map((r) => [r.prospect_id, r.reason || 'skipped']));
-      setFound((prev) => ({
-        ...prev,
-        [key]: (prev[key] || [])
-          .filter((p) => !landed.has(p.id))
-          .map((p) => (reasons.has(p.id) ? { ...p, skippedReason: reasons.get(p.id) } : p)),
-      }));
+      applyImport(key, res.results);
       await onImportedRef.current(res.results);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not add those people');
     }
-  }, [latestByKey, found]);
+  }, [latestByKey, found, applyImport]);
 
   const exportRun = useCallback(async (runId: number) => {
     setError('');

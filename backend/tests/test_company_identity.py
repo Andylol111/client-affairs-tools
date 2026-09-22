@@ -87,6 +87,24 @@ def profile_id_is_not_a_surname() -> None:
     assert D._split_first_last("Maggie 55937b5a") == ("Maggie", "")
     assert D._split_first_last("55937b5a") == ("", "")
     assert D._split_first_last("Jean Bartik") == ("Jean", "Bartik")
+    assert D._split_first_last("David King, III") == ("David", "King")
+    assert D._split_first_last("Jane Doe PhD") == ("Jane", "Doe")
+
+
+def headline_becomes_a_title() -> None:
+    """Titles as they came back from a live HBO search, before and after."""
+    t = D._clean_title
+    assert t("Matthew McGowan - Director, Content Strategy & Analysis, HBO Max", "Matthew Mcgowan", "HBO") \
+        == "Director, Content Strategy & Analysis, HBO Max"
+    assert t("Brennan Dillon - Marketing Ops. Campaign Management | HBO & HBO Max - Warner Bros. Discovery",
+             "Brennan Dillon", "HBO") == "Marketing Ops. Campaign Management"
+    assert t("Dana Lichtenstein - HBO & HBO Max", "Dana Lichtenstein", "HBO") is None
+    assert t("Maggie Schumann", "Maggie Schumann 55937b5a", "HBO") is None
+    assert t("Mondy Kermani - Talent Relations Coordinator, HBO & HBO Max - Warner Bros. Discovery | LinkedIn",
+             "Mondy Kermani", "HBO") == "Talent Relations Coordinator, HBO & HBO Max"
+    assert t("Director of Operations", "Jean Bartik", "A24") == "Director of Operations"
+    assert t("", "Jean Bartik", "A24") is None
+    assert t("Mike Warwick - Director of", "Mike Warwick", "Shopify") == "Director"
 
 
 def sec_brand_match() -> None:
@@ -272,6 +290,7 @@ def test_company_identity() -> None:
     sec_brand_match()
     domain_must_be_the_company()
     profile_id_is_not_a_surname()
+    headline_becomes_a_title()
     asyncio.run(_async_cases())
 
 
