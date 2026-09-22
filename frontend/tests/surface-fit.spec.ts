@@ -78,7 +78,7 @@ for (const count of [4, 20, 300]) {
     expect(await inViewport(page, LANES)).toBe(true);
     expect(await inViewport(page, SHEET_HEADER)).toBe(true);
 
-    // Step 3, before any preview is rendered.
+    // Step 3, the hand-off to Drafts.
     await rail.getByRole('button', { name: /^Find people/ }).click();
     await rail.getByRole('button', { name: /^Write to these/ }).click();
     await expect(pipeline.getByTestId('recipient-picker')).toHaveAttribute('data-mode', 'review');
@@ -93,17 +93,6 @@ for (const count of [4, 20, 300]) {
     }));
     expect(scrolls.page).toBeLessThanOrEqual(0);
     expect(scrolls.sheet).toBe('visible');
-
-    // With a long preview at step 3, the sheet header is one aside scroll away.
-    await rail.getByLabel('Subject').fill('A long one');
-    await rail.getByLabel('Message', { exact: true }).fill(LONG_BODY);
-    await rail.getByRole('button', { name: /Preview the real message/ }).click();
-    await expect(pipeline.getByRole('button', { name: 'Looks right' })).toBeVisible();
-    await page.evaluate(() => {
-      const aside = document.querySelector('[data-section="campaign-pipeline"] [data-surface]')!;
-      aside.scrollTop = aside.scrollHeight;
-    });
-    expect(await inViewport(page, SHEET_HEADER)).toBe(true);
   });
 }
 

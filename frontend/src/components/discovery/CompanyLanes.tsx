@@ -44,9 +44,8 @@ function stateText(lane: Lane): string {
   }
 }
 
-export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, onExport, onDelete }: {
+export default function CompanyLanes({ lanes, focused, onFocus, onFind, onExport, onDelete }: {
   lanes: Lane[];
-  built: boolean;
   /** The lane whose vocabulary the step's search controls are about. */
   focused: string | null;
   onFocus: (company: string) => void;
@@ -88,7 +87,13 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
               key={lane.company}
               data-lane={lane.company}
               data-state={lane.run.state}
-              onMouseEnter={() => onFocus(lane.company)}
+              data-focused={isFocused || undefined}
+              // Focus follows a click or the keyboard, never the pointer.
+              // Focusing a lane re-renders the rail and can raise or drop the
+              // domain warning above this panel, so a hover that focused
+              // shifted the lanes under a still or scrolling pointer: the next
+              // lane was entered, focused, and the panel jumped again, with
+              // the hover and focus highlights on two different rows.
               onFocus={() => onFocus(lane.company)}
               onClick={() => onFocus(lane.company)}
               // The graph (112px) plus the two fixed alignment columns
@@ -99,8 +104,8 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
               // wherever the overflow landed, so a tap could land on a
               // completely different lane's button. Below `sm` the row wraps
               // to two lines and grows to fit instead.
-              className={`group flex flex-wrap sm:flex-nowrap sm:h-[34px] items-center gap-x-2 gap-y-1 rounded-lg px-1 py-1.5 sm:py-0 -mx-1 ${
-                isFocused ? 'bg-pale-sky/40' : 'hover:bg-pale-sky/20'}`}
+              className={`group flex cursor-pointer flex-wrap sm:flex-nowrap sm:h-[34px] items-center gap-x-2 gap-y-1 rounded-lg px-1 py-1.5 sm:py-0 -mx-1 ${
+                isFocused ? 'bg-pale-sky/40' : 'hover:bg-pale-sky/15'}`}
             >
               {/* Purely decorative - the commit-graph metaphor is a desktop
                   flourish with room to spare. A phone does not have that room. */}
@@ -142,26 +147,28 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
                 {stateText(lane)}
                 {lane.ticked > 0 ? ` · ${lane.ticked} ticked` : ''}
               </span>
-              {/* Actions hide until hover or keyboard focus on a real pointer
-                  device, so a screenful of lanes is not a screenful of
-                  buttons. That trick actively breaks touch: there is no
-                  hover state to reveal them, and Playwright's mobile-viewport
-                  suite caught exactly this - the button existed at opacity 0
-                  and nothing ever made it tappable. Below the `sm` breakpoint
-                  the actions are always visible instead. Fixed width and
-                  right-aligned so the "..." menu appearing or not for a given
-                  row never moves anything to its left. */}
-              <span className="flex shrink-0 sm:w-36 items-center sm:justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:focus-within:opacity-100">
+              {/* The search is the lane's main action, so it is always on
+                  screen: hidden until hover it read as a lane with nothing to
+                  do. Only the secondary menu hides until hover or keyboard
+                  focus on a real pointer device (touch has no hover, so below
+                  `sm` it is always visible too). Fixed width and right-aligned
+                  so the menu appearing or not never moves anything left. */}
+              <span className="flex shrink-0 sm:w-44 items-center sm:justify-end gap-1">
                 <button
                   type="button"
                   disabled={active}
                   onClick={(e) => { e.stopPropagation(); onFind(lane.company); }}
-                  className="ui-button ui-button--ghost ui-button--sm"
+                  // The row is 34px at `sm`; the stock small button is 36px and
+                  // made neighbouring lanes' buttons touch. Below `sm` the row
+                  // grows, so the full tap target stays.
+                  className={`ui-button ui-button--sm sm:h-7 sm:min-h-0! sm:py-0! ${lane.found > 0 ? 'ui-button--secondary' : 'ui-button--primary'}`}
+                  title={lane.found > 0 ? `Search ${lane.company} again for more people` : `Search ${lane.company} for people`}
                 >
-                  {active ? 'Searching' : lane.found > 0 ? 'Find more' : 'Find people'}
+                  {active ? 'Searching…' : lane.found > 0 ? '+ Find more people' : 'Find people'}
                 </button>
                 {runId !== undefined && (
-                  <details className="relative" onClick={(e) => e.stopPropagation()}>
+                  <details className="relative sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:focus-within:opacity-100 open:opacity-100"
+                           onClick={(e) => e.stopPropagation()}>
                     <summary
                       className="list-none cursor-pointer rounded-md px-2 py-0.5 text-sm leading-none text-slate-600 hover:bg-pale-sky/60 [&::-webkit-details-marker]:hidden"
                       aria-label={`More for ${lane.company}`}
@@ -197,10 +204,10 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
           <svg width={GRAPH_W} height={ROW} aria-hidden="true" className="shrink-0">
             <line x1={TRUNK_X} y1={0} x2={TRUNK_X} y2={ROW / 2} stroke="#1A2F5A" strokeWidth={2}
                   strokeDasharray={hidden > 0 ? '2 3' : undefined} />
-            <circle cx={TRUNK_X} cy={ROW / 2} r={6} fill={built ? '#1A2F5A' : '#FFFFFF'}
+            <circle cx={TRUNK_X} cy={ROW / 2} r={6} fill="#FFFFFF"
                     stroke="#1A2F5A" strokeWidth={2} />
           </svg>
-          <span className="text-[13px] font-semibold text-deep-navy">{built ? 'Campaign built' : 'One campaign'}</span>
+          <span className="text-[13px] font-semibold text-deep-navy">One campaign</span>
           {(hidden > 0 || showAll) && (
             <button
               type="button"

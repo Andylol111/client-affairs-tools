@@ -135,9 +135,50 @@ def every_offered_angle_can_produce_a_valid_draft():
             assert 'one concrete call to action' in str(exc)
 
 
+def advisory_drafts_propose_projects_from_the_club_notes():
+    """The advisory angle proposes what a team could build, as offers.
+
+    Group templates read as filler ("I am writing about {company}"). The
+    advisory draft is written per person and proposes two or three scoped
+    projects, chosen with the register's notes on the company - which reach
+    the model as data, not as claims to restate.
+    """
+    from app.services.ollama_email_service import ANGLE_INSTRUCTIONS
+
+    assert 'never as a claim' in ANGLE_INSTRUCTIONS['advisory']
+    body = (
+        '<p>Dear Maya,</p>'
+        '<p>I am a sophomore on the Yale Undergraduate Consulting Group, and I am writing because a student '
+        'team could take on a scoped question for Example Co this semester. Three projects we could build '
+        'with your strategy group:</p>'
+        '<ul>'
+        '<li><strong>Market-entry scan:</strong> we could map two adjacent customer segments and the '
+        'buying process in each, so the team can compare where a pilot would land first.</li>'
+        '<li><strong>Pricing study:</strong> a team could interview customers and model how packaging '
+        'choices change willingness to pay across the current product tiers.</li>'
+        '<li><strong>Operations review:</strong> we could trace one fulfilment workflow end to end and '
+        'set out where handoffs slow it down.</li>'
+        '</ul>'
+        '<p>Each would be scoped with you before the term starts and run by supervised undergraduates. '
+        'Would you be open to a short call to see whether any of these is useful?</p>'
+    )
+    context = 'Consumer hardware. Expanding into services.'
+    with patch('app.services.llm.complete_json', return_value={
+        'subject': 'Three projects a Yale team could build', 'body': body, 'source_ids': [],
+    }) as complete:
+        subject, out = generate_email('Maya Chen', 'Strategy lead', 'Example Co', 'example.com',
+                                      angle='advisory', length='standard', company_context=context)
+    assert '<ul>' in out and subject.startswith('Three projects')
+    prompt = complete.call_args.args[0]
+    assert '"company_context":"Consumer hardware. Expanding into services."' in prompt
+    assert 'propose two or three projects' in prompt
+    assert 'company_context is the club' in EMAIL_SYSTEM_PROMPT
+
+
 if __name__ == '__main__':
     tests()
     benign_numbers_are_not_claims()
     prompt_forbids_the_closing_the_validator_rejects()
     every_offered_angle_can_produce_a_valid_draft()
+    advisory_drafts_propose_projects_from_the_club_notes()
     print('email generation contract: ok')

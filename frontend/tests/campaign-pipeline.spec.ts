@@ -66,8 +66,8 @@ async function mockPipeline(page: Page) {
   return { built, sequences };
 }
 
-test('companies to a reviewable campaign without leaving the page', async ({ page }) => {
-  const { built, sequences } = await mockPipeline(page);
+test('companies to people, then each person handed to Drafts', async ({ page }) => {
+  await mockPipeline(page);
   await page.goto('/scraper?view=company');
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
@@ -84,62 +84,12 @@ test('companies to a reviewable campaign without leaving the page', async ({ pag
   await expect(pipeline.getByText('Klara Dan')).toBeVisible();
   await rail.getByRole('button', { name: /^Write to these/ }).click();
 
-  // 3. One message, rendered per recipient. The preview is produced by the
-  //    same call that will create the drafts, so it cannot promise something
-  //    different from what gets written.
-  await rail.getByLabel('Subject').fill('A24 and Yale');
-  await rail.getByLabel('Message', { exact: true }).fill('Hi {first}, about {company}.');
-  await rail.getByRole('button', { name: /Preview the real message/ }).click();
-
-  await expect(pipeline.getByText('2 of 3 ready · 1 held')).toBeVisible();
-  await expect(pipeline.getByText('Hi Jean, about A24.')).toBeVisible();
-  // A recipient who cannot be personalised is named, not silently dropped and
-  // not sent "Hi ,".
-  await expect(pipeline.getByText(/info@a24films\.com has no first on record/)).toBeVisible();
-  await pipeline.getByRole('button', { name: 'Looks right' }).click();
-
-  // 4. Follow-up is opt-in, written here, and stops on a reply.
-  await rail.getByLabel(/Send one follow-up/).check();
-  await rail.getByLabel('Follow-up subject').fill('Following up on A24');
-  await rail.getByLabel('Follow-up message').fill('Hi {first}, circling back.');
-  await rail.getByRole('button', { name: /^Build the campaign/ }).click();
-
-  await expect(pipeline.getByText(/Campaign built with 2 draft/)).toBeVisible();
-  // Nothing is sent by building: releasing stays a separate, deliberate act.
-  await expect(pipeline.getByText('Nothing has been sent.')).toBeVisible();
-
-  expect(built).toHaveLength(1);
-  expect(built[0].subject).toBe('A24 and Yale');
-  expect(built[0].companies).toEqual(['A24']);
-  expect(sequences).toHaveLength(1);
-  expect(sequences[0].steps).toEqual([
-    { days_after: 4, subject: 'Following up on A24', body: 'Hi {first}, circling back.' },
-  ]);
-});
-
-test('a group handed over from Studio arrives loaded, and AI drafts one message for all of them', async ({ page }) => {
-  await mockPipeline(page);
-  await page.route('**/api/campaigns/draft-template', route => route.fulfill({
-    json: { subject: 'A24 and a Yale student team', body: 'Hi {first},\n\nAbout {company}. Would you be open to a short call?' },
-  }));
-
-  // Studio ticks people, not companies, so the handoff carries the companies
-  // they work at. Arriving this way skips the choosing step, which has
-  // already happened.
-  await page.goto('/scraper?view=company&companies=A24');
-  const pipeline = page.locator('[data-section="campaign-pipeline"]');
-  const rail = pipeline.locator('[data-rail]');
-  await expect(pipeline.getByText('Jean Bartik')).toBeVisible();
-
-  await rail.getByRole('button', { name: /^Write to these/ }).click();
-  await rail.getByLabel('Email goal').fill('offer a ten-week student team');
-  await rail.getByRole('button', { name: /^Draft one message for these/ }).click();
-
-  // One draft for the group, holding fields rather than a name the model
-  // invented for somebody it was not writing to.
-  await expect(rail.getByLabel('Subject')).toHaveValue('A24 and a Yale student team');
-  await expect(rail.getByLabel('Message', { exact: true })).toHaveValue(/Hi \{first\},/);
-  await expect(rail.getByLabel('Message', { exact: true })).toHaveValue(/About \{company\}/);
+  // 3. No shared template: the exact people ticked go to Drafts, where each
+  //    gets an email of their own.
+  await expect(rail.getByText(/advisory note on two\s+or three projects/)).toBeVisible();
+  await expect(rail.getByLabel('Subject')).toHaveCount(0);
+  await rail.getByRole('button', { name: /^Write to these \d+ in Drafts/ }).click();
+  await expect(page).toHaveURL(/\/studio\?companies=A24&contact_ids=\d+(%2C\d+)*$/);
 });
 
 test('a company that is not on file anywhere can still be worked', async ({ page }) => {
@@ -201,8 +151,7 @@ test('a company with no confirmed domain gets an honest, non-blocking search war
   );
   // Advisory only: the lane's own search button stays usable.
   const lane = pipeline.locator('[data-lane="A24"]');
-  await lane.hover();
-  await expect(lane.getByRole('button', { name: /^Find (more|people)$/ })).toBeEnabled();
+  await expect(lane.getByRole('button', { name: /^(\+ )?Find (more )?people$/ })).toBeEnabled();
 });
 
 test('a verified domain guess offers a one-click accept that fills the domain field', async ({ page }) => {
@@ -216,20 +165,4 @@ test('a verified domain guess offers a one-click accept that fills the domain fi
   await expect(suggestion).toContainText('meta.com', { timeout: 10_000 });
   await suggestion.getByRole('button', { name: 'Use it' }).click();
   await expect(rail.getByLabel('Company domain')).toHaveValue('meta.com');
-});
-
-test('suggest what to cite appends real past-project citations without erasing what was already typed', async ({ page }) => {
-  await mockPipeline(page);
-  await page.goto('/scraper?view=company&companies=A24');
-
-  const pipeline = page.locator('[data-section="campaign-pipeline"]');
-  const rail = pipeline.locator('[data-rail]');
-  await rail.getByRole('button', { name: /Write the message/ }).click();
-  await rail.getByLabel('Verified proof').fill('We follow A24 closely.');
-  await rail.getByRole('button', { name: 'Suggest what to cite' }).click();
-
-  const proof = rail.getByLabel('Verified proof');
-  await expect(proof).toHaveValue(/We follow A24 closely\./, { timeout: 10_000 });
-  await expect(proof).toHaveValue(/Past clients we can discuss: Google\./);
-  await expect(proof).toHaveValue(/Aaron Combs \(Market Analyst, Adidas\)/);
 });

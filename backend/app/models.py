@@ -40,7 +40,7 @@ class EmailGenerateRequest(BaseModel):
     contact_id: int
     tone: str = "professional"  # professional, conversational, bold, empathetic, authority
     length: str = "short"  # ultra-short, short, standard
-    angle: str = "pain_point"  # pain_point, social_proof, case_study, compliment
+    angle: str = "pain_point"  # pain_point, social_proof, case_study, compliment, advisory
     custom_instructions: Optional[str] = None
     value_proposition: Optional[str] = None
     model: Optional[str] = None
