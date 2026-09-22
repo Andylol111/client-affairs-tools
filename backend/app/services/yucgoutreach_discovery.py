@@ -153,6 +153,42 @@ def _title_hints_from_spec(spec: dict[str, Any]) -> str:
     return ""
 
 
+def _grounded_at_company(
+    name: str, title: str, results: list[dict[str, Any]], company_name: str, domain: str,
+) -> str:
+    """Why this search reading believes the person works at the company.
+
+    Returns the evidence kind, or "" when the results only prove that the name
+    and the company appeared on the same page. The model does not get to be the
+    evidence: the page it read has to say so.
+    """
+    from app.services.web_contact_discovery import (
+        MENTION_WINDOW, PUBLIC_OFFICE_TITLE, _host_is_company, _names_the_company,
+    )
+
+    if PUBLIC_OFFICE_TITLE.search(f"{title} {name}"):
+        return ""
+    needle = re.sub(r"\s+", " ", name).strip().lower()
+    if not needle:
+        return ""
+    for r in results:
+        url = str(r.get("url") or "")
+        blob = f"{r.get('title') or ''}\n{r.get('content') or ''}"
+        low = blob.lower()
+        at = low.find(needle)
+        if at < 0:
+            continue
+        if PUBLIC_OFFICE_TITLE.search(blob[max(0, at - MENTION_WINDOW):at + MENTION_WINDOW]):
+            continue
+        if _host_is_company(url, domain):
+            return "company_site"
+        on_profile = "linkedin.com/in/" in url.lower()
+        near = blob if on_profile else blob[max(0, at - MENTION_WINDOW):at + MENTION_WINDOW]
+        if _names_the_company(near, company_name, domain):
+            return "linkedin_profile" if on_profile else "press_mention"
+    return ""
+
+
 async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str], title_hints: str = "") -> list[dict]:
     """Supplement merged list with Tavily+LLM name extraction when Apify/web yield few rows."""
     from app.services.web_fetch import web_search_configured
@@ -191,6 +227,15 @@ Results:
         name = str(p.get("full_name") or p.get("name") or "").strip()
         if not looks_like_person_name(name, company_name):
             continue
+        title = str(p.get("title") or "")[:300]
+        # The model is reading search snippets, and a search for a company
+        # returns pages that merely mention it - a bill, a lawsuit, a rival's
+        # hire. Without this check every name in that reading became
+        # first.last@<company>, which is how a US Congresswoman turned into a
+        # chewy.com contact. The page has to tie this person to this company.
+        evidence = _grounded_at_company(name, title, results, company_name, dom)
+        if not evidence:
+            continue
         email = ""
         if dom:
             email = build_email_for_person_sync(name, dom, custom_patterns=custom_patterns) or ""
@@ -200,12 +245,13 @@ Results:
             {
                 "name": name,
                 "email": sanitize_email(email),
-                "title": str(p.get("title") or "")[:300],
+                "title": title,
                 "company": company_name,
                 "company_domain": dom,
                 "linkedin_url": str(p.get("linkedin_url") or "").strip() or None,
                 "contact_source": "web_discovery",
-                "discovery_context": "Tavily name seed supplement",
+                "affiliation_evidence": evidence,
+                "discovery_context": f"Named in search results, tied to {company_name} ({evidence})",
             }
         )
         if len(out) >= max_n:
@@ -393,25 +439,40 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             return []
         return await discover_contacts_from_web(cn, domain or None, max_people=web_max, title_hints=title_hints)
 
-    domain_contacts, web_contacts, meta = await asyncio.gather(
+    async def _roster() -> tuple[list[dict], str]:
+        """The club's memory of this company: SEC and Companies House officers.
+        It used to run after the crawl and the web search had both finished,
+        which is a cold SEC fetch added to the end of every search rather than
+        alongside it."""
+        try:
+            from app.services.roster_email import (
+                cached_roster_contacts, refresh_roster_on_demand, roster_refresh_note,
+            )
+
+            rows = await cached_roster_contacts(company, domain)
+            if not rows:
+                rows = await refresh_roster_on_demand(company, domain)
+            return rows, await roster_refresh_note(company, domain)
+        except Exception:
+            logger.exception("roster cache-first lookup failed")
+            return [], ""
+
+    async def _seeds() -> list[dict]:
+        """A second reading of the search results, which used to start only
+        after the merge decided the other sources had come back thin. The point
+        of the step is more people, so it runs with the rest and what it finds
+        is used if it is new."""
+        return await _tavily_name_seeds(company, domain, max_prospects, custom_patterns, title_hints)
+
+    domain_contacts, web_contacts, meta, (roster_contacts, roster_note), seeded = await asyncio.gather(
         _domain(),
         _web(),
         _company_meta(company, domain),
+        _roster(),
+        _seeds(),
     )
     kw1 = meta.get("keywords") or ""
     kw2 = meta.get("keywords_2") or ""
-    roster_contacts: list[dict] = []
-    roster_note = ""
-    try:
-        from app.services.roster_email import cached_roster_contacts, refresh_roster_on_demand, roster_refresh_note
-
-        roster_contacts = await cached_roster_contacts(company, domain)
-        if not roster_contacts:
-            # Cold club memory for this company: SEC-refresh it now instead of waiting on the drain.
-            roster_contacts = await refresh_roster_on_demand(company, domain)
-        roster_note = await roster_refresh_note(company, domain)
-    except Exception:
-        logger.exception("roster cache-first lookup failed")
     if roster_contacts:
         domain_contacts = domain_contacts + roster_contacts
     n_site = max(0, len(domain_contacts) - len(roster_contacts))
@@ -442,10 +503,11 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         web_contacts=web_contacts,
     )
 
-    if len(merged) < max_prospects:
-        extra = await _tavily_name_seeds(company, domain, max_prospects - len(merged), custom_patterns, title_hints)
+    # Seeds were fetched alongside the other sources; anybody they found who is
+    # not already here is a person the crawl and the roster missed.
+    if seeded:
         seen = {sanitize_email(c.get("email") or "").lower() for c in merged if c.get("email")}
-        for row in extra:
+        for row in seeded:
             em = sanitize_email(row.get("email") or "").lower()
             if em and em not in seen and is_valid_person_contact(row, company_name=company, domain=domain):
                 seen.add(em)

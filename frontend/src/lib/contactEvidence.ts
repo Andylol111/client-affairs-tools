@@ -1,5 +1,3 @@
-import type { MailboxAssessment } from '../api';
-
 export const evidenceLabels: Record<string, string> = {
   unreviewed: 'Unreviewed', plausible: 'Plausible', corroborated: 'Corroborated', conflicted: 'Conflicting sources', rejected: 'Rejected',
   current_source_observed: 'Current employment observed', current_inferred: 'Current employment inferred', stale: 'Stale evidence', former: 'Former employee', unknown: 'Unknown',
@@ -13,11 +11,6 @@ export function evidenceLabel(value?: string | null): string {
   return value ? evidenceLabels[value] || value.replaceAll('_', ' ') : 'Not recorded';
 }
 
-// Old route checks do not establish a person or a confirmed mailbox.
-export function legacyMailboxLabel(status?: string | null): string {
-  const states: Record<string, MailboxAssessment> = { mx: 'mail_route_available', likely_valid: 'mail_route_available', valid: 'inconclusive', invalid: 'inconclusive', risky: 'accept_all_or_risky', unknown: 'not_checked' };
-  return evidenceLabel(status ? states[status] || status : 'not_checked');
-}
 export function evidenceTime(value?: string | number | null): string {
   if (!value) return 'Not recorded';
   const date = new Date(typeof value === 'number' ? value * 1000 : /^\d{4}-\d{2}-\d{2} \d/.test(value) ? `${value.replace(' ', 'T')}Z` : value);

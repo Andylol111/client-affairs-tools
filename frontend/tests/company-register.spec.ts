@@ -9,7 +9,7 @@ const EMPLOYER_ROW = { id: 4, source: 'dol_5500', tier: 'us_employer', country: 
 const NONPROFIT_ROW = { id: 5, source: 'irs_990', tier: 'us_nonprofit', country: 'US', company_name: 'Cheekwood Botanical Garden', sector_label: 'Arts, Culture and Humanities', region: 'TN', employees: 287, employees_source: 'form_990_w3_employee_count', last_event_at: '2024-12-01', last_event_amount: null, last_event_kind: 'form_990_filed', officer_count: 12, metadata: { city: 'Nashville', revenue_range: '$18.4M revenue', buys_outside_advice: '$56k/yr on outside professional fees' } };
 
 const ROWS = [
-  { id: 1, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Gilgamesh Pharma Inc.', sector_label: 'Pharmaceuticals', region: 'New York', employees: null, employees_source: null, last_event_at: '2026-03-27', last_event_amount: 15000000, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: { revenue_range: 'No Revenues' } },
+  { id: 1, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Gilgamesh Pharma Inc.', company_domain: 'gilgameshpharma.com', sector_label: 'Pharmaceuticals', region: 'New York', employees: null, employees_source: null, last_event_at: '2026-03-27', last_event_amount: 15000000, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: { revenue_range: 'No Revenues' } },
   { id: 2, source: 'sec_form_d', tier: 'us_private', country: 'US', company_name: 'Lucem Health, Inc.', sector_label: 'Other Technology', region: 'North Carolina', employees: null, employees_source: null, last_event_at: '2026-03-26', last_event_amount: 8397541, last_event_kind: 'reg_d_offering', officer_count: 6, metadata: {} },
 ];
 
@@ -17,6 +17,7 @@ async function mockRegister(page: Page) {
   const calls: string[] = [];
   const fetched: string[] = [];
   const created: Record<string, number[]>[] = [];
+  const runsCreated: Record<string, unknown>[] = [];
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -47,7 +48,12 @@ async function mockRegister(page: Page) {
       created.push(route.request().postDataJSON());
       body = { id: 77, status: 'draft', targets: (route.request().postDataJSON().register_ids || []).length };
     }
+    else if (path === '/api/yucgoutreach/runs' && route.request().method() === 'POST') {
+      runsCreated.push(route.request().postDataJSON());
+      body = { id: 9, status: 'queued' };
+    }
     else if (path === '/api/yucgoutreach/runs') body = [];
+    else if (path === '/api/yucgoutreach/role-suggestions') body = { company: url.searchParams.get('company'), roles: [], equivalents: [], sources: {} };
     else if (path === '/api/outreach/flows') body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
     else if (path === '/api/yucg/prospects') body = { prospects: [], count: 0 };
@@ -57,11 +63,11 @@ async function mockRegister(page: Page) {
     else if (/\/companies\/summary$|\/sequences$|\/custom-formats$/.test(path)) body = [];
     await route.fulfill({ json: body });
   });
-  return { calls, fetched, created };
+  return { calls, fetched, created, runsCreated };
 }
 
 test('register browses the free public pool and hands a company to Find people', async ({ page }) => {
-  const { calls } = await mockRegister(page);
+  const { calls, runsCreated } = await mockRegister(page);
   await page.goto('/scraper');
   await page.getByRole('tab', { name: 'Companies' }).click();
 
@@ -97,12 +103,26 @@ test('register browses the free public pool and hands a company to Find people',
   await page.getByRole('button', { name: 'US listed' }).click();
   await expect.poll(() => calls.some(search => search.includes('tier=us_public'))).toBe(true);
 
-  // Handing a company to Find people fills the form.
+  // Handing a company to Find people opens the pipeline on it: the company
+  // has its lane and its group in the sheet, and the domain the register
+  // holds travels with it so the search is not left to guess one.
   await page.getByRole('button', { name: 'Recently funded' }).click();
   await page.getByLabel('Sector', { exact: true }).selectOption('');   // clear the sector narrowing
   await expect(page.getByText('Gilgamesh Pharma Inc.')).toBeVisible();
   await page.getByRole('button', { name: 'Find people here' }).first().click();
-  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('Gilgamesh Pharma Inc.');
+  await expect(page).toHaveURL(/view=company&company=Gilgamesh.*domain=gilgameshpharma\.com/);
+  const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  const lane = pipeline.locator('[data-lane="Gilgamesh Pharma Inc."]');
+  await expect(lane).toBeVisible();
+  await expect(pipeline.getByTestId('recipient-picker').locator('[data-company="Gilgamesh Pharma Inc."]')).toBeVisible();
+  // The company came with its domain, so the step does not ask for one.
+  await pipeline.locator('[data-rail]').getByText('Search settings').click();
+  await expect(pipeline.getByLabel('Company domain')).toHaveCount(0);
+  await lane.hover();
+  await lane.getByRole('button', { name: 'Find people' }).click();
+  await expect.poll(() => runsCreated.length).toBe(1);
+  expect(runsCreated[0].company_name).toBe('Gilgamesh Pharma Inc.');
+  expect(runsCreated[0].company_domain).toBe('gilgameshpharma.com');
   await page.screenshot({ path: 'test-results/company-register.png', fullPage: true });
 });
 

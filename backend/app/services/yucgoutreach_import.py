@@ -60,12 +60,23 @@ async def enqueue_discovery_run(
     return int(cur.lastrowid)
 
 
-async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict[str, Any]:
+async def import_run_prospects(
+    db, *, run: dict[str, Any], user_id: int, prospect_ids: list[int] | None = None,
+) -> dict[str, Any]:
     """Copy a completed run's non-junk prospects into the shared contacts
     table for this member. Returns counts plus the ids of every contact this
     member can now use (created or updated), so a caller can attach them to
-    a campaign without a second lookup. The caller commits."""
+    a campaign without a second lookup, and one outcome per prospect so the
+    picker can move exactly the people that landed. The caller commits.
+
+    ``prospect_ids`` narrows the import to those rows: a member adding one
+    person from a search must not silently import the other fifty-nine. Ids
+    from another run are reported as skipped rather than imported - the run
+    is the ownership boundary and the caller has already checked it."""
     run_id = int(run["id"])
+    wanted: list[int] | None = None
+    if prospect_ids is not None:
+        wanted = sorted({int(pid) for pid in prospect_ids})
     cur = await db.execute(
         """SELECT * FROM yucgoutreach_prospects
            WHERE run_id = ? AND email IS NOT NULL AND email != ''
@@ -74,13 +85,35 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
         (run_id,),
     )
     rows = [row_to_dict(r) for r in await cur.fetchall()]
-    created = updated = skipped = 0
+    results: list[dict[str, Any]] = []
+    if wanted is not None:
+        eligible = {int(r["id"]): r for r in rows}
+        in_run = {
+            int(r["id"]) for r in await (await db.execute(
+                "SELECT id FROM yucgoutreach_prospects WHERE run_id = ?", (run_id,),
+            )).fetchall()
+        }
+        rows = [eligible[pid] for pid in wanted if pid in eligible]
+        for pid in wanted:
+            if pid in eligible:
+                continue
+            results.append({
+                "prospect_id": pid, "contact_id": None, "outcome": "skipped",
+                "reason": "no usable address" if pid in in_run else "not in this run",
+            })
+    created = updated = 0
+    skipped = len(results)
     held_by: dict[str, int] = {}
     contact_ids: list[int] = []
     for pr in rows:
         pr["mailbox_assessment"] = await assess_address(pr.get("email") or "", actor_id=user_id)
     company = run.get("company_name") or ""
     domain = normalize_domain(run.get("company_domain") or "")
+
+    def _skip(pr: dict[str, Any], reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        results.append({"prospect_id": int(pr["id"]), "contact_id": None, "outcome": "skipped", "reason": reason})
 
     def _row(pr: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -112,7 +145,7 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
         email = row["email"]
         name = row["name"]
         if not email or not is_valid_person_contact(row, company_name=company, domain=domain):
-            skipped += 1
+            _skip(pr, "not a person's work address")
             continue
         ex = await (await db.execute(
             """SELECT c.id, c.owner_id, COALESCE(u.name, u.email) AS owner
@@ -123,8 +156,9 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
                 # Silently dropping these is how two members discover each
                 # other from a client. Count them by owner so the caller can
                 # say who to ask.
-                held_by[ex["owner"] or "another member"] = held_by.get(ex["owner"] or "another member", 0) + 1
-                skipped += 1
+                owner = ex["owner"] or "another member"
+                held_by[owner] = held_by.get(owner, 0) + 1
+                _skip(pr, f"already worked by {owner}")
                 continue
             await db.execute(
                 """UPDATE contacts SET name = COALESCE(NULLIF(name, ''), ?),
@@ -152,6 +186,7 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
             )
             updated += 1
             contact_ids.append(int(ex["id"]))
+            results.append({"prospect_id": int(pr["id"]), "contact_id": int(ex["id"]), "outcome": "updated"})
         else:
             cursor = await db.execute(
                 """INSERT INTO contacts (name, email, title, company, company_domain, linkedin_url,
@@ -174,6 +209,7 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
             )
             created += 1
             contact_ids.append(int(cursor.lastrowid))
+            results.append({"prospect_id": int(pr["id"]), "contact_id": int(cursor.lastrowid), "outcome": "created"})
 
     evidence_rows = []
     for pr in rows:
@@ -193,6 +229,7 @@ async def import_run_prospects(db, *, run: dict[str, Any], user_id: int) -> dict
         "updated": updated,
         "skipped": skipped,
         "contact_ids": contact_ids,
+        "results": results,
         "evidence": evidence_rows,
         # Who to ask, rather than an unexplained smaller number.
         "held_by": held_by,

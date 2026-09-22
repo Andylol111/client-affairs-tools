@@ -84,29 +84,6 @@ export type FirecrawlStatus = {
   effective: { fetch: WebProbeResult; search: WebProbeResult; note: string };
 };
 
-export type OutreachFlowStatus = 'discovering' | 'importing' | 'drafting' | 'ready' | 'failed';
-export type OutreachFlow = {
-  id: number;
-  company_name: string;
-  company_domain?: string | null;
-  title_hints?: string | null;
-  angle?: string | null;
-  max_contacts?: number;
-  status: OutreachFlowStatus;
-  progress_pct: number;
-  progress_message?: string | null;
-  run_id?: number | null;
-  prospects_count?: number | null;
-  imported_count?: number | null;
-  drafted_count?: number | null;
-  campaign_id?: number | null;
-  campaign_name?: string | null;
-  campaign_status?: string | null;
-  error_message?: string | null;
-  created_at?: string;
-  updated_at?: string;
-  completed_at?: string | null;
-};
 
 export type RoleSuggestion = { title: string; count: number; source: 'roster' | 'run' | 'catalog' | 'jobs' | 'search' };
 export type RoleEquivalent = { asked: string; at_company: string[]; note: string };
@@ -116,6 +93,48 @@ export type RoleSuggestions = {
   equivalents: RoleEquivalent[];
   note?: string | null;
   sources: { run: number; roster: number; catalog: number; search: number; jobs: number };
+};
+
+export type DiscoveryRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+/** One durable Find people search, as the runs endpoints return it. */
+export type DiscoveryRun = {
+  id: number;
+  company_name: string;
+  company_domain?: string | null;
+  status: DiscoveryRunStatus | string;
+  progress_pct?: number | null;
+  progress_message?: string | null;
+  prospects_count?: number | null;
+  max_prospects?: number | null;
+  error_message?: string | null;
+  created_at?: string | null;
+};
+/** A person a run found, before anyone chose to put them on file. */
+export type DiscoveryProspect = {
+  id: number;
+  run_id: number;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  title?: string | null;
+  company?: string | null;
+  linkedin_url?: string | null;
+  contact_source?: string | null;
+  ai_verdict?: string | null;
+  ai_reason?: string | null;
+  score?: number | null;
+};
+export type ImportOutcome = {
+  prospect_id: number;
+  contact_id: number | null;
+  outcome: 'created' | 'updated' | 'skipped';
+  reason?: string;
+};
+export type ImportOutcomes = {
+  created: number;
+  updated: number;
+  skipped: number;
+  results: ImportOutcome[];
 };
 
 export type CompanySummaryRow = {
@@ -514,22 +533,6 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
 }
 
 export const api = {
-  research: {
-    briefs: () => fetchApi<{ items: ResearchBrief[] }>('/api/research/briefs'),
-    saveBrief: (data: Omit<ResearchBrief, 'id' | 'created_at'>, id?: number) =>
-      fetchApi<ResearchBrief>(`/api/research/briefs${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(data) }),
-    companies: (id: number) => fetchApi<{ items: ResearchCompany[] }>(`/api/research/briefs/${id}/companies`),
-    researchCompanies: (id: number) => fetchApi<{ items: ResearchCompany[] }>(`/api/research/briefs/${id}/companies`, { method: 'POST' }),
-    reviewCompany: (id: number, disposition: 'accepted' | 'rejected', reason: string) =>
-      fetchApi<ResearchCompany>(`/api/research/companies/${id}`, { method: 'PATCH', body: JSON.stringify({ disposition, reason }) }),
-    jobs: () => fetchApi<{ items: ResearchJob[] }>('/api/research/jobs'),
-    start: (brief_id: number) => fetchApi<ResearchJob>('/api/research/jobs', { method: 'POST', body: JSON.stringify({ brief_id }) }),
-    jobAction: (id: number, action: 'resume' | 'cancel') => fetchApi<ResearchJob>(`/api/research/jobs/${id}/${action}`, { method: 'POST' }),
-    recommendations: (briefId: number) => fetchApi<{ items: ContactRecommendation[] }>(`/api/research/recommendations?brief_id=${briefId}`),
-    recommendation: (id: number) => fetchApi<ContactRecommendation>(`/api/research/recommendations/${id}`),
-    review: (id: number, disposition: 'accepted' | 'rejected', reason: string) =>
-      fetchApi<ContactRecommendation>(`/api/research/recommendations/${id}/review`, { method: 'POST', body: JSON.stringify({ disposition, reason }) }),
-  },
   projects: {
     list: () => fetchApi<Project[]>('/api/workspace/projects'),
   },
@@ -798,13 +801,18 @@ export const api = {
       }),
   },
   campaigns: {
-    /** One AI draft for a whole group, written with merge fields. */
-    draftTemplate: (data: { companies: string[]; roles?: string; goal: string; proof?: string; length?: string }) =>
-      fetchApi<{ subject: string; body: string }>('/api/campaigns/draft-template', {
+    /** One AI draft for a whole group, or one per company when asked. */
+    draftTemplate: (data: { companies: string[]; roles?: string; goal: string; proof?: string; length?: string; per_company?: boolean }) =>
+      fetchApi<{
+        subject?: string;
+        body?: string;
+        messages?: Record<string, { subject: string; body: string }>;
+        grounded?: string[];
+      }>('/api/campaigns/draft-template', {
         method: 'POST', body: JSON.stringify(data),
       }),
     /** Render one written message per recipient; preview_only stops before creating. */
-    build: (data: { name?: string; companies?: string[]; contact_ids?: number[]; subject: string; body: string; preview_only?: boolean }) =>
+    build: (data: { name?: string; companies?: string[]; contact_ids?: number[]; subject?: string; body?: string; messages?: Record<string, { subject: string; body: string }>; preview_only?: boolean }) =>
       fetchApi<{ campaign_id: number; created: number; name: string; recipients?: number; ready?: number; sample?: { subject: string; body: string; email?: string } | null; held: { contact_id?: number; email?: string; name?: string; reason: string }[] }>(
         '/api/campaigns/build', { method: 'POST', body: JSON.stringify(data) }),
     list: () => fetchApi<Campaign[]>('/api/campaigns'),
@@ -1201,12 +1209,6 @@ export const api = {
     verifyEmail: (email: string) =>
       fetchApi<{ valid: boolean }>(`/api/outreach/verify-email?email=${encodeURIComponent(email)}`),
     pipelineMetrics: () => fetchApi<PipelineMetrics>('/api/outreach/metrics/pipeline'),
-    flows: {
-      create: (payload: { company_name: string; company_domain?: string; title_hints?: string; angle?: string; max_contacts?: number }) =>
-        fetchApi<OutreachFlow>('/api/outreach/flows', { method: 'POST', body: JSON.stringify(payload) }),
-      list: (limit = 20) => fetchApi<OutreachFlow[]>(`/api/outreach/flows?limit=${limit}`),
-      get: (id: number) => fetchApi<OutreachFlow>(`/api/outreach/flows/${id}`),
-    },
     campaigns: {
       list: () => fetchApi<Worklist[]>('/api/outreach/campaigns'),
       get: (id: number) => fetchApi<Worklist>(`/api/outreach/campaigns/${id}`),
@@ -1391,14 +1393,17 @@ export const api = {
         body: JSON.stringify(data),
       }),
     listRuns: (limit?: number) =>
-      fetchApi<Record<string, unknown>[]>(`/api/yucgoutreach/runs?limit=${limit ?? 50}`),
-    getRun: (id: number) => fetchApi<unknown>(`/api/yucgoutreach/runs/${id}`),
-    listProspects: (runId: number, limit?: number) =>
-      fetchApi<Record<string, unknown>[]>(`/api/yucgoutreach/runs/${runId}/prospects?limit=${limit ?? 500}`),
-    importContacts: (runId: number) =>
-      fetchApi<{ created: number; updated: number; skipped: number }>(
+      fetchApi<DiscoveryRun[]>(`/api/yucgoutreach/runs?limit=${limit ?? 50}`),
+    getRun: (id: number) => fetchApi<DiscoveryRun>(`/api/yucgoutreach/runs/${id}`),
+    listProspects: (runId: number, limit = 800) =>
+      fetchApi<DiscoveryProspect[]>(`/api/yucgoutreach/runs/${runId}/prospects?limit=${limit}`),
+    /** Bring a run's people on file. With ids, exactly those people; without,
+     *  everyone eligible. Each outcome names the prospect so the picker can
+     *  move only the rows that actually landed. */
+    importContacts: (runId: number, prospectIds?: number[]) =>
+      fetchApi<ImportOutcomes>(
         `/api/yucgoutreach/runs/${runId}/import-contacts`,
-        { method: 'POST' }
+        { method: 'POST', body: prospectIds ? JSON.stringify({ prospect_ids: prospectIds }) : undefined },
       ),
     deleteRun: (id: number) =>
       fetchApi<{ ok: boolean; deleted: number }>(`/api/yucgoutreach/runs/${id}`, { method: 'DELETE' }),
