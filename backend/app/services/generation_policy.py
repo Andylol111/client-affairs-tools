@@ -108,7 +108,27 @@ async def reserve_generation(user_id: int, model: str | None):
             AND created_at >= datetime('now', '-1 hour')""", (user_id,))).fetchone()
         if row['total'] >= club_limit or row['member'] >= member_limit:
             raise HTTPException(429, 'Draft generation limit reached. Please try again later.')
-        await db.execute("INSERT INTO usage_events(user_id,event_type,resource_type) VALUES(?,'draft_reserved','email')", (user_id,))
+        cur = await db.execute("INSERT INTO usage_events(user_id,event_type,resource_type) VALUES(?,'draft_reserved','email')", (user_id,))
+        await db.commit()
+        return cur.lastrowid
+    finally:
+        await db.close()
+
+
+async def release_generation(reservation_id: int | None):
+    """Give back a draft the model never wrote.
+
+    A reservation is taken before the call so a burst cannot overrun the hour.
+    When the call is then refused before reaching the model - every inference
+    slot busy, the provider throttling - nothing was spent, and keeping the
+    reservation charged the member a draft for nothing: a batch of twenty
+    could exhaust the hour on refusals alone.
+    """
+    if not reservation_id:
+        return
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM usage_events WHERE id = ? AND event_type = 'draft_reserved'", (reservation_id,))
         await db.commit()
     finally:
         await db.close()

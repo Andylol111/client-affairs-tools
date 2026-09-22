@@ -166,3 +166,34 @@ test('a verified domain guess offers a one-click accept that fills the domain fi
   await suggestion.getByRole('button', { name: 'Use it' }).click();
   await expect(rail.getByLabel('Company domain')).toHaveValue('meta.com');
 });
+
+test('Add takes the suggested company and its domain, not the half-typed text, and never removes', async ({ page }) => {
+  await mockPipeline(page);
+  // Registered after the shared mock, so the register answers first.
+  await page.route('**/api/yucgoutreach/register?*', route => route.fulfill({ json: {
+    items: [{ company_name: 'NVIDIA Corporation', company_domain: 'nvidia.com', sector_label: 'Semiconductors' }],
+    total: 1, limit: 8, offset: 0,
+  } }));
+  await page.goto('/scraper?view=company');
+  const rail = page.locator('[data-section="campaign-pipeline"] [data-rail]');
+
+  await rail.getByLabel('Company').fill('nvid');
+  const add = rail.getByRole('button', { name: 'Add NVIDIA Corporation' });
+  await expect(add).toBeVisible();
+  await add.click();
+  await expect(rail.getByRole('button', { name: '✓ NVIDIA Corporation' })).toBeVisible();
+  await expect(rail.getByText('1 chosen')).toBeVisible();
+
+  // Adding it again used to toggle it off.
+  await rail.getByLabel('Company').fill('nvid');
+  await rail.getByRole('button', { name: 'Add NVIDIA Corporation' }).click();
+  await expect(rail.getByText('1 chosen')).toBeVisible();
+
+  // Its domain came with it: the search does not ask for one, and there is
+  // no "no confirmed website" warning to fall back on web search.
+  await rail.getByRole('button', { name: /^Find people/ }).click();
+  await rail.getByText('Search settings').click();
+  await expect(rail.getByText('People to collect (25–800)')).toBeVisible();
+  await expect(rail.getByLabel('Company domain')).toHaveCount(0);
+  await expect(page.getByTestId('domain-guess-warning')).toHaveCount(0);
+});

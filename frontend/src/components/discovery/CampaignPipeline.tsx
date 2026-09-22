@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type Contact, type ImportOutcome } from '../../api';
-import CompanyAutocomplete from '../CompanyAutocomplete';
+import CompanyAutocomplete, { type CompanyOption } from '../CompanyAutocomplete';
 import RecipientPicker, { type PickerMode } from './RecipientPicker';
 import CompanyLanes, { type Lane } from './CompanyLanes';
 import RoleSuggestionBubbles from './RoleSuggestionBubbles';
@@ -146,6 +146,22 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
     setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(name))
       ? current.filter((c) => companyKey(c.name) !== companyKey(name))
       : [...current, { name }]);
+
+  // The dropdown's suggestion for what is typed. Add and Find people take it,
+  // name and domain, instead of the raw text: "Shopi" used to become a
+  // company of its own with no domain and nobody on file under that name.
+  const [suggested, setSuggested] = useState<CompanyOption | undefined>();
+  const pendingCompany = (): ChosenCompany | null => {
+    const text = typed.trim();
+    if (!text) return null;
+    return suggested ? { name: suggested.name, domain: suggested.domain || undefined } : { name: text };
+  };
+  // Adding never removes: Add on a company already chosen used to toggle it
+  // off again.
+  const addCompany = (company: ChosenCompany) =>
+    setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(company.name))
+      ? current
+      : [...current, company]);
 
   const visibleChips = showAllChips ? chosenNames : chosenNames.slice(0, CHIP_WINDOW);
   const hiddenChips = chosenNames.length - visibleChips.length;
@@ -339,20 +355,20 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
                 placeholder="Any company, including the public register"
                 onChange={(name) => setTyped(name)}
                 onSelect={(option) => {
-                  setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(option.name))
-                    ? current
-                    : [...current, { name: option.name, domain: option.domain || undefined }]);
+                  addCompany({ name: option.name, domain: option.domain || undefined });
                   setTyped('');
                 }}
+                onSuggestion={setSuggested}
               />
             </div>
             <button
               type="button"
               disabled={!typed.trim()}
-              onClick={() => { toggle(typed.trim()); setTyped(''); }}
-              className="ui-button ui-button--secondary shrink-0"
+              onClick={() => { addCompany(pendingCompany()!); setTyped(''); }}
+              className="ui-button ui-button--secondary shrink-0 max-w-[45%] truncate"
+              title={suggested ? `Add ${suggested.name}${suggested.domain ? ` (${suggested.domain})` : ''}` : undefined}
             >
-              Add
+              {suggested ? `Add ${suggested.name}` : 'Add'}
             </button>
           </div>
 
@@ -404,9 +420,9 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
             onClick={() => {
               // Typed a name and pressed the big button without adding it
               // first: that is the same intent, so take it.
-              const pending = typed.trim();
-              if (pending && !isChosen(pending)) {
-                setChosen((current) => [...current, { name: pending }]);
+              const pending = pendingCompany();
+              if (pending) {
+                addCompany(pending);
                 setTyped('');
               }
               setStep(2);

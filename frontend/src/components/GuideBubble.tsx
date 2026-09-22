@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { TOUR_EVENT } from './Tour';
 
 /**
  * What this page is for, and what to do next.
@@ -25,8 +26,8 @@ const GUIDES: { match: (path: string) => boolean; guide: Guide }[] = [
         'Companies is the index: 215,000 companies from public registers. Tick any, then "Find people and write to them".',
         'Find people runs three steps in order — choose companies, choose who gets it, then hand them to Drafts to write to each.',
         'Step 2 is where people come from: search again, import a spreadsheet, or queue deep research.',
-        'Step 3 personalises per recipient. Anyone missing a field the message uses is held back, never sent a blank.',
-        'Building creates drafts only. Nothing leaves until you release it.',
+        'Board seats and the very senior are never ticked for you: they rarely answer a cold email.',
+        'Drafts writes each person their own email. Nothing leaves until you release the campaign.',
       ],
       next: { to: '/', label: 'Home' },
     },
@@ -129,15 +130,24 @@ export default function GuideBubble() {
               </li>
             ))}
           </ol>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => { setOpen(false); window.dispatchEvent(new Event(TOUR_EVENT)); }}
+            className="ui-button ui-button--secondary ui-button--sm"
+          >
+            Take the tour
+          </button>
           {guide.next && (
             <Link
               to={guide.next.to}
               onClick={() => setOpen(false)}
-              className="mt-3 inline-block text-[13px] font-semibold text-steel-blue hover:underline"
+              className="text-[13px] font-semibold text-steel-blue hover:underline"
             >
               Next: {guide.next.label} →
             </Link>
           )}
+          </div>
         </div>
       )}
     </>

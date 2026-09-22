@@ -28,11 +28,17 @@ ANGLE_INSTRUCTIONS = {
     "compliment": "Use a specific supplied fact. If the brief contains none, do not invent a compliment.",
     "advisory": (
         "Write an advisory note, not a pitch. After the introduction, propose two or three projects a "
-        "YUCG student team could scope and build with this company in one semester - for example a "
-        "market-entry scan, a pricing study, a customer-segmentation analysis, an operations review. "
-        "Choose them for the company's sector, the recipient's role and any company_context. Word each "
+        "YUCG student team could scope and build with this company in one semester. Build every project "
+        "around the function the recipient's title names, in that function's own terms: a partner-"
+        "solutions lead gets partner, channel or alliance questions; a communications leader gets "
+        "audience, message or internal-communications questions; an engineering manager gets product, "
+        "developer or adoption questions; a people or HR leader gets talent or workforce questions. Say "
+        "in the introduction which part of their work the ideas are for. Only when the title names no "
+        "function, fall back to company-level work such as a market-entry scan or a pricing study. Use "
+        "the company's sector and any company_context to make them specific. Word each "
         "as an offer (\"we could map...\", \"a team could build...\"), never as a claim about the "
-        "company's needs, problems or plans."
+        "company's needs, problems or plans. Close with one direct question as the only ask, "
+        "for example \"Would you be open to a short call to see whether any of these fits?\""
     ),
 }
 
@@ -122,9 +128,19 @@ def generate_email(
     try:
         from app.services.llm import complete_json
 
+        # One repair pass inside the same reservation. A near-miss (an ask
+        # the checker cannot see, a list of four) used to cost the member a
+        # draft from their hourly allowance and produce nothing; the model is
+        # told exactly which rule it broke and rewrites once.
         data = complete_json(prompt, model_id=model, system=EMAIL_SYSTEM_PROMPT)
-        subject, body = validate_draft(data, brief, length)
-        return subject, body
+        try:
+            return validate_draft(data, brief, length, angle=angle)
+        except ValueError as first:
+            _log.info("draft repair after: %s", first)
+            retry = (prompt + "\n\nYOUR_PREVIOUS_DRAFT_WAS_REJECTED: " + str(first)
+                     + ". Rewrite it so it satisfies every rule and the output contract.")
+            data = complete_json(retry, model_id=model, system=EMAIL_SYSTEM_PROMPT)
+            return validate_draft(data, brief, length, angle=angle)
 
     except HTTPException:
         raise
@@ -136,7 +152,17 @@ def generate_email(
         raise HTTPException(502, 'Draft generation failed. Your existing draft is unchanged; please retry.') from error
 
 
-def validate_draft(data: dict, brief: dict, length: str) -> tuple[str, str]:
+#: What counts as the email's ask. "I'd welcome a brief conversation" is as
+#: much an ask as a question is; missing it rejected almost every advisory
+#: draft, which closes that way.
+_ASK = re.compile(
+    r"\?|\b(?:please (?:let|share|send|reply)|let me know|would you be open|could we|"
+    r"would a brief|are you available|(?:I['’]d|I would|we['’]d|we would) welcome)\b",
+    re.I,
+)
+
+
+def validate_draft(data: dict, brief: dict, length: str, angle: str = "") -> tuple[str, str]:
     """Reject unsupported output rather than quietly replacing it with a template."""
     if not isinstance(data, dict) or set(data) != {"subject", "body", "source_ids"}:
         raise ValueError("Invalid draft schema")
@@ -209,13 +235,23 @@ def validate_draft(data: dict, brief: dict, length: str) -> tuple[str, str]:
     ):
         if phrase.casefold() not in supplied.casefold():
             raise ValueError("Unsupported relationship or personalization")
-    asks = re.findall(r"\?|\b(?:please (?:let|share|send|reply)|let me know|would you be open|could we|"
-                      r"would a brief|are you available)\b", prose, re.I)
     # A question mark and its opening phrase represent one request.
-    request_lines = [s for s in re.split(r"(?<=[.!?])\s+", prose)
-                     if re.search(r"\?|\b(?:please (?:let|share|send|reply)|let me know|would you be open|could we|would a brief|are you available)\b", s, re.I)]
-    if not asks or len(request_lines) != 1:
-        raise ValueError("Draft must contain one concrete call to action")
+    request_lines = [s for s in re.split(r"(?<=[.!?])\s+", prose) if _ASK.search(s)]
+    if len(request_lines) != 1:
+        raise ValueError(
+            f"Draft must contain one concrete call to action (found {len(request_lines)}); "
+            "end with exactly one direct question and ask nothing anywhere else")
+    if angle == "advisory":
+        # The house format for an advisory note, checked rather than hoped for:
+        # a named greeting, and the proposals as a list of two or three
+        # bold-labelled items.
+        if not re.match(r"\s*(?:<p>\s*)?Dear\s+\S", body):
+            raise ValueError('An advisory draft must open with "Dear <first name>,"')
+        items = re.findall(r"<li>\s*<(?:strong|b)>", body, re.I)
+        if not 2 <= len(items) <= 3:
+            raise ValueError(
+                f"An advisory draft must list two or three proposed projects, each <li> starting "
+                f"with a <strong> label (found {len(items)})")
     return subject, body
 
 

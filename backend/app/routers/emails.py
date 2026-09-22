@@ -34,6 +34,19 @@ class DraftUpdateRequest(BaseModel):
 
 
 
+async def _generate_or_release(reservation, fn, **kwargs):
+    """Run a draft, returning its reservation when the model was never reached."""
+    from app.services.generation_policy import release_generation
+    try:
+        return await run_in_threadpool(fn, **kwargs)
+    except HTTPException as exc:
+        # 429 busy slot and 503 provider unavailable happen before any tokens
+        # are spent; a 502 is a draft the model did write and failed checks.
+        if exc.status_code in (429, 503):
+            await release_generation(reservation)
+        raise
+
+
 @router.post("/generate", response_model=EmailGenerateResponse)
 async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Depends(get_current_user)):
     """Generate a grounded starting draft for a contact."""
@@ -82,8 +95,9 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
                 subject=cached["subject"], body=cached["body"], contact_id=req.contact_id,
             )
 
-        await reserve_generation(user['id'], req.model)
-        subject, body = await run_in_threadpool(generate_email,
+        reservation = await reserve_generation(user['id'], req.model)
+        subject, body = await _generate_or_release(
+            reservation, generate_email,
             contact_name=contact.get("name"),
             contact_title=contact.get("title"),
             company_name=contact.get("company"),

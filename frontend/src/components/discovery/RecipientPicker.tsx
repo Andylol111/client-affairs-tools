@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { type Contact } from '../../api';
 import {
   LEVEL_LABEL, LEVEL_RANK, type Level,
-  companyKey, defaultSelection, isWritable, levelOf,
+  companyKey, defaultSelection, isTooSenior, isWritable, levelOf, looksLikePerson,
 } from '../../lib/recipients';
 import type { ChosenCompany, CompanyRun, FoundPerson } from '../../lib/useDiscoveryRuns';
 
@@ -334,12 +334,26 @@ export default function RecipientPicker({
                         <span className="font-medium text-deep-navy">{person.name || person.email}</span>
                         <span className="text-slate-500"> · {person.title || 'no title'}</span>
                         <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                          <span className={`rounded-full px-2 py-0.5 ${
-                            levelOf(person) === 'working' ? 'bg-emerald-50 text-emerald-800'
-                              : levelOf(person) === 'board' ? 'bg-amber-50 text-amber-800'
-                                : 'bg-pale-sky/60 text-deep-navy'}`}>
-                            {LEVEL_LABEL[levelOf(person)]}
-                          </span>
+                          {/* The title outranks the stored level: a CFO whose
+                              filing title reads as working level is still a CFO. */}
+                          {!looksLikePerson(person) ? (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-900"
+                                  title="This name looks like page text a search picked up, not a person, so it is not ticked by default">
+                              Not a person? Check the name
+                            </span>
+                          ) : isTooSenior(person) ? (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-900"
+                                  title="Chief officers, presidents and senior vice presidents rarely answer a student's cold email, so they are not ticked by default">
+                              Very senior · rarely replies
+                            </span>
+                          ) : (
+                            <span className={`rounded-full px-2 py-0.5 ${
+                              levelOf(person) === 'working' ? 'bg-emerald-50 text-emerald-800'
+                                : levelOf(person) === 'board' ? 'bg-amber-50 text-amber-800'
+                                  : 'bg-pale-sky/60 text-deep-navy'}`}>
+                              {LEVEL_LABEL[levelOf(person)]}
+                            </span>
+                          )}
                           {writableRow
                             ? <span className="truncate">{person.email}</span>
                             : <span className="text-amber-800">no address yet</span>}

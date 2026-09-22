@@ -20,6 +20,7 @@ export default function CompanyAutocomplete({
   value,
   onChange,
   onSelect,
+  onSuggestion,
   placeholder = 'Company name',
   disabled = false,
 }: {
@@ -28,6 +29,10 @@ export default function CompanyAutocomplete({
   value: string;
   onChange: (name: string, option?: CompanyOption) => void;
   onSelect?: (option: CompanyOption) => void;
+  /** The suggestion Enter would pick for what is typed, if it is the same
+   *  company - so a button beside the field can take it, domain and all,
+   *  rather than the half-typed text. */
+  onSuggestion?: (option: CompanyOption | undefined) => void;
   placeholder?: string;
   disabled?: boolean;
 }) {
@@ -104,6 +109,10 @@ export default function CompanyAutocomplete({
     const fromRegister = registerOptions.filter((option) => !known.has(norm(option.name)));
     return [...local, ...fromRegister].slice(0, 12);
   }, [options, registerOptions, value]);
+
+  const suggestion = value.trim() && filtered[highlight]
+    && norm(filtered[highlight].name).startsWith(norm(value)) ? filtered[highlight] : undefined;
+  useEffect(() => { onSuggestion?.(suggestion); }, [onSuggestion, suggestion]);
 
   const pick = (option: CompanyOption) => {
     onChange(option.name, option);

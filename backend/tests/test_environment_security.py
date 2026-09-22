@@ -142,9 +142,26 @@ async def tests():
     await db.close()
     with patch.dict(os.environ, {'DRAFTS_PER_MEMBER_PER_HOUR': '1', 'DRAFTS_PER_CLUB_PER_HOUR': '2'}):
         results = await asyncio.gather(*(reserve_generation(1, llm.default_model_id()) for _ in range(3)), return_exceptions=True)
-        assert sum(result is None for result in results) == 1
-        assert all(result is None or isinstance(result, HTTPException) and result.status_code == 429 for result in results)
+        granted = [result for result in results if isinstance(result, int)]
+        assert len(granted) == 1
+        assert all(isinstance(result, int) or isinstance(result, HTTPException) and result.status_code == 429 for result in results)
         await reserve_generation(2, llm.default_model_id())
+    # A draft refused before reaching the model is given back, so a busy slot
+    # cannot spend the member's hour.
+    from app.services.generation_policy import release_generation
+    with patch.dict(os.environ, {'DRAFTS_PER_MEMBER_PER_HOUR': '1', 'DRAFTS_PER_CLUB_PER_HOUR': '100'}):
+        db = await get_db()
+        await db.execute("INSERT INTO users(id,email) VALUES(3,'c@yale.edu')")
+        await db.commit()
+        await db.close()
+        held = await reserve_generation(3, llm.default_model_id())
+        try:
+            await reserve_generation(3, llm.default_model_id())
+            raise AssertionError('second draft allowed past a limit of one')
+        except HTTPException as exc:
+            assert exc.status_code == 429
+        await release_generation(held)
+        assert isinstance(await reserve_generation(3, llm.default_model_id()), int)
     # Calls outside draft routes (recommendations/ranking) share the paid-call cap.
     async def reset_paid():
         db=await get_db()
