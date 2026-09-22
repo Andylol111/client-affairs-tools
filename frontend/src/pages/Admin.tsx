@@ -5,6 +5,7 @@ import { useEffect, useState, Fragment } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { api, type FirecrawlStatus } from '../api';
+import { StatusBadge } from '../components/ui/Primitives';
 import { useToast } from '../contexts/useToast';
 import { AnimatedEventTypeChart, AnimatedResourceChart } from '../components/AnimatedOperationsCharts';
 import AppTabMenu from '../components/AppTabMenu';
@@ -20,11 +21,13 @@ export default function Admin() {
   const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof api.admin.catalog>> | null>(null);
   const [users, setUsers] = useState<Awaited<ReturnType<typeof api.admin.users.list>>>([]);
   const [projects, setProjects] = useState<Awaited<ReturnType<typeof api.admin.projects.list>>>([]);
-  const [projectForm, setProjectForm] = useState({ name: '', semester: '', description: '' });
+  const [projectForm, setProjectForm] = useState({ name: '', semester: '', description: '', client_name: '', discussable: false });
   const [selectedProject, setSelectedProject] = useState<Awaited<ReturnType<typeof api.admin.projects.list>>[number] | null>(null);
   const [projectAssignments, setProjectAssignments] = useState<Awaited<ReturnType<typeof api.admin.projects.assignments>>>([]);
   const [assignUserModal, setAssignUserModal] = useState<{ projectId: number; projectName: string } | null>(null);
   const [assignRole, setAssignRole] = useState('');
+  const [editProjectForm, setEditProjectForm] = useState({ name: '', semester: '', description: '', client_name: '', discussable: false });
+  const [editProjectSaving, setEditProjectSaving] = useState(false);
   const [auditLog, setAuditLog] = useState<Awaited<ReturnType<typeof api.admin.auditLog>>>([]);
   const [apiKeys, setApiKeys] = useState<Awaited<ReturnType<typeof api.admin.apiKeys.list>>>([]);
   const [newKeyName, setNewKeyName] = useState('');
@@ -71,6 +74,41 @@ export default function Admin() {
       api.admin.projects.assignments(selectedProject.id).then(setProjectAssignments).catch(() => setProjectAssignments([]));
     }
   }, [selectedProject?.id]);
+
+  const selectProject = (p: NonNullable<typeof selectedProject>) => {
+    setSelectedProject(p);
+    setEditProjectForm({
+      name: p.name || '',
+      semester: p.semester || '',
+      description: p.description || '',
+      client_name: p.client_name || '',
+      discussable: Boolean(p.discussable),
+    });
+  };
+
+  const handleSaveProjectTagging = async () => {
+    if (!selectedProject?.id) return;
+    setEditProjectSaving(true);
+    setError('');
+    try {
+      const updated = await api.admin.projects.update(selectedProject.id, {
+        name: editProjectForm.name.trim() || undefined,
+        semester: editProjectForm.semester.trim() || undefined,
+        description: editProjectForm.description.trim() || undefined,
+        client_name: editProjectForm.client_name.trim() || undefined,
+        discussable: editProjectForm.discussable,
+      });
+      setSelectedProject(updated);
+      api.admin.projects.list().then(setProjects).catch(() => {});
+      toast.addToast('Project updated.', 'success');
+    } catch (e) {
+      const msg = (e as Error)?.message || 'Failed';
+      setError(msg);
+      toast.addToast(msg, 'error');
+    } finally {
+      setEditProjectSaving(false);
+    }
+  };
 
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) return;
@@ -300,7 +338,7 @@ export default function Admin() {
           <div className="surface-card rounded-xl p-6">
             <h2 className="font-semibold text-deep-navy mb-4">Create Project</h2>
             <p className="text-sm text-slate-600 mb-4">Add semester + client projects (e.g. Spring 2026 - Project Lego). Assign team members to each project.</p>
-            <div className="flex flex-wrap gap-2 mb-4">
+            <div className="flex flex-wrap gap-2 mb-2">
               <input
                 value={projectForm.name}
                 onChange={(e) => setProjectForm((p) => ({ ...p, name: e.target.value }))}
@@ -319,6 +357,25 @@ export default function Admin() {
                 placeholder="Description (optional)"
                 className="px-3 py-2 rounded-lg border border-pale-sky flex-1 min-w-[200px]"
               />
+            </div>
+            <div className="flex flex-wrap items-end gap-2 mb-4">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Real client name (only if this can be named)</label>
+                <input
+                  value={projectForm.client_name}
+                  onChange={(e) => setProjectForm((p) => ({ ...p, client_name: e.target.value }))}
+                  placeholder="e.g. Google — leave blank if under NDA"
+                  className="px-3 py-2 rounded-lg border border-pale-sky min-w-[220px]"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-700 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={projectForm.discussable}
+                  onChange={(e) => setProjectForm((p) => ({ ...p, discussable: e.target.checked }))}
+                />
+                Can be named in outreach (not under NDA)
+              </label>
               <button
                 onClick={async () => {
                   if (!projectForm.name.trim()) return;
@@ -328,8 +385,10 @@ export default function Admin() {
                       name: projectForm.name.trim(),
                       semester: projectForm.semester.trim() || undefined,
                       description: projectForm.description.trim() || undefined,
+                      client_name: projectForm.client_name.trim() || undefined,
+                      discussable: projectForm.discussable,
                     });
-                    setProjectForm({ name: '', semester: '', description: '' });
+                    setProjectForm({ name: '', semester: '', description: '', client_name: '', discussable: false });
                     api.admin.projects.list().then(setProjects).catch(() => {});
                   } catch (e) {
                     setError((e as Error)?.message || 'Failed');
@@ -350,12 +409,15 @@ export default function Admin() {
                   {projects.map((p) => (
                     <li key={p.id}>
                       <button
-                        onClick={() => setSelectedProject(p)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
+                        onClick={() => selectProject(p)}
+                        className={`w-full flex items-center justify-between gap-2 text-left px-3 py-2 rounded-lg text-sm ${
                           selectedProject?.id === p.id ? 'bg-pale-sky/50 font-medium' : 'hover:bg-pale-sky/20'
                         }`}
                       >
-                        {p.semester ? `${p.semester} — ` : ''}{p.name}
+                        <span className="truncate">{p.semester ? `${p.semester} — ` : ''}{p.name}</span>
+                        <StatusBadge tone={p.discussable ? 'success' : 'neutral'}>
+                          {p.discussable ? 'Discussable' : 'Under NDA'}
+                        </StatusBadge>
                       </button>
                     </li>
                   ))}
@@ -368,6 +430,35 @@ export default function Admin() {
                     <p className="text-sm font-medium text-slate-700 mb-2">
                       Assigned to {selectedProject.semester ? `${selectedProject.semester} — ` : ''}{selectedProject.name}:
                     </p>
+                    <div className="mb-4 p-3 rounded-lg border border-pale-sky bg-pale-sky/10 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-slate-700">Citation tagging</span>
+                        <StatusBadge tone={selectedProject.discussable ? 'success' : 'neutral'}>
+                          {selectedProject.discussable ? 'Discussable' : 'Under NDA — not shown in suggestions'}
+                        </StatusBadge>
+                      </div>
+                      <input
+                        value={editProjectForm.client_name}
+                        onChange={(e) => setEditProjectForm((p) => ({ ...p, client_name: e.target.value }))}
+                        placeholder="Real client name (leave blank if under NDA)"
+                        className="w-full px-3 py-2 rounded-lg border border-pale-sky text-sm"
+                      />
+                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={editProjectForm.discussable}
+                          onChange={(e) => setEditProjectForm((p) => ({ ...p, discussable: e.target.checked }))}
+                        />
+                        Can be named in outreach (not under NDA)
+                      </label>
+                      <button
+                        onClick={handleSaveProjectTagging}
+                        disabled={editProjectSaving}
+                        className="ui-button ui-button--secondary ui-button--sm"
+                      >
+                        {editProjectSaving ? 'Saving…' : 'Save tagging'}
+                      </button>
+                    </div>
                     <ul className="space-y-2 mb-4">
                       {projectAssignments.map((a) => (
                         <li key={a.id} className="flex justify-between items-center py-2 border-b border-pale-sky/50 text-sm">

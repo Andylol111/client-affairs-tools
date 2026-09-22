@@ -425,6 +425,17 @@ class ProjectCreate(BaseModel):
     name: str
     semester: Optional[str] = None
     description: Optional[str] = None
+    client_name: Optional[str] = None
+    discussable: bool = False
+
+
+class ProjectUpdate(BaseModel):
+    """Partial update - only fields present in the request change."""
+    name: Optional[str] = None
+    semester: Optional[str] = None
+    description: Optional[str] = None
+    client_name: Optional[str] = None
+    discussable: Optional[bool] = None
 
 
 class UserProjectAssign(BaseModel):
@@ -438,7 +449,7 @@ async def list_projects(admin: dict = Depends(get_current_admin)):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, name, semester, description, created_at FROM projects ORDER BY semester DESC, name"
+            "SELECT id, name, semester, description, client_name, discussable, created_at FROM projects ORDER BY semester DESC, name"
         )
         rows = await cursor.fetchall()
         return [row_to_dict(r) for r in rows]
@@ -455,13 +466,59 @@ async def create_project(payload: ProjectCreate, admin: dict = Depends(get_curre
     db = await get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO projects (name, semester, description) VALUES (?, ?, ?)",
-            (name, (payload.semester or "").strip() or None, (payload.description or "").strip() or None),
+            "INSERT INTO projects (name, semester, description, client_name, discussable) VALUES (?, ?, ?, ?, ?)",
+            (
+                name,
+                (payload.semester or "").strip() or None,
+                (payload.description or "").strip() or None,
+                (payload.client_name or "").strip() or None,
+                1 if payload.discussable else 0,
+            ),
         )
         await db.commit()
         pid = cursor.lastrowid
         await log_audit(admin["id"], "project_create", "project", str(pid), f"Created project: {name}")
-        return {"id": pid, "name": name, "semester": payload.semester, "description": payload.description}
+        return {
+            "id": pid, "name": name, "semester": payload.semester, "description": payload.description,
+            "client_name": payload.client_name, "discussable": payload.discussable,
+        }
+    finally:
+        await db.close()
+
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: int, payload: ProjectUpdate, admin: dict = Depends(get_current_admin)):
+    """Edit a project's citable facts. Admin only.
+
+    discussable defaults to 0 on create - an existing project must be
+    explicitly re-tagged here before it can ever appear in a citation
+    suggestion, so this is the only door that flips it on.
+    """
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(400, "No fields to update")
+    assignments = []
+    values: list = []
+    for col in ("name", "semester", "description", "client_name"):
+        if col in data:
+            assignments.append(f"{col} = ?")
+            values.append((data[col] or "").strip() or None)
+    if "discussable" in data:
+        assignments.append("discussable = ?")
+        values.append(1 if data["discussable"] else 0)
+    db = await get_db()
+    try:
+        exists = await (await db.execute("SELECT id FROM projects WHERE id = ?", (project_id,))).fetchone()
+        if not exists:
+            raise HTTPException(404, "Project not found")
+        await db.execute(f"UPDATE projects SET {', '.join(assignments)} WHERE id = ?", [*values, project_id])
+        await db.commit()
+        await log_audit(admin["id"], "project_update", "project", str(project_id), f"Updated fields: {', '.join(data.keys())}")
+        cursor = await db.execute(
+            "SELECT id, name, semester, description, client_name, discussable, created_at FROM projects WHERE id = ?",
+            (project_id,),
+        )
+        return row_to_dict(await cursor.fetchone())
     finally:
         await db.close()
 

@@ -958,6 +958,21 @@ async def init_db():
             except Exception:
                 pass
 
+        # Migration: citable real client names + an explicit opt-in flag so a
+        # project only ever surfaces in an outreach citation suggestion once
+        # someone has confirmed it is not under NDA. Default 0 keeps every
+        # existing project silent until re-tagged.
+        try:
+            await db.execute("ALTER TABLE projects ADD COLUMN client_name TEXT")
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE projects ADD COLUMN discussable INTEGER NOT NULL DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS stored_objects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
