@@ -48,13 +48,13 @@ test('the lanes and the sheet stay on screen together at every step', async ({ p
   await expect(lanes.locator('[data-lane="NEON"]').getByTestId('lane-state')).toHaveText('nobody yet');
 
   // Step 1: same lanes, and the sheet previews what the companies come with.
-  await rail.getByRole('button', { name: /Choose companies/ }).click();
+  await rail.getByRole('button', { name: /Add companies/ }).click();
   await expect(lanes).toBeVisible();
   await expect(picker).toHaveAttribute('data-mode', 'preview');
   await expect(picker.getByRole('checkbox', { name: 'Write to Jean Bartik' })).toBeDisabled();
 
   // Step 3: lanes, then the recipients - nothing else - and the hand-off.
-  await rail.getByRole('button', { name: /^Find people at these 2 companies/ }).click();
+  await rail.getByRole('button', { name: 'Next: tick who gets it' }).click();
   await rail.getByRole('button', { name: /^Write to these 2/ }).click();
   await expect(lanes).toBeVisible();
   await expect(rail.getByRole('button', { name: /^Write to these 2 in Drafts/ })).toBeVisible();

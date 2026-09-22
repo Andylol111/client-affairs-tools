@@ -32,6 +32,12 @@ async function mockPage(page: Page) {
       body = { items: [REGISTER_HIT], total: 1, limit: 8, offset: 0 };
     } else if (path === '/api/contacts/companies/summary') body = [{ company: 'Acme Corp', company_domain: 'acme.com', contact_count: 4 }];
     else if (path === '/api/yucgoutreach/register/summary') body = { tiers: [], sectors: [], recent_ingests: [] };
+    else if (path === '/api/yucgoutreach/resolve-company') {
+      const q = url.searchParams.get('q') || '';
+      body = q === REGISTER_HIT.company_name
+        ? { name: q, domain: REGISTER_HIT.company_domain, domain_verified: false, linkedin_url: null, source: 'register', alternatives: [] }
+        : { name: q, domain: null, domain_verified: false, linkedin_url: null, source: 'typed', alternatives: [] };
+    }
     else if (path === '/api/yucgoutreach/runs') body = [];
     else if (path === '/api/outreach/flows') body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
@@ -71,8 +77,8 @@ test('every Find contacts surface is a pill, and the company field reaches the p
   await expect(page.getByText('Company email formats')).toHaveCount(0);
   // Find people is the campaign itself: a rail of numbered steps, with the
   // work of the current step in the wide column beside it.
-  await expect(page.getByRole('button', { name: /Choose companies/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Choose who gets it/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Add companies/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Tick who gets it/ })).toBeVisible();
 
   // Looking up a single named person is gone: it was a company search with
   // one name in it, which Find people already does, and the address guess it
@@ -89,7 +95,8 @@ test('every Find contacts surface is a pill, and the company field reaches the p
   await option.click();
   // Picking from the register adds it to the chosen companies rather than
   // only filling a box: choosing is the point of the step.
-  await expect(page.getByText('1 chosen')).toBeVisible();
+  await expect(page.getByTestId('chosen-count')).toContainText('1 company added');
+  await expect(page.locator('[data-company-chip="Hansford Sensors Limited"]')).toContainText('hansfordsensors.com');
 });
 
 test('a one-character company does not query the register', async ({ page }) => {

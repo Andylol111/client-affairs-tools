@@ -46,6 +46,19 @@ def tests() -> None:
         assert rs.title_from_job_posting('Research Product Manager, Model Behaviors - LinkedIn', 'Anthropic') == 'Research Product Manager, Model Behaviors'
         assert rs.title_from_job_posting('Anthropic: Jobs - LinkedIn', 'Anthropic') == ''
         assert rs.title_from_job_posting('Anthropic hiring Product Management, Research in San Francisco, CA - LinkedIn', 'Anthropic') == 'Product Management, Research'
+        # A headline cut mid-title keeps what came before the cut instead of
+        # being thrown away; the truncated word and a dangling connector go.
+        assert rs.title_from_search_result('Jane Doe - Senior Director of Global Partnerships and Gro…', 'OpenAI') == 'Senior Director of Global Partnerships'
+        assert rs.title_from_search_result('Jane Doe - Head of Gro...', 'OpenAI') == ''  # "Head" alone is no title
+        # The company's own name is stripped generically (no per-company list).
+        assert rs.normalize_title('VP Content, The Walt Disney Company', 'The Walt Disney Company') == 'VP Content'
+        # Snippets: the current role at THIS company, never a past employer,
+        # education, or first-person prose.
+        assert rs.title_from_snippet('Product Lead at OpenAI · Experience: OpenAI · Education: Yale', 'OpenAI') == 'Product Lead'
+        assert rs.title_from_snippet('Experience: Head of Health AI at OpenAI · Location: SF', 'OpenAI') == 'Head of Health AI'
+        assert rs.title_from_snippet('Director of Sales at Google · Experience: Google', 'OpenAI') == ''
+        assert rs.title_from_snippet('I lead product at OpenAI and love it', 'OpenAI') == ''
+        assert rs.title_from_snippet('Former VP Marketing at OpenAI', 'OpenAI') == ''
 
         async def seed() -> None:
             db = await get_db()
@@ -87,9 +100,11 @@ def tests() -> None:
         # --- search fill happens when observed is thin or hints are given;
         # LLM equivalents are constrained to observed titles ---
         search_calls: list[str] = []
+        page_sizes: list[int] = []
 
         async def fake_search(query, max_results=8, user_id=None):
             search_calls.append(query)
+            page_sizes.append(max_results)
             return [
                 {'title': 'Pat K - Product Lead at OpenAI | LinkedIn', 'url': 'https://www.linkedin.com/in/patk', 'content': ''},
                 {'title': 'Lee M - Product Lead - OpenAI', 'url': 'https://www.linkedin.com/in/leem', 'content': ''},
@@ -114,13 +129,20 @@ def tests() -> None:
              patch('app.services.llm.complete_json', fake_complete_json):
             result = asyncio.run(rs.suggest_roles(user_id=1, company='OpenAI', domain='openai.com', hints='healthcare PMs, VPs'))
 
-        assert search_calls == ['OpenAI healthcare PMs, VPs site:linkedin.com/in']  # plain words, no quotes/OR
+        # Each hint term is its own plain-words query (the joined string
+        # matched nobody live), then the generic query; all are merged.
+        assert search_calls == ['OpenAI healthcare PMs site:linkedin.com/in',
+                                'OpenAI VPs site:linkedin.com/in',
+                                'OpenAI leadership director manager lead site:linkedin.com/in'], search_calls
+        # One results page per query: the quota charges per page.
+        assert page_sizes and all(n <= 8 for n in page_sizes), page_sizes
         titles = [r['title'] for r in result['roles']]
         assert 'Product Lead' in titles and 'Healthcare Go-To-Market Lead' in titles
         assert 'OpenAI' not in titles  # company page headline never becomes a role
         assert 'Product Manager, Health' in titles and next(r for r in result['roles'] if r['title'] == 'Product Manager, Health')['source'] == 'jobs'
         assert 'Product Lead, Consumer' not in titles  # /posts/ are not evidence of a role held
-        # Product Lead: 1 catalog + 2 search = 3, so it now outranks the roster officers.
+        # Product Lead: 1 catalog + 2 search = 3 - each profile counts once
+        # even though all three queries returned it.
         assert next(r for r in result['roles'] if r['title'] == 'Product Lead')['count'] == 3
         assert next(r for r in result['roles'] if r['title'] == 'Product Lead')['source'] == 'catalog'
 
@@ -140,10 +162,19 @@ def tests() -> None:
              patch('app.services.web_fetch.web_search_configured', lambda: True), \
              patch('app.services.llm.complete_json', fake_complete_json):
             quiet = asyncio.run(rs.suggest_roles(user_id=1, company='OpenAI', domain='openai.com', hints=None))
-        # 5 distinct observed titles (< threshold 6) -> one fill search, but no LLM without hints.
-        assert len(search_calls) == 1
+        # The generic query ran a moment ago: served from the cache, no quota spent.
+        assert search_calls == [], search_calls
         assert llm_prompts == []
         assert quiet['equivalents'] == []
+        assert 'Healthcare Go-To-Market Lead' in [r['title'] for r in quiet['roles']]
+        # Cold cache: 5 distinct observed titles (< threshold 6) -> one fill
+        # search, which lifts it to 7 distinct, so no seniority bands.
+        rs._search_cache.clear()
+        with patch('app.services.web_fetch.web_search', fake_search), \
+             patch('app.services.web_fetch.web_search_configured', lambda: True), \
+             patch('app.services.llm.complete_json', fake_complete_json):
+            asyncio.run(rs.suggest_roles(user_id=1, company='OpenAI', domain='openai.com', hints=None))
+        assert len(search_calls) == 1, search_calls
 
         # --- unknown company, search unavailable: empty but well-formed ---
         with patch('app.services.web_fetch.web_search_configured', lambda: False):
@@ -157,11 +188,30 @@ def tests() -> None:
         async def quota_search(query, max_results=8, user_id=None):
             raise HTTPException(429, 'Web search limit reached. Please try again later.')
 
+        rs._search_cache.clear()
         with patch('app.services.web_fetch.web_search', quota_search), \
              patch('app.services.web_fetch.web_search_configured', lambda: True):
             limited = asyncio.run(rs.suggest_roles(user_id=1, company='OpenAI', domain='openai.com', hints=None))
         assert limited['note'].startswith('Web search limit reached')
         assert any(r['title'] == 'Member of Technical Staff' for r in limited['roles'])
+
+        # --- quota hit part-way: what the earlier queries found is kept ---
+        rs._search_cache.clear()
+        partial_calls: list[str] = []
+
+        async def first_then_quota(query, max_results=8, user_id=None):
+            partial_calls.append(query)
+            if len(partial_calls) > 1:
+                raise HTTPException(429, 'Web search limit reached. Please try again later.')
+            return [{'title': 'Kim P - Head of Clinical Partnerships - OpenAI', 'url': 'https://www.linkedin.com/in/kimp', 'content': ''}]
+
+        with patch('app.services.web_fetch.web_search', first_then_quota), \
+             patch('app.services.web_fetch.web_search_configured', lambda: True), \
+             patch('app.services.llm.complete_json', fake_complete_json):
+            part = asyncio.run(rs.suggest_roles(user_id=1, company='OpenAI', domain='openai.com', hints='clinical leads, sales'))
+        assert 'Head of Clinical Partnerships' in [r['title'] for r in part['roles']], part['roles']
+        assert part['note'].startswith('Web search limit reached')
+        assert len(partial_calls) == 2, partial_calls  # stops asking after the first 429
 
 
 def unknown_company_escalates_within_linkedin_not_to_its_website() -> None:
@@ -224,7 +274,65 @@ def unknown_company_escalates_within_linkedin_not_to_its_website() -> None:
     assert 'returns nothing for this company' in (blank['note'] or ''), blank['note']
 
 
+def few_titles_top_up_by_band_within_the_page_budget() -> None:
+    """One or two titles found is not enough to choose from: the seniority
+    bands top the list up, but a cold load never spends more than
+    _PAGE_BUDGET one-page searches, and a reload spends none."""
+    import asyncio as _asyncio
+    from unittest.mock import patch
+
+    from app.services import role_suggestions as rs
+
+    rs._search_cache.clear()
+    asked: list[tuple[str, int]] = []
+
+    async def no_observations(company, domain=None):
+        return []
+
+    async def thin(query, max_results=8, user_id=None):
+        asked.append((query, max_results))
+        if 'leadership director' in query:
+            # A bare-name headline: the role is only in the snippet.
+            return [{'url': 'https://www.linkedin.com/in/sam', 'title': 'Sam Poe | LinkedIn',
+                     'content': 'Head of Merchandising at Garmin · Experience: Garmin · Education: Kansas State'}]
+        band = query.replace('Garmin ', '').replace(' site:linkedin.com/in', '')
+        if band in rs._SENIORITY_BANDS:
+            slug = band.lower().replace(' ', '-')
+            return [{'url': f'https://www.linkedin.com/in/{slug}-{i}', 'title': f'P{i} - {band} Product Line {i} - Garmin'}
+                    for i in range(2)]
+        return []
+
+    with patch.object(rs, 'observed_titles', no_observations), \
+         patch('app.services.web_fetch.web_search_configured', lambda: True), \
+         patch('app.services.web_fetch.web_search', thin), \
+         patch('app.services.llm.complete_json', lambda *a, **k: {'equivalents': []}):
+        out = _asyncio.run(rs.suggest_roles(user_id=1, company='Garmin', domain='garmin.com',
+                                            hints='buyers; merchandisers / category managers, planners and analysts'))
+    queries = [q for q, _ in asked]
+    # 3 hint terms (of 5 typed) + generic + bands, never more than the budget.
+    assert len(asked) <= rs._PAGE_BUDGET, queries
+    assert all(n <= 8 for _, n in asked), asked
+    assert sum(1 for q in queries if any(q == f'Garmin {b} site:linkedin.com/in' for b in rs._SENIORITY_BANDS)) >= 1, queries
+    titles = [r['title'] for r in out['roles']]
+    assert 'Head of Merchandising' in titles, titles  # from the snippet
+    assert len(titles) >= rs._SEARCH_FILL_THRESHOLD, titles  # topped up past one or two chips
+    # Bands stop once the list is useful: 1 + 2 per band -> 3 bands reach 6+.
+    assert out['sources']['by_band'] >= 5, out['sources']
+
+    # Reload: every query is cached, no quota spent.
+    asked.clear()
+    with patch.object(rs, 'observed_titles', no_observations), \
+         patch('app.services.web_fetch.web_search_configured', lambda: True), \
+         patch('app.services.web_fetch.web_search', thin), \
+         patch('app.services.llm.complete_json', lambda *a, **k: {'equivalents': []}):
+        again = _asyncio.run(rs.suggest_roles(user_id=1, company='Garmin', domain='garmin.com',
+                                              hints='buyers; merchandisers / category managers, planners and analysts'))
+    assert asked == [], asked
+    assert [r['title'] for r in again['roles']] == titles
+
+
 if __name__ == '__main__':
     tests()
     unknown_company_escalates_within_linkedin_not_to_its_website()
+    few_titles_top_up_by_band_within_the_page_budget()
     print('role suggestions: ok')

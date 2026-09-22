@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections import Counter
 from typing import Any
 
@@ -38,7 +39,10 @@ _LINKEDIN_TITLE_RE = re.compile(
     rf"^(?P<name>.+?){_SEP}(?P<title>.+?)(?:{_SEP}.*|\s+(?:at|@)\s+.*|\s*\|.*)?$",
     re.I,
 )
-_NOISE = re.compile(r"\b(linkedin|profile|professional|the walt disney company|inc\.?|llc|ltd\.?)\b", re.I)
+# Site and legal-form noise only. The company's own name is stripped in
+# normalize_title from the company argument, so no single company needs a
+# hardcoded entry here.
+_NOISE = re.compile(r"\b(linkedin|profile|professional|inc\.?|llc|ltd\.?)\b", re.I)
 
 
 _JUNK_TITLES = frozenset({"youtube", "linkedin", "twitter", "x", "facebook", "instagram", "wikipedia", "news", "home"})
@@ -69,12 +73,24 @@ def normalize_title(raw: str | None, company: str | None = None) -> str:
         if match:
             text = match.group("title")
     text = re.split(r"\s+(?:at|@)\s+|\s*\|\s*", text, maxsplit=1)[0]
+    if text.endswith(("...", "…")):
+        # Search engines cut long headlines mid-word ("Head of Global
+        # Partnerships and Gro…"). Everything before the cut is still the
+        # person's own words, so keep it: drop the ellipsis, the word it
+        # truncated, and any connector left dangling. Rejecting the whole
+        # headline threw away a real title for every long one.
+        text = re.sub(r"\s*\S*$", "", text.rstrip(".… "))
+        text = re.sub(r"(?:\s+(?:of|and|&|for|the|in|at|to)|\s*[,/&-])+$", "", text, flags=re.I)
+        if len(text.split()) < 2:
+            return ""  # "Head" alone says nothing about the role
+    if company and company.strip():
+        # "VP Product, Acme Corp" -> "VP Product". Lookarounds, not \b, so
+        # names ending in punctuation ("Acme Inc.") still match.
+        text = re.sub(rf"(?<!\w){re.escape(company.strip())}(?!\w)", "", text, flags=re.I)
     text = _NOISE.sub("", text)
     text = re.sub(r"\s*[-–—,/]\s*$", "", text)
     text = re.sub(r"\s{2,}", " ", text).strip(" -–—,")
     if len(text) < 3 or len(text) > _TITLE_MAX:
-        return ""
-    if text.endswith("...") or text.endswith("…"):
         return ""
     low = text.lower()
     if low in _JUNK_TITLES:
@@ -101,6 +117,35 @@ def title_from_search_result(result_title: str | None, company: str | None = Non
     if not match:
         return ""
     return normalize_title(match.group("title"), company)
+
+
+# "Product Lead at OpenAI · Experience: OpenAI · Education: ..." - a profile
+# snippet often states the current role even when the result title is cut
+# short or is only the person's name. Segments are split on the separators
+# snippets use, so a match never spans two facts.
+_SNIPPET_ROLE_RE = re.compile(r"(?P<title>[^.·|•\n]{3,80}?)\s+(?:at|@)\s+(?P<company>[^.·|•\n,]{2,80})", re.I)
+# First-person prose and past roles are not the title someone holds now.
+_SNIPPET_NOT_TITLE = re.compile(r"^(?:i|we|my|our|he|she|they|currently|working|worked|former|formerly|ex|previously)\b", re.I)
+
+
+def title_from_snippet(snippet: str | None, company: str | None) -> str:
+    """The first 'Title at Company' statement in a result snippet, only when
+    the company named is the one searched - a snippet also lists past
+    employers and education, and those are not roles at this company."""
+    want = _key(company or "")
+    if not want:
+        return ""
+    for match in _SNIPPET_ROLE_RE.finditer(snippet or ""):
+        if not _key(match.group("company")).startswith(want):
+            continue
+        # Drop a "Experience:"-style label that shares the segment.
+        raw = re.sub(r"^[^:]{1,20}:\s*", "", match.group("title").strip())
+        if _SNIPPET_NOT_TITLE.search(raw):
+            continue
+        title = normalize_title(raw, company)
+        if title:
+            return title
+    return ""
 
 
 async def observed_titles(company: str, domain: str | None) -> list[dict[str, Any]]:
@@ -186,52 +231,125 @@ def title_from_job_posting(result_title: str | None, company: str | None = None)
     return normalize_title(text, company)
 
 
+# --- Web search budget and cache -------------------------------------------
+#
+# Every web search is charged against the member's hourly allowance
+# (reserve_tinyfish_call: 30/member/hour by default) once PER RESULTS PAGE,
+# and TinyFish returns about one page of ~8 results per call. Asking for 25
+# results used to cost up to 4 slots per query, so one load of this panel
+# could spend 8 slots, and 20 with the seniority fallback - two or three
+# reloads and the member hit "Web search limit reached". So: every query
+# asks for exactly one page, a load spends at most _PAGE_BUDGET pages, and
+# what a query found is remembered for a day so a reload costs nothing.
+_PAGE_BUDGET = 8
+_HINT_QUERY_MAX = 3  # hint terms searched per load; the rest rely on the mapping step
+_CACHE_TTL_S = 24 * 3600
+# An empty answer is remembered for less time: it can be a transient
+# upstream failure (Firecrawl returns [] on error), not a real "nobody".
+_EMPTY_CACHE_TTL_S = 3600
+# (company key, query term key) -> (expires at, [(url, title, source)]).
+# Keyed on the company name and the term only: the domain never enters the
+# query text, so it cannot change what the search returns - adding it to
+# the key would only turn identical searches into cache misses. Results are
+# public web data, so members share entries; each fetch is charged to the
+# member who made it.
+# ponytail: per-process memory, lost on restart and not shared between
+# workers; move to a table if the app runs several workers.
+_search_cache: dict[tuple[str, str], tuple[float, list[tuple[str, str, str]]]] = {}
+
+
+def _page_size() -> int:
+    # Read from web_fetch so this stays one page if TinyFish's page changes.
+    from app.services.web_fetch import _TINYFISH_SEARCH_PAGE_SIZE
+    return _TINYFISH_SEARCH_PAGE_SIZE
+
+
+def _title_from_item(item: dict[str, Any], company: str) -> tuple[str, str]:
+    """(title, source) for one search result, ('', '') when it names no role
+    held at this company."""
+    url = str(item.get("url") or "")
+    if "/jobs/view/" in url:
+        return title_from_job_posting(item.get("title"), company), "jobs"
+    if "/in/" in url:
+        # The headline first; the snippet only when the headline gave
+        # nothing (cut short, or just a name), so one profile counts once.
+        title = title_from_search_result(item.get("title"), company) or title_from_snippet(item.get("content"), company)
+        return title, "search"
+    return "", ""  # company pages, posts, news: no role held by a person
+
+
+async def _linkedin_titles(company: str, term: str, *, user_id: int | None) -> list[tuple[str, str, str]]:
+    """One LinkedIn-restricted query, one results page, remembered for a day.
+    Raises what web_search raises (quota, transport); the caller decides."""
+    from app.services.web_fetch import web_search
+
+    key = (_key(company), _key(term))
+    hit = _search_cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    results = await web_search(f"{company} {term} site:linkedin.com/in", max_results=_page_size(), user_id=user_id)
+    rows: list[tuple[str, str, str]] = []
+    for item in results or []:
+        title, src = _title_from_item(item, company)
+        if title:
+            rows.append((str(item.get("url") or ""), title, src))
+    _search_cache[key] = (time.monotonic() + (_CACHE_TTL_S if rows else _EMPTY_CACHE_TTL_S), rows)
+    return rows
+
+
+def _tally(rows: list[tuple[str, str, str]], seen_urls: set[str], counts: Counter[str],
+           display: dict[str, str], source: dict[str, str]) -> None:
+    """Count each person once per load: the hint and generic queries often
+    return the same profile, and counting it twice would rank a title by
+    how many queries found it rather than how many people hold it."""
+    for url, title, src in rows:
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+        key = _key(title)
+        counts[key] += 1
+        display.setdefault(key, title)
+        if src == "jobs" or key not in source:
+            source[key] = src
+
+
+def _quota_note(exc: Exception) -> str:
+    detail = getattr(exc, "detail", None)
+    return (str(detail) if detail else "Web search is unavailable right now") + "; showing only roles already on record."
+
+
 async def search_titles(company: str, hints: str | None, *, user_id: int | None = None) -> tuple[list[dict[str, Any]], str | None]:
-    """LinkedIn-restricted search; titles parsed from profile headlines
-    (/in/) and job postings (/jobs/view/). Plain words only - quoting the
-    company or chaining OR terms made the engine return unrelated pages in
-    live testing. A hinted query that finds nothing falls back once to a
-    generic leadership query, since the hint may be vocabulary the company
-    does not use - the very thing this feature exists to show."""
-    from app.services.web_fetch import web_search, web_search_configured
+    """LinkedIn-restricted search; titles parsed from profile headlines and
+    snippets (/in/) and job postings (/jobs/view/). Plain words only -
+    quoting the company or chaining OR terms made the engine return
+    unrelated pages in live testing, and for the same reason each typed hint
+    term is its own query: the whole hint string as one query ("healthcare
+    PMs, VPs") matched nobody. Every planned query runs and the results are
+    merged - stopping at the first query that found anyone left one or two
+    titles on screen. The generic query runs last so a hint the company does
+    not use still leaves its real vocabulary to map onto."""
+    from app.services.web_fetch import web_search_configured
 
     if not web_search_configured():
         return [], "Web search is not configured; showing only roles already on record."
     c = company.strip()
+    terms = _parse_hints(hints)[:_HINT_QUERY_MAX] + [_GENERIC_ROLE_QUERY]
     note: str | None = None
-    queries = []
-    if (hints or "").strip():
-        queries.append(f"{c} {hints.strip()} site:linkedin.com/in")
-    queries.append(f"{c} {_GENERIC_ROLE_QUERY} site:linkedin.com/in")
-
     counts: Counter[str] = Counter()
     display: dict[str, str] = {}
     source: dict[str, str] = {}
-    for query in queries:
+    seen_urls: set[str] = set()
+    for term in terms:
         try:
-            results = await web_search(query, max_results=25, user_id=user_id)
+            rows = await _linkedin_titles(c, term, user_id=user_id)
         except Exception as exc:  # quota or transport; suggestions are best-effort
-            logger.info("role suggestion search skipped for %r: %s", company, exc)
-            detail = getattr(exc, "detail", None)
-            note = (str(detail) if detail else "Web search is unavailable right now") + "; showing only roles already on record."
+            # Keep what the earlier queries found; the next query would hit
+            # the same limit, so stop asking.
+            logger.info("role suggestion search skipped for %r/%r: %s", company, term, exc)
+            note = _quota_note(exc)
             break
-        for item in results:
-            url = str(item.get("url") or "")
-            if "/jobs/view/" in url:
-                title, src = title_from_job_posting(item.get("title"), c), "jobs"
-            elif "/in/" in url:
-                title, src = title_from_search_result(item.get("title"), c), "search"
-            else:
-                continue  # company pages, posts, news: no role held by a person
-            if not title:
-                continue
-            key = _key(title)
-            counts[key] += 1
-            display.setdefault(key, title)
-            if src == "jobs" or key not in source:
-                source[key] = src
-        if counts:
-            break
+        _tally(rows, seen_urls, counts, display, source)
     return [{"title": display[k], "count": n, "source": source[k]} for k, n in counts.most_common()], note
 
 
@@ -243,38 +361,35 @@ async def search_titles(company: str, hints: str | None, *, user_id: int | None 
 _SENIORITY_BANDS = ("VP", "Vice President", "Head of", "Director of", "Manager", "Chief of Staff")
 
 
-async def titles_by_seniority(company: str, *, user_id: int | None = None) -> list[dict[str, Any]]:
-    """Ask LinkedIn per band when one broad query found nobody.
+async def titles_by_seniority(company: str, *, user_id: int | None = None,
+                              max_queries: int = len(_SENIORITY_BANDS), have: int = 0) -> list[dict[str, Any]]:
+    """Ask LinkedIn per band when the broad queries found too few titles.
 
     Same system, sharper questions: the search is still restricted to
     /in/ profiles at this company, which is where the people who would reply
     actually describe themselves. A company website's team page is not a
     substitute - it lists a handful of executives and no one below them.
+    `have` is how many distinct titles the caller already holds; asking
+    stops once the total is useful, so a top-up spends only what it needs.
     """
-    from app.services.web_fetch import web_search
-
     c = company.strip()
     counts: Counter[str] = Counter()
     display: dict[str, str] = {}
-    for band in _SENIORITY_BANDS:
+    source: dict[str, str] = {}
+    seen_urls: set[str] = set()
+    for band in _SENIORITY_BANDS[:max(0, max_queries)]:
+        if have + len(counts) >= _SEARCH_FILL_THRESHOLD:
+            break
         try:
-            results = await web_search(f"{c} {band} site:linkedin.com/in", max_results=10, user_id=user_id)
+            rows = await _linkedin_titles(c, band, user_id=user_id)
         except Exception as exc:  # quota or transport; the bands are best-effort
             logger.info("seniority band search skipped for %r/%r: %s", company, band, exc)
             break
-        for item in results or []:
-            if "/in/" not in str(item.get("url") or ""):
-                continue
-            title = title_from_search_result(item.get("title"), c)
-            if not title:
-                continue
-            key = _key(title)
-            counts[key] += 1
-            display.setdefault(key, title)
+        _tally([r for r in rows if r[2] == "search"], seen_urls, counts, display, source)
     return [{"title": display[k], "count": n, "source": "band"} for k, n in counts.most_common(25)]
 
 
-def merge_titles(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_titles(*groups: list[dict[str, Any]], limit: int | None = MAX_CHIPS) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     display: dict[str, str] = {}
     source: dict[str, str] = {}
@@ -287,7 +402,7 @@ def merge_titles(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             src = row.get("source") or "search"
             if key not in source or rank.get(src, 9) < rank.get(source[key], 9):
                 source[key] = src
-    return [{"title": display[k], "count": c, "source": source[k]} for k, c in counts.most_common(MAX_CHIPS)]
+    return [{"title": display[k], "count": c, "source": source[k]} for k, c in counts.most_common(limit)]
 
 
 def _parse_hints(hints: str | None) -> list[str]:
@@ -356,17 +471,26 @@ async def suggest_roles(*, user_id: int, company: str, domain: str | None, hints
     note: str | None = None
     if len(seen) < _SEARCH_FILL_THRESHOLD or (hints or "").strip():
         searched, note = await search_titles(company, hints, user_id=user_id)
-    # Nothing observed and nothing found: ask LinkedIn again, one seniority
-    # band at a time, rather than handing back a generic guess.
-    if not seen and not searched:
-        escalated = await titles_by_seniority(company, user_id=user_id)
-        if escalated:
-            note = "Found by asking LinkedIn for each seniority band separately."
-        elif not note:
+    # Too few titles to choose from: ask LinkedIn again, one seniority band
+    # at a time, rather than handing back one or two chips or a generic
+    # guess. Not after a quota stop - every band would hit the same limit.
+    # The bands get whatever of the page budget the broad queries could
+    # have used (hint terms + the generic query), so a cold load stays
+    # within _PAGE_BUDGET pages even when nothing was cached.
+    have = len(merge_titles(seen, searched, limit=None))
+    if (have < _SEARCH_FILL_THRESHOLD and note is None) or (not seen and not searched):
+        spent = min(len(_parse_hints(hints)), _HINT_QUERY_MAX) + 1
+        escalated = await titles_by_seniority(company, user_id=user_id, max_queries=_PAGE_BUDGET - spent, have=have)
+        if escalated and not seen and not searched:
+            note = note or "Found by asking LinkedIn for each seniority band separately."
+        elif not escalated and not seen and not searched and not note:
             note = ("LinkedIn search returns nothing for this company. Type the role you want "
                     "and Find people will search for it directly.")
-    roles = merge_titles(seen, searched, escalated)
-    equivalents = await map_equivalents(company, hints, roles) if (hints or "").strip() else []
+    # The mapping sees every title found, not only the chips that fit on
+    # screen: the closest equivalent to a typed role can be a rarer title.
+    pool = merge_titles(seen, searched, escalated, limit=None)
+    roles = pool[:MAX_CHIPS]
+    equivalents = await map_equivalents(company, hints, pool) if (hints or "").strip() else []
     return {
         "company": company,
         "roles": roles,

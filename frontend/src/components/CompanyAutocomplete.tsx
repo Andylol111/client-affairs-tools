@@ -20,7 +20,7 @@ export default function CompanyAutocomplete({
   value,
   onChange,
   onSelect,
-  onSuggestion,
+  onSubmitText,
   placeholder = 'Company name',
   disabled = false,
 }: {
@@ -29,10 +29,10 @@ export default function CompanyAutocomplete({
   value: string;
   onChange: (name: string, option?: CompanyOption) => void;
   onSelect?: (option: CompanyOption) => void;
-  /** The suggestion Enter would pick for what is typed, if it is the same
-   *  company - so a button beside the field can take it, domain and all,
-   *  rather than the half-typed text. */
-  onSuggestion?: (option: CompanyOption | undefined) => void;
+  /** Enter with no row chosen, or a paste: the text itself, for the caller
+   *  to resolve. Without this Enter would take the top row, which for "HBO"
+   *  was a UK production subsidiary nobody asked for. */
+  onSubmitText?: (text: string) => void;
   placeholder?: string;
   disabled?: boolean;
 }) {
@@ -42,7 +42,8 @@ export default function CompanyAutocomplete({
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<CompanyOption[]>([]);
   const [registerOptions, setRegisterOptions] = useState<CompanyOption[]>([]);
-  const [highlight, setHighlight] = useState(0);
+  // -1: no row chosen yet. A row is only taken once the member points at it.
+  const [highlight, setHighlight] = useState(-1);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -110,10 +111,6 @@ export default function CompanyAutocomplete({
     return [...local, ...fromRegister].slice(0, 12);
   }, [options, registerOptions, value]);
 
-  const suggestion = value.trim() && filtered[highlight]
-    && norm(filtered[highlight].name).startsWith(norm(value)) ? filtered[highlight] : undefined;
-  useEffect(() => { onSuggestion?.(suggestion); }, [onSuggestion, suggestion]);
-
   const pick = (option: CompanyOption) => {
     onChange(option.name, option);
     onSelect?.(option);
@@ -135,10 +132,20 @@ export default function CompanyAutocomplete({
         placeholder={placeholder}
         autoComplete="off"
         onFocus={() => setOpen(true)}
+        onPaste={(event) => {
+          // A pasted LinkedIn page, or a pasted list of companies, needs no
+          // further typing: hand it over whole.
+          const text = event.clipboardData.getData('text').trim();
+          if (onSubmitText && (/linkedin\.com\/(company|showcase)\//i.test(text) || /[\n\r]/.test(text))) {
+            event.preventDefault();
+            setOpen(false);
+            onSubmitText(text);
+          }
+        }}
         onChange={(event) => {
           onChange(event.target.value);
           setOpen(true);
-          setHighlight(0);
+          setHighlight(-1);
         }}
         onKeyDown={(event) => {
           if (event.key === 'ArrowDown') {
@@ -147,10 +154,14 @@ export default function CompanyAutocomplete({
             setHighlight((current) => Math.min(filtered.length - 1, current + 1));
           } else if (event.key === 'ArrowUp') {
             event.preventDefault();
-            setHighlight((current) => Math.max(0, current - 1));
+            setHighlight((current) => Math.max(-1, current - 1));
           } else if (event.key === 'Enter' && open && filtered[highlight]) {
             event.preventDefault();
             pick(filtered[highlight]);
+          } else if (event.key === 'Enter' && value.trim() && onSubmitText) {
+            event.preventDefault();
+            setOpen(false);
+            onSubmitText(value.trim());
           } else if (event.key === 'Escape') {
             setOpen(false);
           }

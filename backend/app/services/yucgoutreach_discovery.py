@@ -87,18 +87,15 @@ def _split_first_last(full_name: str) -> tuple[str, str]:
     name = (full_name or "").strip()
     if not name:
         return "", ""
-    parts = [p for p in re.split(r"[\s,]+", name) if p]
+    # A word with a digit in it is never part of a person's name: it is the id
+    # LinkedIn adds to a taken profile address ("maggie-schumann-55937b5a"),
+    # which otherwise became the surname "55937b5a".
+    parts = [p for p in re.split(r"[\s,]+", name) if p and not re.search(r"\d", p)]
+    if not parts:
+        return "", ""
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], parts[-1]
-
-
-async def _infer_domain(company_name: str) -> str:
-    results = await _tavily_search(f"{company_name} official company website homepage", max_results=5)
-    if not results:
-        return ""
-    url = results[0].get("url") or ""
-    return normalize_domain(url)
 
 
 async def _company_meta(company_name: str, domain: str) -> dict[str, str]:
@@ -342,6 +339,21 @@ async def _run_update(
             sets.append("prospects_count = ?")
             args.append(prospects_count)
         if research_json is not None:
+            # Merged into what the run already recorded, not written over it.
+            # The closing update used to replace the per-source counts (website,
+            # roster, web) with the totals, so a run that came back empty could
+            # no longer say which source had failed.
+            cur = await db.execute(
+                "SELECT research_json FROM yucgoutreach_discovery_runs WHERE id = ?", (run_id,)
+            )
+            prior_row = await cur.fetchone()
+            try:
+                prior = json.loads((prior_row["research_json"] if prior_row else None) or "{}")
+                incoming = json.loads(research_json)
+            except (TypeError, ValueError):
+                prior, incoming = None, None
+            if isinstance(prior, dict) and isinstance(incoming, dict):
+                research_json = json.dumps({**prior, **incoming})
             sets.append("research_json = ?")
             args.append(research_json)
         if error_message is not None:
@@ -412,7 +424,20 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     )
 
     if not domain:
-        domain = await _infer_domain(company)
+        # This used to take the host of the first search hit, unchecked, so
+        # "Meta Platforms, Inc." became globaldata.com (a data vendor's profile
+        # page) and the run saved jeff.kim@globaldata.com as a Meta prospect.
+        # The resolver only answers with a domain that looks like the company,
+        # is not a platform or data vendor, and accepts mail. When nothing
+        # verifies the run goes on without a domain: web search, the roster and
+        # the seeds still find people, they just get no invented mailbox.
+        from app.services.company_email_cache import discover_company_domain
+
+        try:
+            domain = await discover_company_domain(company)
+        except Exception:
+            logger.exception("company domain lookup failed; running without a domain")
+            domain = ""
 
     custom_patterns = await _load_custom_patterns()
     web_max = min(max_prospects * 2, int(os.getenv("SCRAPE_WEB_MAX_PEOPLE", "80")))
@@ -449,9 +474,12 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
                 cached_roster_contacts, refresh_roster_on_demand, roster_refresh_note,
             )
 
-            rows = await cached_roster_contacts(company, domain)
+            # Only a domain the member typed may replace the one the roster
+            # already holds; a looked-up domain just fills a gap.
+            pin = bool(domain_in)
+            rows = await cached_roster_contacts(company, domain, pin_domain=pin)
             if not rows:
-                rows = await refresh_roster_on_demand(company, domain)
+                rows = await refresh_roster_on_demand(company, domain, pin_domain=pin)
             return rows, await roster_refresh_note(company, domain)
         except Exception:
             logger.exception("roster cache-first lookup failed")
@@ -622,7 +650,9 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
                     email,
                     company,
                     linkedin or c.get("source_url"),
-                    c.get("title"),
+                    # A "title" that is only the person's name says nothing.
+                    None if (c.get("title") or "").strip().lower() in {name.lower(), f"{first} {last}".strip().lower()}
+                    else c.get("title"),
                     None,
                     None,
                     None,

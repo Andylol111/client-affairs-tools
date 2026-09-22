@@ -1227,6 +1227,78 @@ async def drain_company_register() -> dict[str, Any]:
     return result
 
 
+# Brand -> registered-name aliases. Members type the name on the product, the
+# register holds the name on the filing: "HBO" is a Warner Bros. Discovery
+# brand with no SEC listing of its own, so a plain name search for "hbo" can
+# only ever find unrelated UK companies that happen to start with those
+# letters ("Hbos Uk Limited"). This is a deliberately small, hand-curated list
+# of well-known consumer brands whose owner a member would not guess from the
+# brand - not an attempt at a corporate-ownership graph. Values are lowercase
+# registered-name prefixes, matched with LIKE 'prefix%' so "alphabet inc"
+# finds "Alphabet Inc." and a UK "Alphabet Inc Ltd" alike; where SEC's title
+# is spelled more than one way (with and without the dot), both are listed.
+# A target that is not in the register (ByteDance, X Corp are private) simply
+# matches nothing. Add an entry only when the brand -> owner link is public
+# and stable; an alias that goes stale ranks the wrong company first.
+BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "hbo": ("warner bros. discovery", "warner bros discovery"),
+    "hbo max": ("warner bros. discovery", "warner bros discovery"),
+    "cnn": ("warner bros. discovery", "warner bros discovery"),
+    "google": ("alphabet inc",),
+    "youtube": ("alphabet inc",),
+    "waymo": ("alphabet inc",),
+    "deepmind": ("alphabet inc",),
+    "facebook": ("meta platforms",),
+    "instagram": ("meta platforms",),
+    "whatsapp": ("meta platforms",),
+    "tiktok": ("bytedance",),
+    "snapchat": ("snap inc",),
+    "twitter": ("x corp",),
+    "x": ("x corp",),
+    "aws": ("amazon com", "amazon.com"),
+    "amazon web services": ("amazon com", "amazon.com"),
+    "whole foods": ("amazon com", "amazon.com"),
+    "linkedin": ("microsoft corp",),
+    "github": ("microsoft corp",),
+    "xbox": ("microsoft corp",),
+    "espn": ("walt disney", "the walt disney"),
+    "pixar": ("walt disney", "the walt disney"),
+    "hulu": ("walt disney", "the walt disney"),
+    "nbc": ("comcast corp",),
+    "nbcuniversal": ("comcast corp",),
+    "peacock": ("comcast corp",),
+    "chase": ("jpmorgan chase",),
+    "old navy": ("gap inc",),
+    "kfc": ("yum brands", "yum! brands"),
+    "taco bell": ("yum brands", "yum! brands"),
+    "tj maxx": ("tjx companies", "tjx cos"),
+    "p&g": ("procter & gamble", "procter and gamble"),
+    "j&j": ("johnson & johnson",),
+    "bofa": ("bank of america",),
+}
+
+
+def brand_alias_names(q: str | None) -> tuple[str, ...]:
+    """Registered-name prefixes a brand query stands for (empty when it is
+    not a curated brand). Shared with the company resolver so "HBO" typed in
+    Find people lands on the same company the register search puts first."""
+    key = re.sub(r"\s+", " ", (q or "").strip().lower())
+    return BRAND_ALIASES.get(key, ())
+
+
+# Punctuation that separates words in a registered name. "Frelif
+# (Loughborough) Llp" must count "loughborough" as a word start, and the same
+# replacement is applied to the query so "at&t" still finds "At&T Inc".
+_WORD_BREAK_CHARS = "(-./&"
+
+
+def _word_break_sql(column: str) -> str:
+    expr = f"lower({column})"
+    for ch in _WORD_BREAK_CHARS:
+        expr = f"replace({expr}, '{ch}', ' ')"
+    return f"(' ' || {expr})"
+
+
 async def search_register(
     *,
     q: str | None = None,
@@ -1245,22 +1317,50 @@ async def search_register(
     # Meta Platforms under every UK company with "metal" in its name or
     # sector, just because "meta" is a literal prefix of "metal". Match
     # quality is ranked first, in tiers a plain substring search cannot
-    # express: exact name, name starts with the query as a whole word, the
-    # query as a whole word elsewhere in the name, a plain prefix, a plain
-    # substring in the name, and last a sector-label-only match.
+    # express: exact name / exact ticker / curated brand alias, name starts
+    # with the query as a whole word, the query as a whole word elsewhere in
+    # the name, a plain prefix, a plain substring in the name, and last a
+    # sector-label-only match.
     relevance_case = "0.0"
     relevance_args: list[Any] = []
-    if q and q.strip():
+    searching = bool(q and q.strip())
+    if searching:
         raw = q.strip().lower()
         # Escape the query's own literal % and _ so a member searching for
         # them is not exposed to SQL LIKE wildcard behaviour.
         escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where.append(
-            "(lower(company_name) LIKE ? ESCAPE '\\' OR lower(COALESCE(sector_label,'')) LIKE ? ESCAPE '\\')"
-        )
-        args.extend([f"%{escaped}%", f"%{escaped}%"])
-        relevance_case = """CASE
+        aliases = brand_alias_names(raw)
+        alias_sql = " OR ".join(["lower(company_name) LIKE ? ESCAPE '\\'"] * len(aliases))
+        alias_args = [
+            a.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for a in aliases
+        ]
+        # A ticker is only on SEC-listed rows, so the source test keeps
+        # json_extract off the millions of other rows. "GOOGL" appears
+        # nowhere in "Alphabet Inc.", which is why it needs its own clause.
+        ticker_sql = "(source = 'sec_public' AND lower(json_extract(metadata_json, '$.ticker')) = ?)"
+        if len(raw) < 5:
+            # Three or four letters occur inside thousands of unrelated
+            # words: "hbo" is in "Loug-hbo-rough", so "Frelif (Loughborough)
+            # Llp" came back for HBO. A short query has to start a word of
+            # the name; a sector-label hit is dropped for the same reason
+            # ("meta" in "fabricated metal products" names no company).
+            boundary = raw
+            for ch in _WORD_BREAK_CHARS:
+                boundary = boundary.replace(ch, " ")
+            boundary = boundary.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            name_sql = f"{_word_break_sql('company_name')} LIKE ? ESCAPE '\\'"
+            name_args: list[Any] = [f"% {boundary}%"]
+        else:
+            name_sql = (
+                "lower(company_name) LIKE ? ESCAPE '\\' OR lower(COALESCE(sector_label,'')) LIKE ? ESCAPE '\\'"
+            )
+            name_args = [f"%{escaped}%", f"%{escaped}%"]
+        where.append(f"({name_sql} OR {ticker_sql}{' OR ' + alias_sql if aliases else ''})")
+        args.extend([*name_args, raw, *alias_args])
+        relevance_case = f"""CASE
             WHEN lower(company_name) = ? THEN 0
+            WHEN {ticker_sql} THEN 0
+            {f"WHEN {alias_sql} THEN 0" if aliases else ""}
             WHEN lower(company_name) LIKE ? ESCAPE '\\' THEN 1
             WHEN lower(company_name) LIKE ? ESCAPE '\\' OR lower(company_name) LIKE ? ESCAPE '\\' THEN 2
             WHEN lower(company_name) LIKE ? ESCAPE '\\' THEN 3
@@ -1269,6 +1369,8 @@ async def search_register(
         END"""
         relevance_args = [
             raw,
+            raw,
+            *alias_args,
             f"{escaped} %",
             f"% {escaped} %", f"% {escaped}",
             f"{escaped}%",
@@ -1290,16 +1392,30 @@ async def search_register(
         where.append("officer_count > 0")
     clause = f"WHERE {' AND '.join(where)}" if where else ""
     limit = max(1, min(int(limit), 200))
-    db = await get_db()
-    try:
-        total = await (await db.execute(f"SELECT COUNT(*) AS n FROM company_register {clause}", tuple(args))).fetchone()
-        rows = await (await db.execute(
-            f"""SELECT r.*,
-                       (SELECT COUNT(*) FROM company_register_people p
-                         WHERE p.register_id = r.id AND p.person_level = 'working') AS working_count
-                FROM company_register r {clause}
-                ORDER BY {relevance_case} ASC,
+    if searching:
+        # A member who types a name wants the company they mean, and within
+        # one match level that is almost always the biggest one: "hbo" found
+        # three dated UK rows before any listed company because a listed
+        # company carries no filing date, so recency-first put every UK
+        # accounts filing ahead of it. Size decides first - SEC's market-cap
+        # order, then headcount, then the Companies House statutory band
+        # (group > full > medium), then how many officers are on record -
+        # and recency only breaks what is left.
+        order_by = """match_level ASC,
+                         CASE WHEN tier = 'us_public' AND prominence_rank IS NOT NULL THEN 0 ELSE 1 END,
+                         CASE WHEN prominence_rank IS NOT NULL THEN prominence_rank ELSE 999999999 END ASC,
+                         COALESCE(employees, -1) DESC,
+                         CASE WHEN source = 'companies_house' THEN
+                             CASE json_extract(metadata_json, '$.account_category')
+                                 WHEN 'GROUP' THEN 0 WHEN 'FULL' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END
+                         ELSE 3 END,
+                         officer_count DESC,
                          COALESCE(last_event_at, '') DESC, COALESCE(last_event_amount, 0) DESC,
+                         company_name"""
+    else:
+        # Browsing with no query is a "what is new" feed: the newest filing
+        # first is the point of it, so the original order stays.
+        order_by = """COALESCE(last_event_at, '') DESC, COALESCE(last_event_amount, 0) DESC,
                          officer_count DESC,
                          -- A listed company has no filing date or dollar amount to
                          -- rank by - nothing above this line ever distinguishes it
@@ -1309,9 +1425,21 @@ async def search_register(
                          -- real recent activity. This is SEC's own market-cap order,
                          -- so the companies a member actually wants surface first.
                          CASE WHEN prominence_rank IS NOT NULL THEN prominence_rank ELSE 999999999 END ASC,
-                         company_name
+                         company_name"""
+    db = await get_db()
+    try:
+        total = await (await db.execute(f"SELECT COUNT(*) AS n FROM company_register {clause}", tuple(args))).fetchone()
+        # match_level is returned with each row so a caller (the company
+        # resolver) can tell "this is the company" (0-1) from "these letters
+        # appear in its name" without re-deriving the tiers.
+        rows = await (await db.execute(
+            f"""SELECT r.*, {relevance_case} AS match_level,
+                       (SELECT COUNT(*) FROM company_register_people p
+                         WHERE p.register_id = r.id AND p.person_level = 'working') AS working_count
+                FROM company_register r {clause}
+                ORDER BY {order_by}
                 LIMIT ? OFFSET ?""",
-            (*args, *relevance_args, limit, max(0, int(offset))),
+            (*relevance_args, *args, limit, max(0, int(offset))),
         )).fetchall()
         items = []
         for row in rows:

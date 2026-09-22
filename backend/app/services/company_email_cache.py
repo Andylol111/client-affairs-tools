@@ -410,23 +410,51 @@ async def get_domain_patterns(domain: str) -> list[dict[str, Any]]:
         await db.close()
 
 
-async def resolve_company_domain(text: str) -> str:
+# A hostname: dot-separated labels ending in an alphabetic TLD, no spaces.
+# normalize_domain only strips URL syntax, so "Warner Bros. Discovery" came
+# through it as the "domain" 'warner bros. discovery' just for holding a dot.
+_HOSTNAME = re.compile(r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def is_hostname(text: str) -> bool:
+    return bool(_HOSTNAME.match(text or ""))
+
+
+async def resolve_company_domain(text: str, *, member_supplied: bool = True) -> str:
     """Best-effort mail domain for a free-text company reference.
 
-    normalize_domain only strips URL syntax, so "Bain" survives as "bain" and
-    silently produces addresses like jane.doe@bain. Anything without a dot is
-    treated as a company *name* and matched against domains already on record.
-    Returns "" when the domain is genuinely unknown, so callers can decline to
-    guess instead of inventing a hostname.
+    Text that is a real hostname is taken as the domain. A member who typed
+    "meta.com" meant it, so that is the default; a caller passing a company
+    NAME (member_supplied=False) only gets its dotted text back as a domain
+    when the host accepts mail, the rule discover_company_domain applies to a
+    search hit. Anything else is treated as a company *name* and matched
+    against domains already on record. Returns "" when the domain is
+    genuinely unknown, so callers can decline to guess instead of inventing a
+    hostname ("Bain" must not become jane.doe@bain).
     """
     raw = (text or "").strip()
     if not raw:
         return ""
     dom = normalize_domain(raw)
-    if "." in dom:
-        return dom
+    if is_hostname(dom):
+        if member_supplied:
+            return dom
+        from app.services.email_verifier import get_mx_cached
+
+        try:
+            mx_ok, _ = await get_mx_cached(dom, None)
+        except Exception:
+            mx_ok = False
+        if mx_ok:
+            return dom
+    from app.services.company_claims import company_key
+
     name = raw.lower()
-    like = f"%{name}%"
+    # Stored contacts count only when their company IS this company once legal
+    # forms and punctuation are set aside. The old LIKE '%meta%' also took
+    # "Metadata Systems" rows, so a short name could come back with another
+    # company's domain. The LIKE below only narrows the rows to read.
+    want = company_key(raw)
     db = await get_db()
     try:
         cur = await db.execute(
@@ -438,16 +466,20 @@ async def resolve_company_domain(text: str) -> str:
         row = await cur.fetchone()
         if row and row["company_domain"]:
             return str(row["company_domain"])
+        first_word = (re.findall(r"[a-z0-9]+", name) or [name])[0]
         cur = await db.execute(
-            """SELECT company_domain, COUNT(*) AS n FROM contacts
+            """SELECT company, company_domain, COUNT(*) AS n FROM contacts
                WHERE company_domain IS NOT NULL AND company_domain != ''
-                 AND (LOWER(company) = ? OR LOWER(company) LIKE ?)
-               GROUP BY company_domain ORDER BY n DESC LIMIT 1""",
-            (name, like),
+                 AND LOWER(company) LIKE ?
+               GROUP BY company, company_domain ORDER BY n DESC""",
+            (f"%{first_word}%",),
         )
-        row = await cur.fetchone()
-        if row and row["company_domain"]:
-            return str(row["company_domain"])
+        counts: dict[str, int] = {}
+        for r in await cur.fetchall():
+            if company_key(r["company"]) == want:
+                counts[str(r["company_domain"])] = counts.get(str(r["company_domain"]), 0) + int(r["n"])
+        if counts:
+            return max(counts, key=counts.get)
     finally:
         await db.close()
     return ""
@@ -468,8 +500,14 @@ async def discover_company_domain(name: str) -> str:
     company = (name or "").strip()
     if not company:
         return ""
-    known = await resolve_company_domain(company)
-    if known:
+    from app.services.roster_watch import _domain_matches_company, _registrable_domain
+
+    known = await resolve_company_domain(company, member_supplied=False)
+    # What the club has on record came from earlier runs, and an earlier run
+    # with an unchecked guess could have stored a data vendor's host (Meta's
+    # people saved at globaldata.com). A platform or vendor host is never a
+    # company's mail domain, so it does not count as known.
+    if known and _registrable_domain(known):
         return known
     from app.services.web_fetch import web_search_configured
     web_ok = web_search_configured() or bool((os.getenv("TAVILY_API_KEY") or "").strip())
@@ -478,7 +516,6 @@ async def discover_company_domain(name: str) -> str:
     # Same evidence rule the roster resolver uses: the hit must look like the
     # company and accept mail, otherwise it is just a search result.
     from app.services.email_verifier import get_mx_cached
-    from app.services.roster_watch import _domain_matches_company, _registrable_domain
     from app.services.web_contact_discovery import _tavily_search
 
     try:
@@ -680,6 +717,81 @@ _LEGAL_SUFFIXES = frozenset({
     "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
     "plc", "co", "company", "group",
 })
+
+# What a company's name carries besides its brand: the legal form, and the
+# descriptors a listing adds ("Platforms", "Holdings"). People write "Engineer
+# at Meta", not "at Meta Platforms, Inc.", so matching on every word of the
+# legal name rejected the evidence that was actually there.
+_BRAND_SUFFIXES = _LEGAL_SUFFIXES | frozenset({
+    "llp", "lp", "companies", "sa", "nv", "se", "ag", "gmbh", "bv", "ab", "asa",
+    "oyj", "spa", "srl", "kk", "holdings", "holding", "platforms", "technologies",
+    "international",
+})
+# Words too common to be a brand on their own. "American International Group"
+# would otherwise shrink to "american" and match American Express, American
+# Airlines and every page with the adjective, so a name is never cut down to
+# one of these. ponytail: a hand list, so a generic word missing from it can
+# still over-match; the upgrade is word frequencies instead of a list.
+_GENERIC_BRAND_WORDS = frozenset({
+    "american", "national", "general", "united", "first", "global", "new", "north",
+    "south", "east", "west", "western", "eastern", "northern", "southern", "pacific",
+    "atlantic", "royal", "standard", "universal", "federal", "central", "capital",
+    "great", "world", "us", "usa", "china", "japan", "british", "european", "asia",
+    "international", "bank", "energy", "health", "financial", "digital", "media",
+})
+
+
+def _fold_company_text(text: str) -> str:
+    """Lowercase, accents folded ("Itaú" -> "itau"), and short letters joined by
+    "&" kept as one word ("AT&T" -> "att"). Split, "AT&T" became the brand words
+    "at" and "t", which every sentence contains."""
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKD", (text or "").lower())
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return re.sub(r"\b([a-z0-9]{1,2})\s*&\s*([a-z0-9]{1,2})\b", r"\1\2", folded)
+
+
+def company_brand_words(name: str) -> list[str]:
+    """The words that identify a company, as people write it: "Meta Platforms,
+    Inc." -> ["meta"], "The Walt Disney Company" -> ["walt", "disney"].
+
+    Only trailing suffixes and a leading "The" are dropped, so a descriptor that
+    IS the brand's first word survives ("International Paper" keeps both words,
+    rather than shrinking to "paper" and matching every page about paper). When
+    everything is a suffix ("Group Holdings Ltd") the full word list comes back
+    instead of nothing, so a caller never matches on an empty brand.
+    """
+    cleaned = _fold_company_text(re.sub(r"\([^)]*\)", " ", name or ""))
+    # "S.A." and "N.V." are one suffix each, not two stray letters.
+    cleaned = re.sub(r"\b([a-z])\.([a-z])\b\.?", r"\1\2", cleaned)
+    words = re.findall(r"[a-z0-9]+", cleaned)
+    brand = list(words)
+    if brand and brand[0] == "the":
+        brand.pop(0)
+    while brand and brand[-1] in _BRAND_SUFFIXES:
+        if len(brand) == 2 and brand[0] in _GENERIC_BRAND_WORDS:
+            break
+        brand.pop()
+    return brand or words
+
+
+def text_names_brand(text: str, name: str) -> bool:
+    """True when every brand word of ``name`` appears in ``text`` as a whole word.
+
+    Whole words, because a substring test let "Meta" match "Metadata Engineer".
+    The trade-off, chosen on purpose: a one-word brand still matches any page
+    using that word, so "Apple Inc." accepts "Apple Bank for Savings". Rejecting
+    it would need a list of every other company sharing a brand word; recall is
+    preferred here because callers only treat this as one piece of evidence and
+    keep their other gates (profile or company-site source, role wording, the
+    title naming another employer).
+    """
+    brand = company_brand_words(name)
+    if not brand:
+        return False
+    low = _fold_company_text(text)
+    return all(re.search(rf"(?<![a-z0-9]){re.escape(w)}(?![a-z0-9])", low) for w in brand)
 
 
 def guess_domain_from_name(name: str) -> str | None:
