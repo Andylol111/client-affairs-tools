@@ -56,8 +56,6 @@ async function mockRegister(page: Page) {
     else if (path === '/api/yucgoutreach/role-suggestions') body = { company: url.searchParams.get('company'), roles: [], equivalents: [], sources: {} };
     else if (path === '/api/outreach/flows') body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
-    else if (path === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (path === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
     else if (path === '/api/ai/models') body = { groups: [] };
     else if (path.startsWith('/api/yucg/rosters')) body = { rosters: [] };
     else if (/\/companies\/summary$|\/sequences$|\/custom-formats$/.test(path)) body = [];
@@ -71,9 +69,8 @@ test('register browses the free public pool and hands a company to Find people',
   await page.goto('/scraper');
   await page.getByRole('tab', { name: 'Companies' }).click();
 
-  // The index opens on the club's own curated list: judgement first, reach
-  // second.
-  await expect(page.getByRole('button', { name: 'Club target list' })).toBeVisible();
+  // The index opens on every company on record - the register is the whole
+  // pool - and a tier button narrows it.
   await page.getByRole('button', { name: 'Recently funded' }).click();
 
   // States what is on record across every source.

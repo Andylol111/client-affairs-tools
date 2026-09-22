@@ -21,13 +21,10 @@ async function mockSurface(page: Page) {
       recipients: 2, ready: 2, held: [],
       sample: { email: 'jean.bartik@company1.com', subject: 'A long one', body: LONG_BODY },
     };
-    else if (p === '/api/yucg/prospects/recommend') body = { recommendations: [], count: 0 };
     else if (p === '/api/yucgoutreach/role-suggestions') body = { company: url.searchParams.get('company'), roles: [], equivalents: [], sources: {} };
     else if (p === '/api/contacts/companies/summary') body = [];
     else if (p === '/api/yucgoutreach/runs') body = [];
     else if (p === '/api/outreach/flows') body = [];
-    else if (p === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (p === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
     else if (p === '/api/yucgoutreach/register/summary') body = { tiers: [], sectors: [], recent_ingests: [] };
     else if (p === '/api/yucgoutreach/register') body = { items: [], total: 0, limit: 40, offset: 0 };
     else if (p === '/api/ai/models') body = { groups: [] };

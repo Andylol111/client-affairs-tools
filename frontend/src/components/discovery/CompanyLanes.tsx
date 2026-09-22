@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { CompanyRun } from '../../lib/useDiscoveryRuns';
 
 /**
- * Where each company stands, drawn the way a commit graph draws branches.
+ * Company progress, drawn the way a commit graph draws branches.
  *
  * A campaign to twelve companies is twelve pieces of work that merge into one
  * message. A list cannot show that: it says which companies were picked but
@@ -60,13 +60,19 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
   const hidden = lanes.length - shown.length;
 
   return (
-    <section className="surface-card rounded-2xl border border-pale-sky px-4 py-3" aria-label="Company progress"
+    <section className="surface-card rounded-2xl border border-pale-sky px-4 pb-3" aria-label="Company progress"
              data-testid="company-lanes">
-      <div className="flex items-baseline justify-between mb-1">
-        <h2 className="text-[15px] font-semibold text-deep-navy">Where each company stands</h2>
-        <span className="text-xs text-slate-500">
-          {lanes.length} compan{lanes.length === 1 ? 'y' : 'ies'} · {lanes.reduce((n, l) => n + l.ticked, 0)} people ticked
-        </span>
+      {/* Sticky against the surface, the same way the sheet's own header
+          pins: scroll past this panel and its title stays put until the
+          panel itself has scrolled by, then the sheet's header takes over. */}
+      <div className="sticky top-0 z-10 -mx-4 border-b border-pale-sky bg-white/95 px-4 py-2 backdrop-blur"
+           data-testid="lanes-header">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-[15px] font-semibold text-deep-navy">Company progress</h2>
+          <span className="text-xs text-slate-500">
+            {lanes.length} compan{lanes.length === 1 ? 'y' : 'ies'} · {lanes.reduce((n, l) => n + l.ticked, 0)} people ticked
+          </span>
+        </div>
       </div>
 
       <ul className="m-0 list-none p-0">
@@ -85,11 +91,20 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
               onMouseEnter={() => onFocus(lane.company)}
               onFocus={() => onFocus(lane.company)}
               onClick={() => onFocus(lane.company)}
-              className={`group flex items-center gap-2 rounded-lg px-1 -mx-1 ${
+              // The graph (112px) plus the two fixed alignment columns
+              // (176px + 144px) alone is wider than a phone screen, before
+              // the company name gets any room at all. Forcing that onto one
+              // frozen-height row on mobile did not make it fit - it made
+              // the row overflow silently, and the sibling below sat over
+              // wherever the overflow landed, so a tap could land on a
+              // completely different lane's button. Below `sm` the row wraps
+              // to two lines and grows to fit instead.
+              className={`group flex flex-wrap sm:flex-nowrap sm:h-[34px] items-center gap-x-2 gap-y-1 rounded-lg px-1 py-1.5 sm:py-0 -mx-1 ${
                 isFocused ? 'bg-pale-sky/40' : 'hover:bg-pale-sky/20'}`}
-              style={{ height: ROW }}
             >
-              <svg width={GRAPH_W} height={ROW} viewBox={`0 0 ${GRAPH_W} ${ROW}`} aria-hidden="true" className="shrink-0">
+              {/* Purely decorative - the commit-graph metaphor is a desktop
+                  flourish with room to spare. A phone does not have that room. */}
+              <svg width={GRAPH_W} height={ROW} viewBox={`0 0 ${GRAPH_W} ${ROW}`} aria-hidden="true" className="hidden sm:block shrink-0">
                 {/* The campaign itself: every lane leaves it and returns to it. */}
                 <line x1={TRUNK_X} y1={0} x2={TRUNK_X} y2={ROW} stroke="#1A2F5A" strokeWidth={2} />
                 <path
@@ -112,19 +127,31 @@ export default function CompanyLanes({ lanes, built, focused, onFocus, onFind, o
                   />
                 ))}
               </svg>
-              <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-deep-navy" title={lane.company}>
+              <span className="min-w-0 flex-1 basis-full sm:basis-auto truncate text-[13px] font-semibold text-deep-navy" title={lane.company}>
                 {lane.company}
               </span>
-              <span className={`shrink-0 text-xs tabular-nums ${
+              {/* Fixed widths, not natural ones: "nobody yet" and "23 found ·
+                  search failed · 23 ticked" are wildly different lengths, and
+                  a natural-width column shifts left or right with every row's
+                  own text. A fixed box keeps the column's left edge - and the
+                  actions after it - in the same place on every row. */}
+              <span className={`shrink-0 sm:w-44 truncate text-xs tabular-nums ${
                 lane.run.state === 'failed' ? 'text-amber-800' : active ? 'text-deep-navy' : 'text-slate-500'}`}
+                    title={stateText(lane) + (lane.ticked > 0 ? ` · ${lane.ticked} ticked` : '')}
                     data-testid="lane-state">
                 {stateText(lane)}
                 {lane.ticked > 0 ? ` · ${lane.ticked} ticked` : ''}
               </span>
-              {/* Actions show on hover or keyboard focus, so a screenful of
-                  lanes is not a screenful of buttons; they are in the tab
-                  order regardless. */}
-              <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {/* Actions hide until hover or keyboard focus on a real pointer
+                  device, so a screenful of lanes is not a screenful of
+                  buttons. That trick actively breaks touch: there is no
+                  hover state to reveal them, and Playwright's mobile-viewport
+                  suite caught exactly this - the button existed at opacity 0
+                  and nothing ever made it tappable. Below the `sm` breakpoint
+                  the actions are always visible instead. Fixed width and
+                  right-aligned so the "..." menu appearing or not for a given
+                  row never moves anything to its left. */}
+              <span className="flex shrink-0 sm:w-36 items-center sm:justify-end gap-1 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:focus-within:opacity-100">
                 <button
                   type="button"
                   disabled={active}

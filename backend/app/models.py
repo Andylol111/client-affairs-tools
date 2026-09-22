@@ -86,39 +86,3 @@ class Campaign(BaseModel):
     class Config:
         from_attributes = True
 
-
-class YucgProspectTarget(BaseModel):
-    """Spreadsheet-backed company target for outreach coordination."""
-
-    row_index: int
-    company: str
-    sector: str
-    why_attractive: str
-    engagement_theme: str
-    yale_hook: Optional[str] = None
-    has_yale_hook: bool = False
-    outreach_priority: int = 3
-    contact_type: str
-    target_role_title: Optional[str] = None
-    incentive_score: float = 0.0
-    verification_source_url: str
-    first_message_angle: Optional[str] = None
-    discovery_hint: Optional[str] = None
-    score_rationale: str
-    yucg_service_tags: list[str] = []
-
-
-class YucgProspectVerifiability(BaseModel):
-    company: str
-    row_index: int
-    sector: Optional[str] = None
-    engagement_theme: Optional[str] = None
-    composite_score: float
-    score_breakdown: dict[str, float]
-    score_rationale: Optional[str] = None
-    incentive_score: Optional[float] = None
-    outreach_priority: Optional[int] = None
-    has_yale_hook: Optional[bool] = None
-    contact_type: Optional[str] = None
-    verification_source_url: str
-    yucg_service_tags: list[str] = []

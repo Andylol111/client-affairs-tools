@@ -22,13 +22,13 @@ const GUIDES: { match: (path: string) => boolean; guide: Guide }[] = [
     guide: {
       title: 'Find contacts',
       steps: [
-        'Companies is the index: the club target list plus 215,000 companies from public registers. Tick any, then "Find people and write to them".',
+        'Companies is the index: 215,000 companies from public registers. Tick any, then "Find people and write to them".',
         'Find people runs the four steps in order — choose, check who was found, write one message, build the campaign.',
         'Step 2 is where people come from: search again, import a spreadsheet, or queue deep research.',
         'Step 3 personalises per recipient. Anyone missing a field the message uses is held back, never sent a blank.',
-        'Building creates drafts only. Nothing leaves until you release it in Campaigns.',
+        'Building creates drafts only. Nothing leaves until you release it.',
       ],
-      next: { to: '/campaigns', label: 'Campaigns' },
+      next: { to: '/', label: 'Home' },
     },
   },
   {

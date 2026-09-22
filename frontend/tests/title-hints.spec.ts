@@ -19,9 +19,6 @@ async function mockFlow(page: Page) {
     if (path === '/api/auth/me') body = { authenticated: true, user };
     else if (path === '/api/yucgoutreach/runs' && request.method() === 'POST') body = { id: 9, status: 'queued' };
     else if (path === '/api/yucgoutreach/runs') body = [];
-    else if (path === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (path === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
-    else if (path === '/api/yucg/prospects/recommend') body = { recommendations: [], count: 0 };
     else if (path === '/api/yucgoutreach/role-suggestions') {
       const q = new URL(request.url()).searchParams;
       const company = q.get('company');

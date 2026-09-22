@@ -22,7 +22,6 @@ const REGISTER_HIT = {
 
 async function mockPage(page: Page) {
   const registerQueries: string[] = [];
-  let aiRecommendCalls = 0;
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -31,19 +30,7 @@ async function mockPage(page: Page) {
     else if (path === '/api/yucgoutreach/register') {
       registerQueries.push(url.searchParams.get('q') || '');
       body = { items: [REGISTER_HIT], total: 1, limit: 8, offset: 0 };
-    } else if (path === '/api/yucg/prospects/ai-recommend') {
-      aiRecommendCalls += 1;
-      body = { recommendations: [], count: 0, error: 'Model returned no parseable JSON.' };
-    } else if (path === '/api/yucg/prospects/recommend') {
-      body = {
-        recommendations: [
-          { prospect: { row_index: 380, company: 'A24', sector: 'Entertainment', why_attractive: 'Independent studio' } },
-        ],
-        count: 1,
-      };
     } else if (path === '/api/contacts/companies/summary') body = [{ company: 'Acme Corp', company_domain: 'acme.com', contact_count: 4 }];
-    else if (path === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (path === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
     else if (path === '/api/yucgoutreach/register/summary') body = { tiers: [], sectors: [], recent_ingests: [] };
     else if (path === '/api/yucgoutreach/runs') body = [];
     else if (path === '/api/outreach/flows') body = [];
@@ -53,11 +40,11 @@ async function mockPage(page: Page) {
     else if (/\/sequences$|\/custom-formats$/.test(path)) body = [];
     await route.fulfill({ json: body });
   });
-  return { registerQueries, aiCalls: () => aiRecommendCalls };
+  return { registerQueries };
 }
 
 test('every Find contacts surface is a pill, and the company field reaches the public register', async ({ page }) => {
-  const { registerQueries, aiCalls } = await mockPage(page);
+  const { registerQueries } = await mockPage(page);
 
   // Find contacts opens on the company index, because choosing a company is
   // the step before looking for people at it.
@@ -70,8 +57,7 @@ test('every Find contacts surface is a pill, and the company field reaches the p
   // the ways into this page did not look like each other or like a menu.
   // Three doors. Bulk research is not one of them - queuing research is a way
   // people arrive at a list, so it lives inside the step that gathers people -
-  // but uploading a file is its own act with its own permissions, including
-  // the club target list that only an admin may replace.
+  // but uploading a file is its own act, on its own tab.
   await expect(page.getByRole('tab')).toHaveCount(3);
   for (const name of ['Companies', 'Find people', 'Import a file']) {
     await expect(page.getByRole('tab', { name })).toBeVisible();
@@ -104,12 +90,6 @@ test('every Find contacts surface is a pill, and the company field reaches the p
   // Picking from the register adds it to the chosen companies rather than
   // only filling a box: choosing is the point of the step.
   await expect(page.getByText('1 chosen')).toBeVisible();
-
-  // The curated target list stays, and costs no model call: the AI variant
-  // rendered only a name chip here while truncating mid-JSON.
-  await expect(page.getByRole('button', { name: 'A24' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Refresh with AI/ })).toHaveCount(0);
-  expect(aiCalls()).toBe(0);
 });
 
 test('a one-character company does not query the register', async ({ page }) => {
@@ -137,6 +117,6 @@ test('the guide explains the page instead of a chatbot driving it', async ({ pag
   await expect(guide).toContainText('Nothing leaves until you release it');
 
   // It points at the next thing rather than ending the trail.
-  await guide.getByRole('link', { name: /Next: Campaigns/ }).click();
-  await expect(page).toHaveURL(/\/campaigns/);
+  await guide.getByRole('link', { name: /Next: Home/ }).click();
+  await expect(page).toHaveURL(/^http:\/\/[^/]+\/$/);
 });

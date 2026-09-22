@@ -1,4 +1,4 @@
-"""Week slate releases — companies cut from the prospect workbook."""
+"""Week slate releases — companies picked from the public company register."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 from app.auth_deps import get_current_user
 from app.database import get_db, row_to_dict
-from app.services.prospect_coordinator import load_prospects
 
 router = APIRouter()
 
@@ -22,11 +21,6 @@ async def require_release_owner(db, release_id: int, user_id: int):
 
 class ReleaseCreate(BaseModel):
     name: str
-    row_indexes: list[int] = Field(default_factory=list)
-    # The register is the club's full company index - 200k+ companies from
-    # SEC, DOL, IRS and Companies House - while row_indexes only ever meant
-    # the legacy target spreadsheet. A target list built by picking companies
-    # in the register was impossible until these two could both feed it.
     register_ids: list[int] = Field(default_factory=list)
     notes: str | None = None
 
@@ -101,13 +95,6 @@ async def _register_targets(register_ids: list[int]) -> list[dict]:
 @router.post("")
 async def create_release(body: ReleaseCreate, user: dict = Depends(get_current_user)):
     picked: list[dict] = []
-    if body.row_indexes:
-        try:
-            prospects = load_prospects()
-        except FileNotFoundError as e:
-            raise HTTPException(404, str(e)) from e
-        by_idx = {r.get("row_index"): r for r in prospects}
-        picked.extend(by_idx[i] for i in body.row_indexes if i in by_idx)
     if body.register_ids:
         picked.extend(await _register_targets(body.register_ids))
     if not picked:

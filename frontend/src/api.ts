@@ -15,23 +15,6 @@ export type Member = { id: number; email: string; name?: string; role: string; i
 export type LogEntry = { user_id?: number; name?: string; id: number; created_at: string; email?: string; user_email?: string; action?: string; details?: string; ip_address?: string; event_type?: string; resource_type?: string };
 export type ApiKey = { key_prefix?: string; id: number; name: string; scopes?: string; created_at?: string; last_used_at?: string };
 export type StoredObject = { byte_size?: number; source?: string; id: number; kind: string; s3_key: string; bytes?: number; created_at?: string };
-export type TargetListStatus = {
-  row_count: number;
-  source_exists: boolean;
-  source_kind?: string;
-  source_updated_at?: string | null;
-  sectors?: string[];
-  last_upload?: { created_at?: string; details?: string; name?: string; email?: string } | null;
-};
-export type TargetListReplaced = {
-  ok: boolean;
-  companies: number;
-  companies_before: number;
-  register_rows_written?: number;
-  register_rows_dropped?: number;
-  folded_duplicates?: string[];
-  replaced_copy?: string | null;
-};
 export type CustomFormat = { id: number; name: string; pattern: string; priority?: number };
 export type Settings = {
   sign_off_name?: string;
@@ -182,7 +165,7 @@ export type OutcomeSplit = {
 export type RegisterCompany = {
   id: number;
   source: string;
-  tier: 'us_public' | 'us_private' | 'us_employer' | 'us_nonprofit' | 'uk' | 'club_targets';
+  tier: 'us_public' | 'us_private' | 'us_employer' | 'us_nonprofit' | 'uk';
   country: string;
   company_name: string;
   company_domain?: string | null;
@@ -350,68 +333,6 @@ export type ScrapeResult = {
   scrape_run_id?: string;
   discovery_log?: DiscoveryLogEntry[];
   cancelled?: boolean;
-};
-
-/** Spreadsheet-backed YUCG outreach coordinator (Agent 3/4 API). */
-export type YucgProspectRow = {
-  row_index: number;
-  company: string;
-  sector?: string;
-  why_attractive?: string;
-  engagement_theme?: string;
-  yale_hook?: string;
-  outreach_priority?: number;
-  contact_type?: string;
-  target_role_title?: string;
-  incentive_score?: number;
-  verification_source_url?: string;
-  recommended_message_angle?: string;
-  yucg_service_tags?: string[];
-};
-
-export type YucgScoreBreakdown = {
-  incentive?: number;
-  priority?: number;
-  yale_hook?: number;
-  contact_type_match?: number;
-  total?: number;
-  rationale?: string;
-};
-
-export type YucgVerifiability = {
-  company: string;
-  row_index: number;
-  score_breakdown?: YucgScoreBreakdown;
-  verification_source_url?: string;
-  yucg_service_tags?: string[];
-  website_citation_url?: string;
-  website_citation_excerpt?: string;
-  reasoning_chain?: string[];
-};
-
-export type YucgRecommendation = {
-  prospect: YucgProspectRow;
-  verifiability: YucgVerifiability;
-  composite_score?: number;
-};
-
-export type YucgRecommendResponse = {
-  mode: 'rules' | 'ai';
-  count: number;
-  recommendations: YucgRecommendation[];
-  error?: string | null;
-  model?: string | null;
-};
-
-export type YucgProspectsMeta = {
-  source_path: string;
-  source_exists: boolean;
-  sheet?: string;
-  row_count: number;
-  sectors: string[];
-  source_kind?: 's3' | 'file';
-  source_updated_at?: string | null;
-  contact_types: string[];
 };
 
 export type EmailPatternRow = {
@@ -921,22 +842,6 @@ export const api = {
         prefixes: { prefix: string; objects: StoredObject[] }[];
       }>('/api/admin/catalog'),
     loginLog: () => fetchApi<LogEntry[]>('/api/admin/login-log'),
-    targetList: {
-      status: () =>
-        fetchApi<TargetListStatus>('/api/admin/target-list'),
-      replace: (file: File) => {
-        const form = new FormData();
-        form.append('file', file);
-        return fetch(`${API_BASE}/api/admin/target-list`, {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: form,
-        }).then(async (res): Promise<TargetListReplaced> => {
-          if (!res.ok) throw new Error(problemDetail(await res.text()));
-          return res.json() as Promise<TargetListReplaced>;
-        });
-      },
-    },
     users: {
       list: () => fetchApi<Member[]>('/api/admin/users'),
       invite: (email: string) =>
@@ -1255,90 +1160,9 @@ export const api = {
     },
   },
   yucg: {
-    prospectsMeta: () => fetchApi<YucgProspectsMeta>('/api/yucg/prospects/meta'),
-    listProspects: (opts?: {
-      sector?: string;
-      contact_type?: string;
-      min_incentive_score?: number;
-      outreach_priority?: number;
-      limit?: number;
-      q?: string;
-    }) => {
-      const params = new URLSearchParams();
-      if (opts?.sector) params.set('sector', opts.sector);
-      if (opts?.contact_type) params.set('contact_type', opts.contact_type);
-      if (opts?.min_incentive_score != null) params.set('min_incentive_score', String(opts.min_incentive_score));
-      if (opts?.outreach_priority != null) params.set('outreach_priority', String(opts.outreach_priority));
-      if (opts?.limit != null) params.set('limit', String(opts.limit));
-      if (opts?.q?.trim()) params.set('q', opts.q.trim());
-      const qs = params.toString();
-      return fetchApi<{ prospects: YucgProspectRow[]; count: number; items?: YucgProspectRow[]; total?: number }>(
-        `/api/yucg/prospects${qs ? `?${qs}` : ''}`
-      ).then((res) => ({
-        prospects: res.prospects ?? res.items ?? [],
-        count: res.count ?? res.total ?? (res.prospects ?? res.items ?? []).length,
-      }));
-    },
-    refreshProspects: () =>
-      fetchApi<YucgProspectsMeta>('/api/yucg/prospects/refresh', { method: 'POST' }),
-    recommend: (opts?: {
-      sector?: string;
-      contact_type?: string;
-      min_incentive_score?: number;
-      contact_type_match?: string;
-      n?: number;
-    }) => {
-      const params = new URLSearchParams();
-      if (opts?.sector) params.set('sector', opts.sector);
-      if (opts?.contact_type) params.set('contact_type', opts.contact_type);
-      if (opts?.min_incentive_score != null) params.set('min_incentive_score', String(opts.min_incentive_score));
-      if (opts?.contact_type_match) params.set('contact_type_match', opts.contact_type_match);
-      if (opts?.n != null) params.set('n', String(opts.n));
-      const qs = params.toString();
-      return fetchApi<YucgRecommendResponse>(`/api/yucg/prospects/recommend${qs ? `?${qs}` : ''}`);
-    },
-    aiRecommend: (data?: {
-      sector?: string;
-      contact_type?: string;
-      min_incentive_score?: number;
-      n?: number;
-      model?: string;
-    }) =>
-      fetchApi<YucgRecommendResponse>('/api/yucg/prospects/ai-recommend', {
-        method: 'POST',
-        body: JSON.stringify(data ?? {}),
-      }),
-    exportShortlist: async (row_indices: number[]) => {
-      const res = await fetch(`${API_BASE}/api/yucg/prospects/export-shortlist`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ row_indices: row_indices, row_indexes: row_indices }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        try {
-          const j = JSON.parse(text);
-          const d = j.detail;
-          throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d[0]?.msg : text);
-        } catch (e) {
-          if (e instanceof Error && e.message !== text) throw e;
-          throw new Error(text);
-        }
-      }
-      const blob = await res.blob();
-      const cd = res.headers.get('Content-Disposition');
-      const match = cd?.match(/filename="([^"]+)"/);
-      const filename = match?.[1] || 'YUCG_outreach_shortlist.csv';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    },
     listReleases: () => fetchApi<Release[]>('/api/yucg/releases'),
     getRelease: (id: number) => fetchApi<Release>(`/api/yucg/releases/${id}`),
-    createRelease: (data: { name: string; row_indexes?: number[]; register_ids?: number[]; notes?: string }) =>
+    createRelease: (data: { name: string; register_ids?: number[]; notes?: string }) =>
       fetchApi<{ id: number; status: string; targets: number }>('/api/yucg/releases', {
         method: 'POST',
         body: JSON.stringify(data),
