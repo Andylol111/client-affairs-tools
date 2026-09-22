@@ -72,9 +72,9 @@ test('role bubbles translate asked roles into the focused company vocabulary, an
   await expect(titles).toHaveValue('healthcare PMs, VPs, Product Lead');
   await expect(bubbles.getByRole('button', { name: /^Product Lead/ })).toBeDisabled();
 
-  // Pointing at another lane moves the bubbles to that company. What the
+  // Clicking another lane moves the bubbles to that company. What the
   // member typed stays; OpenAI's vocabulary is not carried across.
-  await pipeline.locator('[data-lane="A24"]').hover();
+  await pipeline.locator('[data-lane="A24"]').getByTestId('lane-state').click();
   await expect(bubbles.getByText('Roles seen at A24')).toBeVisible({ timeout: 10_000 });
   await expect(bubbles.getByRole('button', { name: /Member of Technical Staff/ })).toHaveCount(0);
   await expect(titles).toHaveValue('healthcare PMs, VPs, Product Lead');

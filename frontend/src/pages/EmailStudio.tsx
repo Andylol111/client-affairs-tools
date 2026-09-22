@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader';
 import AiModelSelect from '../components/AiModelSelect';
 import EmailToolbar from '../components/EmailToolbar';
 import AddressCheck from '../components/AddressCheck';
+import AdvisoryBatch from '../components/AdvisoryBatch';
 import { useAiModel } from '../contexts/useAiModel';
 import { useUrlTab } from '../lib/useUrlTab';
 
@@ -302,6 +303,28 @@ export default function EmailStudio() {
     setSelectedDraftId(null);
     setMobileStep('edit');
   }
+
+  // A hand-off from Find people: the companies and the exact people chosen
+  // there. Read once; closing the panel drops it from the address too.
+  const [handoff, setHandoff] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const companies = (params.get('companies') || '').split(',').map((c) => c.trim()).filter(Boolean);
+    const contactIds = (params.get('contact_ids') || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    return companies.length && contactIds.length ? { companies, contactIds } : null;
+  });
+  const openHandoffContact = async (contact: Contact) => {
+    const drafts = await api.emails.generated({ contact_id: contact.id }).catch(() => [] as GeneratedEmail[]);
+    const latest = drafts.find((d) => !d.campaign_id) ?? drafts[0];
+    if (latest) {
+      loadDraftIntoEditor(latest);
+    } else {
+      setSelected(contact);
+      setEmail(null);
+      setSelectedDraftId(null);
+      setMobileStep('edit');
+    }
+    document.getElementById('email-editor-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const sidebarSelectedIds = useMemo(() => {
     const allowed = new Set(contacts.map((c) => c.id));
@@ -796,6 +819,22 @@ export default function EmailStudio() {
           </button>
         ))}
       </nav>
+      {handoff && (
+        <AdvisoryBatch
+          companies={handoff.companies}
+          contactIds={handoff.contactIds}
+          tone={tone}
+          model={modelId}
+          valueProp={valueProp}
+          goal={draftDescription}
+          onOpen={(contact) => void openHandoffContact(contact)}
+          onDrafted={() => api.emails.generated({ sort: sortBy }).then(setGeneratedEmails).catch(() => {})}
+          onDismiss={() => {
+            setHandoff(null);
+            navigate('/studio', { replace: true });
+          }}
+        />
+      )}
       <div className="email-studio-layout">
         <div
           data-collapsed={!contactsPanelExpanded}
@@ -861,53 +900,51 @@ export default function EmailStudio() {
                   />
                 </div>
                 {contacts.length > 0 && (
-                  <div className="px-4 py-2 border-b border-[var(--border)] flex flex-wrap items-center gap-2 bg-white dark:bg-[var(--bg-card)]">
-                    <span className="text-xs font-medium text-deep-navy dark:text-[var(--text-primary)]">
-                      {sidebarSelectedIds.size} selected
-                    </span>
-                    <button
-                      type="button"
-                      onClick={selectAllSidebarContacts}
-                      className="ui-button ui-button--ghost ui-button--sm"
-                    >
-                      Select all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSidebarBulkIds(new Set())}
-                      className="ui-button ui-button--ghost ui-button--sm"
-                    >
-                      Clear ticks
-                    </button>
-                    {/* Ticking several people used to offer only deletion,
-                        which made a multiple selection look like a drafting
-                        tool it was not. Studio writes to one named person;
-                        writing to a group is the pipeline, and this hands the
-                        selection to it rather than leaving the member to
-                        retype the companies. */}
+                  // Text actions on one line, the one real action below it:
+                  // four stock buttons wrapped into a ragged stack in this
+                  // narrow column, each indented by its own padding.
+                  <div className="px-4 py-2 border-b border-[var(--border)] space-y-2 bg-white dark:bg-[var(--bg-card)]">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      <span className="font-semibold text-deep-navy dark:text-[var(--text-primary)]">
+                        {sidebarSelectedIds.size} selected
+                      </span>
+                      <button type="button" onClick={selectAllSidebarContacts} className="underline text-deep-navy dark:text-[var(--text-primary)]">
+                        Select all
+                      </button>
+                      <button type="button" onClick={() => setSidebarBulkIds(new Set())} className="underline text-[var(--text-muted)]">
+                        Clear
+                      </button>
+                      <button
+                        type="button"
+                        disabled={sidebarSelectedIds.size === 0 || sidebarDeleting}
+                        onClick={bulkDeleteSidebarContacts}
+                        className="ml-auto underline text-red-700 disabled:text-[var(--text-muted)] disabled:no-underline"
+                      >
+                        {sidebarDeleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                    {/* Ticking several people opens the per-person panel
+                        above: an advisory draft each, then one campaign. */}
                     {sidebarSelectedIds.size > 1 && (
                       <button
                         type="button"
                         onClick={() => {
-                          const companies = [...new Set(
-                            contacts.filter((c) => sidebarSelectedIds.has(c.id))
-                              .map((c) => (c.company || '').trim()).filter(Boolean),
-                          )];
-                          navigate(`/scraper?view=company&companies=${encodeURIComponent(companies.join(','))}`);
+                          const chosen = contacts.filter((c) => sidebarSelectedIds.has(c.id));
+                          const next = {
+                            companies: [...new Set(chosen.map((c) => (c.company || '').trim()).filter(Boolean))],
+                            contactIds: chosen.map((c) => c.id),
+                          };
+                          setHandoff(next);
+                          navigate(`/studio?${new URLSearchParams({
+                            companies: next.companies.join(','), contact_ids: next.contactIds.join(','),
+                          })}`, { replace: true });
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
-                        className="ui-button ui-button--ghost ui-button--sm"
+                        className="ui-button ui-button--primary ui-button--sm w-full"
                       >
-                        Write to these {sidebarSelectedIds.size} together →
+                        Write to each of these {sidebarSelectedIds.size} →
                       </button>
                     )}
-                    <button
-                      type="button"
-                      disabled={sidebarSelectedIds.size === 0 || sidebarDeleting}
-                      onClick={bulkDeleteSidebarContacts}
-                      className="ui-button ui-button--danger ui-button--sm"
-                    >
-                      {sidebarDeleting ? 'Deleting…' : 'Delete selected'}
-                    </button>
                   </div>
                 )}
               {contacts.length === 0 ? (
@@ -916,15 +953,15 @@ export default function EmailStudio() {
                 </div>
               ) : (
                 <>
-                  <div className="px-4 py-2 border-b border-[var(--border)] flex items-center gap-2 bg-white dark:bg-[var(--bg-card)]">
-                    <label className="text-xs text-[var(--text-muted)]">Group By Company</label>
+                  <label className="px-4 py-2 border-b border-[var(--border)] flex items-center gap-2 bg-white dark:bg-[var(--bg-card)] text-xs text-[var(--text-muted)] cursor-pointer">
                     <input
                       type="checkbox"
                       checked={groupByCompany}
                       onChange={(e) => setGroupByCompany(e.target.checked)}
                       className="rounded"
                     />
-                  </div>
+                    Group by company
+                  </label>
                   {groupByCompany ? (
                     <div className="p-2 space-y-2">
                       {groupContactsByCompany(contacts).map(({ company, contacts: companyContacts }) => (

@@ -2225,8 +2225,15 @@ html.yucg-brand-redesign.dark .yucg-coordinator-table-wrap {
     overflow: auto;
   }
 
+  /* Only the compose area gives up height. The heading, the address check
+     and the campaign toggle were allowed to shrink too, and on a short
+     column were squeezed below their own line height and clipped in half;
+     now they keep their height and the section scrolls instead. */
+  #email-editor-section.studio-step > :not(.email-studio-compose) {
+    flex-shrink: 0;
+  }
+
   .email-studio-campaign {
-    flex: 0 1 auto;
     max-height: calc(100% - 18rem);
     overflow: auto;
   }

@@ -54,6 +54,14 @@ export default function RecipientPicker({
   const [level, setLevel] = useState<'all' | Level>('all');
   const [hideWritten, setHideWritten] = useState(true);
   const [adding, setAdding] = useState<Record<string, true>>({});
+  // Folded companies, by key. A fold hides the rows only - the header keeps
+  // the count, the tick-all box and the search, so nothing is decided blind.
+  const [folded, setFolded] = useState<Record<string, true>>({});
+  const toggleFold = (key: string) => setFolded((prev) => {
+    const next = { ...prev };
+    if (next[key]) delete next[key]; else next[key] = true;
+    return next;
+  });
 
   const chosen = useMemo(() => new Set(selected), [selected]);
 
@@ -220,26 +228,45 @@ export default function RecipientPicker({
         const run = runs[key];
         const searching = run && (run.state === 'searching' || run.state === 'queued');
         const addable = group.found.filter((p) => !p.skippedReason);
+        const isFolded = Boolean(folded[key]);
+        const bodyId = `group-${key.replace(/[^a-z0-9]+/gi, '-')}`;
         return (
-          <div key={key} data-company={company.name} className="rounded-xl border border-pale-sky">
+          <div key={key} data-company={company.name} data-folded={isFolded || undefined}
+               className="overflow-hidden rounded-xl border border-pale-sky">
             <div className="flex flex-wrap items-center justify-between gap-2 bg-pale-sky/30 px-3 py-2">
-              {selectable ? (
-                <label className="flex items-center gap-2 text-sm font-semibold text-deep-navy">
-                  <input
-                    type="checkbox"
-                    checked={allOn}
-                    disabled={writable.length === 0}
-                    ref={(el) => {
-                      if (el) el.indeterminate = !allOn && writable.some((p) => chosen.has(p.id));
-                    }}
-                    onChange={() => setMany(writable.map((p) => p.id), !allOn)}
-                    aria-label={`Select everyone at ${company.name}`}
-                  />
-                  {company.name}
-                </label>
-              ) : (
-                <span className="text-sm font-semibold text-deep-navy">{company.name}</span>
-              )}
+              <span className="flex min-w-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => toggleFold(key)}
+                  aria-expanded={!isFolded}
+                  aria-controls={bodyId}
+                  aria-label={`${isFolded ? 'Show' : 'Hide'} people at ${company.name}`}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-600 hover:bg-pale-sky/70"
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"
+                       className={`transition-transform ${isFolded ? '-rotate-90' : ''}`}>
+                    <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.6"
+                          strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {selectable ? (
+                  <label className="flex items-center gap-2 text-sm font-semibold text-deep-navy">
+                    <input
+                      type="checkbox"
+                      checked={allOn}
+                      disabled={writable.length === 0}
+                      ref={(el) => {
+                        if (el) el.indeterminate = !allOn && writable.some((p) => chosen.has(p.id));
+                      }}
+                      onChange={() => setMany(writable.map((p) => p.id), !allOn)}
+                      aria-label={`Select everyone at ${company.name}`}
+                    />
+                    {company.name}
+                  </label>
+                ) : (
+                  <span className="text-sm font-semibold text-deep-navy">{company.name}</span>
+                )}
+              </span>
               <span className="flex items-center gap-3 text-xs text-slate-500">
                 {mode === 'review'
                   ? `${rows.length} recipient${rows.length === 1 ? '' : 's'}`
@@ -250,10 +277,12 @@ export default function RecipientPicker({
                     type="button"
                     disabled={Boolean(searching)}
                     onClick={() => onFind(company)}
-                    className="ui-button ui-button--ghost ui-button--sm"
+                    className={`ui-button ui-button--sm ${
+                      rows.length === 0 && group.found.length === 0 ? 'ui-button--primary' : 'ui-button--secondary'}`}
+                    title={`Search ${company.name} again for people not on file yet`}
                   >
                     {searching ? (run.state === 'queued' ? 'Queued' : 'Searching…')
-                      : rows.length === 0 && group.found.length === 0 ? 'Find people here' : 'Find more'}
+                      : rows.length === 0 && group.found.length === 0 ? 'Find people here' : '+ Find more people'}
                   </button>
                 )}
               </span>
@@ -275,105 +304,108 @@ export default function RecipientPicker({
               </div>
             )}
 
-            {rows.length === 0 && group.found.length === 0 && !searching && mode !== 'review' && (
-              <p className="px-3 py-2 text-sm text-slate-500">
-                {selectable
-                  ? 'Nobody here matches what you are looking at. Search this company, import a list, or widen the filters above.'
-                  : 'Nobody on file here yet.'}
-              </p>
-            )}
+            {/* Hidden, not unmounted: unfolding is instant and loses nothing. */}
+            <div id={bodyId} hidden={isFolded}>
+              {rows.length === 0 && group.found.length === 0 && !searching && mode !== 'review' && (
+                <p className="px-3 py-2 text-sm text-slate-500">
+                  {selectable
+                    ? 'Nobody here matches what you are looking at. Search this company, import a list, or widen the filters above.'
+                    : 'Nobody on file here yet.'}
+                </p>
+              )}
 
-            <ul className="divide-y divide-pale-sky">
-              {rows.map((person) => {
-                const writableRow = isWritable(person);
-                const on = chosen.has(person.id);
-                return (
-                  <li key={person.id} className="flex items-start gap-3 px-3 py-2 text-sm">
-                    {mode !== 'review' && (
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={on}
-                        disabled={!selectable || !writableRow}
-                        onChange={() => toggleOne(person)}
-                        aria-label={`Write to ${person.name || person.email}`}
-                      />
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="font-medium text-deep-navy">{person.name || person.email}</span>
-                      <span className="text-slate-500"> · {person.title || 'no title'}</span>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span className={`rounded-full px-2 py-0.5 ${
-                          levelOf(person) === 'working' ? 'bg-emerald-50 text-emerald-800'
-                            : levelOf(person) === 'board' ? 'bg-amber-50 text-amber-800'
-                              : 'bg-pale-sky/60 text-deep-navy'}`}>
-                          {LEVEL_LABEL[levelOf(person)]}
-                        </span>
-                        {writableRow
-                          ? <span className="truncate">{person.email}</span>
-                          : <span className="text-amber-800">no address yet</span>}
-                        {person.last_sent_at && (
-                          <span>written {shortDate(person.last_sent_at)}
-                            {person.last_campaign_name ? ` · ${person.last_campaign_name}` : ''}</span>
-                        )}
-                      </span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-
-            {/* Found, not on file. Adding is the act that makes someone a
-                possible recipient, so it is a button per person and one for
-                the lot, never a side effect of the search finishing. */}
-            {group.found.length > 0 && (
-              <div className="border-t border-pale-sky" data-testid="found-rows">
-                <div className="flex items-center justify-between gap-2 bg-amber-50/60 px-3 py-1.5 text-xs text-amber-900">
-                  <span>{group.found.length} found · not on file yet</span>
-                  {selectable && addable.length > 1 && (
-                    <button
-                      type="button"
-                      disabled={Boolean(adding[key])}
-                      onClick={() => void add(key, 'all')}
-                      className="ui-button ui-button--secondary ui-button--sm"
-                    >
-                      {adding[key] ? 'Adding…' : `Add all ${addable.length} found`}
-                    </button>
-                  )}
-                </div>
-                <ul className="divide-y divide-pale-sky">
-                  {group.found.map((person) => {
-                    const name = [person.first_name, person.last_name].filter(Boolean).join(' ') || person.email;
-                    return (
-                      <li key={person.id} className="flex items-start gap-3 px-3 py-2 text-sm" data-found={person.id}>
-                        <span className="min-w-0 flex-1">
-                          <span className="font-medium text-deep-navy">{name}</span>
-                          <span className="text-slate-500"> · {person.title || 'no title'}</span>
-                          <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-800">found</span>
-                            <span className="truncate">{person.email}</span>
-                            {person.skippedReason && (
-                              <span className="text-amber-900">not added: {person.skippedReason}</span>
-                            )}
+              <ul className="divide-y divide-pale-sky">
+                {rows.map((person) => {
+                  const writableRow = isWritable(person);
+                  const on = chosen.has(person.id);
+                  return (
+                    <li key={person.id} className="flex items-start gap-3 px-3 py-2 text-sm">
+                      {mode !== 'review' && (
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={on}
+                          disabled={!selectable || !writableRow}
+                          onChange={() => toggleOne(person)}
+                          aria-label={`Write to ${person.name || person.email}`}
+                        />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="font-medium text-deep-navy">{person.name || person.email}</span>
+                        <span className="text-slate-500"> · {person.title || 'no title'}</span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span className={`rounded-full px-2 py-0.5 ${
+                            levelOf(person) === 'working' ? 'bg-emerald-50 text-emerald-800'
+                              : levelOf(person) === 'board' ? 'bg-amber-50 text-amber-800'
+                                : 'bg-pale-sky/60 text-deep-navy'}`}>
+                            {LEVEL_LABEL[levelOf(person)]}
                           </span>
+                          {writableRow
+                            ? <span className="truncate">{person.email}</span>
+                            : <span className="text-amber-800">no address yet</span>}
+                          {person.last_sent_at && (
+                            <span>written {shortDate(person.last_sent_at)}
+                              {person.last_campaign_name ? ` · ${person.last_campaign_name}` : ''}</span>
+                          )}
                         </span>
-                        {selectable && !person.skippedReason && (
-                          <button
-                            type="button"
-                            disabled={Boolean(adding[key])}
-                            onClick={() => void add(key, [person.id])}
-                            className="ui-button ui-button--secondary ui-button--sm shrink-0"
-                            aria-label={`Add ${name}`}
-                          >
-                            Add
-                          </button>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {/* Found, not on file. Adding is the act that makes someone a
+                  possible recipient, so it is a button per person and one for
+                  the lot, never a side effect of the search finishing. */}
+              {group.found.length > 0 && (
+                <div className="border-t border-pale-sky" data-testid="found-rows">
+                  <div className="flex items-center justify-between gap-2 bg-amber-50/60 px-3 py-1.5 text-xs text-amber-900">
+                    <span>{group.found.length} found · not on file yet</span>
+                    {selectable && addable.length > 1 && (
+                      <button
+                        type="button"
+                        disabled={Boolean(adding[key])}
+                        onClick={() => void add(key, 'all')}
+                        className="ui-button ui-button--secondary ui-button--sm"
+                      >
+                        {adding[key] ? 'Adding…' : `Add all ${addable.length} found`}
+                      </button>
+                    )}
+                  </div>
+                  <ul className="divide-y divide-pale-sky">
+                    {group.found.map((person) => {
+                      const name = [person.first_name, person.last_name].filter(Boolean).join(' ') || person.email;
+                      return (
+                        <li key={person.id} className="flex items-start gap-3 px-3 py-2 text-sm" data-found={person.id}>
+                          <span className="min-w-0 flex-1">
+                            <span className="font-medium text-deep-navy">{name}</span>
+                            <span className="text-slate-500"> · {person.title || 'no title'}</span>
+                            <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-800">found</span>
+                              <span className="truncate">{person.email}</span>
+                              {person.skippedReason && (
+                                <span className="text-amber-900">not added: {person.skippedReason}</span>
+                              )}
+                            </span>
+                          </span>
+                          {selectable && !person.skippedReason && (
+                            <button
+                              type="button"
+                              disabled={Boolean(adding[key])}
+                              onClick={() => void add(key, [person.id])}
+                              className="ui-button ui-button--secondary ui-button--sm shrink-0"
+                              aria-label={`Add ${name}`}
+                            >
+                              Add
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         );
       })}
