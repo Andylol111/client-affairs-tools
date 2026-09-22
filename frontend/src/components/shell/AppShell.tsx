@@ -5,6 +5,7 @@ import AppShellHeader from './AppShellHeader';
 import AppShellMobile from './AppShellMobile';
 import AppShellDrawer from './AppShellDrawer';
 import GuideBubble from '../GuideBubble';
+import Tour from '../Tour';
 
 type AppShellProps = {
   user: { id?: number; email: string; name?: string; picture?: string; role?: string };
@@ -43,6 +44,7 @@ export default function AppShell({ user, onLogout, pageKey, headerExtra }: AppSh
         onLogout={handleLogout}
       />
       <GuideBubble />
+      <Tour />
     </div>
   );
 }

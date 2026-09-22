@@ -6,9 +6,11 @@ const PEOPLE = [
   { id: 1, name: 'Jordan Rivers', email: 'jordan@acme.com', title: 'VP Marketing', company: 'Acme Corp' },
   { id: 2, name: 'Sam Lee', email: 'sam@acme.com', title: 'Head of Strategy', company: 'Acme Corp' },
   { id: 3, name: 'Not Chosen', email: 'nc@acme.com', title: 'Analyst', company: 'Acme Corp' },
+  { id: 4, name: 'Choose People', email: 'support@acme.com', title: 'Find people and contacts', company: 'Acme Corp' },
 ];
 
-async function mockDrafts(page: Page, { limitAfter = Infinity } = {}) {
+async function mockDrafts(page: Page, { limitAfter = Infinity, busyFirst = 0 } = {}) {
+  let busy = busyFirst;
   const generated: Record<string, unknown>[] = [];
   const added: Record<string, unknown>[] = [];
   await page.route('**/api/**', async route => {
@@ -22,7 +24,11 @@ async function mockDrafts(page: Page, { limitAfter = Infinity } = {}) {
     else if (path === '/api/projects/suggest-citations') body = { projects: [{ id: 1, client_name: 'Google' }], team_experience: [] };
     else if (path === '/api/emails/generate') {
       const sent = request.postDataJSON();
-      if (generated.length >= limitAfter) {
+      if (busy > 0) {
+        busy -= 1;
+        status = 429;
+        body = { detail: 'Draft generation is busy; please retry shortly' };
+      } else if (generated.length >= limitAfter) {
         status = 429;
         body = { detail: 'Draft generation limit reached. Please try again later.' };
       } else {
@@ -90,4 +96,30 @@ test('ticking people in the Drafts sidebar opens the same per-person panel', asy
   const panel = page.getByTestId('advisory-batch');
   await expect(panel.getByRole('heading', { name: 'Writing to 2 people, one email each' })).toBeVisible();
   await expect(page).toHaveURL(/\/studio\?companies=Acme(%20|\+)Corp&contact_ids=1%2C2/);
+});
+
+test('a busy model is waited out, not counted as a failed draft', async ({ page }) => {
+  // The server runs two model calls for the whole club and refuses the rest
+  // as busy. Counting that as a failure is how a batch of twenty showed
+  // "1 drafted · 19 failed".
+  const { generated } = await mockDrafts(page, { busyFirst: 1 });
+  await page.goto('/studio?companies=Acme%20Corp&contact_ids=1%2C2');
+
+  const panel = page.getByTestId('advisory-batch');
+  await panel.getByRole('button', { name: /Draft an advisory email for each/ }).click();
+  await expect(panel.getByRole('status')).toHaveText('2 drafted', { timeout: 15_000 });
+  expect(generated).toHaveLength(2);
+});
+
+test('a row whose name is page text is listed but never drafted', async ({ page }) => {
+  // "Choose People" was a search result's heading stored as a name; its
+  // draft would have opened "Dear Choose,".
+  const { generated } = await mockDrafts(page);
+  await page.goto('/studio?companies=Acme%20Corp&contact_ids=1%2C4');
+
+  const panel = page.getByTestId('advisory-batch');
+  await expect(panel.getByTestId('skipped-note')).toHaveText("1 skipped: the name is not a person's");
+  await panel.getByRole('button', { name: 'Draft an advisory email for each of these 1' }).click();
+  await expect(panel.getByRole('status')).toHaveText('1 drafted');
+  expect(generated.map((g) => g.contact_id)).toEqual([1]);
 });
