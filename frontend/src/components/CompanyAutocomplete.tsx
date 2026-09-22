@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { api, type YucgRecommendation } from '../api';
+import { api } from '../api';
 
 export type CompanyOption = {
   name: string;
@@ -202,51 +202,6 @@ export default function CompanyAutocomplete({
           ))}
         </ul>
       )}
-    </div>
-  );
-}
-
-export function CompanySuggestions({
-  onPick,
-}: {
-  onPick: (option: CompanyOption) => void;
-}) {
-  const [recs, setRecs] = useState<YucgRecommendation[]>([]);
-
-  // Deliberately no AI call here. These render as bare name chips, so an
-  // LLM ranking pass produced a rationale and reasoning chain that this view
-  // threw away - and it asked for more output than the model's reply limit
-  // allows, so the call truncated mid-JSON and the button only ever reported
-  // "Model returned no parseable JSON". The reasoned, cited version of this
-  // list is the Outreach page, which actually renders the reasoning.
-  useEffect(() => {
-    api.yucg.recommend({ n: 12 })
-      .then((res) => setRecs(Array.isArray(res.recommendations) ? res.recommendations : []))
-      .catch(() => setRecs([]));
-  }, []);
-
-  if (!recs.length) return null;
-
-  return (
-    <div className="space-y-2">
-      <h2 className="text-sm font-semibold text-deep-navy">Companies on the club target list</h2>
-      <div className="flex flex-wrap gap-2">
-        {recs.slice(0, 12).map((rec) => {
-          const name = rec.prospect?.company;
-          if (!name) return null;
-          return (
-            <button
-              key={`${rec.prospect.row_index}-${name}`}
-              type="button"
-              className="rounded-full border border-pale-sky bg-white px-3 py-1.5 text-sm text-deep-navy hover:border-steel-blue"
-              title={rec.verifiability?.score_breakdown?.rationale || rec.prospect.why_attractive || ''}
-              onClick={() => onPick({ name, source: 'targets', sector: rec.prospect.sector, angle: rec.prospect.recommended_message_angle })}
-            >
-              {name}
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

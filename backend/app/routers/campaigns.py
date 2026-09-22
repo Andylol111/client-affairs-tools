@@ -324,8 +324,11 @@ class BuildFromTemplate(BaseModel):
     name: str = ""
     companies: list[str] = []
     contact_ids: list[int] = []
-    subject: str
-    body: str
+    subject: str = ""
+    body: str = ""
+    # One written message per company, keyed by company name. The group
+    # subject/body stays the fallback for companies without one.
+    messages: dict[str, dict[str, str]] = {}
     preview_only: bool = False
 
 
@@ -391,11 +394,44 @@ class DraftGroupTemplate(BaseModel):
     goal: str
     proof: str = ""
     length: str = "short"
+    # One message each, written from what the club already recorded about that
+    # company, instead of one message for all of them.
+    per_company: bool = False
+
+
+#: Drafting is a model call and a quota unit per company, so a run stays
+#: something a member waits through rather than abandons.
+MAX_DRAFTED_COMPANIES = 12
+
+
+async def _company_notes(db, companies: list[str]) -> dict[str, str]:
+    """What the club already decided about each company, from the register."""
+    names = [c.strip() for c in companies if c.strip()]
+    if not names:
+        return {}
+    rows = await (await db.execute(
+        f"""SELECT company_name, sector_label, metadata_json FROM company_register
+            WHERE LOWER(TRIM(company_name)) IN ({','.join('?' * len(names))})""",
+        [n.lower() for n in names],
+    )).fetchall()
+    notes: dict[str, str] = {}
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        parts = [row["sector_label"] or "", meta.get("why_attractive") or "",
+                 meta.get("engagement_theme") or "", meta.get("yale_hook") or "",
+                 meta.get("first_message_angle") or ""]
+        text = ". ".join(p.strip() for p in parts if p and str(p).strip())
+        if text:
+            notes.setdefault(row["company_name"].strip().lower(), text)
+    return notes
 
 
 @router.post("/draft-template")
 async def draft_group_template(payload: DraftGroupTemplate, user: dict = Depends(get_current_user)):
-    """Write one draft for a group, with merge fields instead of a name.
+    """Write the campaign's message: one for the group, or one per company.
 
     Studio drafts to one person, which is right for a bespoke email and wrong
     for a campaign. Without this a member either writes the same message
@@ -406,19 +442,44 @@ async def draft_group_template(payload: DraftGroupTemplate, user: dict = Depends
     from app.services.generation_policy import reserve_generation
     from app.services.ollama_email_service import generate_group_template
 
-    await reserve_generation(user["id"], None)
-    try:
-        subject, body = await run_in_threadpool(
-            generate_group_template,
-            companies=payload.companies,
-            goal=payload.goal,
-            proof=payload.proof,
-            roles=payload.roles,
-            length=payload.length,
+    async def write(companies: list[str], notes: str) -> tuple[str, str]:
+        await reserve_generation(user["id"], None)
+        try:
+            return await run_in_threadpool(
+                generate_group_template,
+                companies=companies,
+                goal=payload.goal,
+                proof=payload.proof,
+                roles=payload.roles,
+                length=payload.length,
+                company_notes=notes,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    if not payload.per_company:
+        subject, body = await write(payload.companies, "")
+        return {"subject": subject, "body": body}
+
+    named = [c.strip() for c in payload.companies if c.strip()]
+    if not named:
+        raise HTTPException(422, "Name at least one company")
+    if len(named) > MAX_DRAFTED_COMPANIES:
+        raise HTTPException(
+            422,
+            f"{len(named)} companies chosen; a message each is written for at most "
+            f"{MAX_DRAFTED_COMPANIES}. Write one message for the group, or split the campaign.",
         )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    return {"subject": subject, "body": body}
+    db = await get_db()
+    try:
+        notes = await _company_notes(db, named)
+    finally:
+        await db.close()
+    messages: dict[str, dict[str, str]] = {}
+    for company in named:
+        subject, body = await write([company], notes.get(company.lower(), ""))
+        messages[company] = {"subject": subject, "body": body}
+    return {"messages": messages, "grounded": sorted(c for c in named if notes.get(c.lower()))}
 
 
 @router.post("/build")
@@ -433,16 +494,41 @@ async def build_campaign_from_template(payload: BuildFromTemplate, user: dict = 
 
     subject = (payload.subject or "").strip()
     body = (payload.body or "").strip()
-    if not subject or not body:
+    per_company = {
+        company.strip().lower(): (
+            (message.get("subject") or "").strip(), (message.get("body") or "").strip())
+        for company, message in (payload.messages or {}).items()
+        if company.strip() and (message.get("subject") or "").strip() and (message.get("body") or "").strip()
+    }
+    if not per_company and (not subject or not body):
         raise HTTPException(422, "A subject and a message are required")
-    bad = sorted(set(unknown_fields(subject) + unknown_fields(body)))
-    if bad:
-        raise HTTPException(422, f"Unknown field(s): {', '.join('{' + b + '}' for b in bad)}")
+    for text_subject, text_body in [(subject, body), *per_company.values()]:
+        bad = sorted(set(unknown_fields(text_subject) + unknown_fields(text_body)))
+        if bad:
+            raise HTTPException(422, f"Unknown field(s): {', '.join('{' + b + '}' for b in bad)}")
 
     db = await get_db()
     try:
         recipients = await _pipeline_recipients(db, payload, user["id"])
-        ready, held = render_for_each(subject, body, recipients)
+        # Each company's people get that company's message. A company with no
+        # message of its own falls back to the one written for the group; with
+        # neither, nothing is invented for them - they are held and named.
+        ready: list[dict] = []
+        held: list[dict] = []
+        groups: dict[str, list[dict]] = {}
+        for person in recipients:
+            groups.setdefault((person.get("company") or "").strip().lower(), []).append(person)
+        for company_key, people in groups.items():
+            text = per_company.get(company_key) or ((subject, body) if subject and body else None)
+            if not text:
+                held.extend({
+                    "contact_id": p["id"], "email": p.get("email"), "name": p.get("name"),
+                    "reason": f"No message written for {p.get('company') or 'their company'} yet.",
+                } for p in people)
+                continue
+            rendered, withheld = render_for_each(text[0], text[1], people)
+            ready.extend(rendered)
+            held.extend(withheld)
         if payload.preview_only:
             return {
                 "recipients": len(recipients),
@@ -451,6 +537,7 @@ async def build_campaign_from_template(payload: BuildFromTemplate, user: dict = 
                 # A real rendered message, not the template, so the member
                 # reads what the first recipient will read.
                 "sample": ready[0] if ready else None,
+                "messages_used": len(per_company) or (1 if subject and body else 0),
             }
         if not ready:
             raise HTTPException(422, "No recipient can receive this message yet")

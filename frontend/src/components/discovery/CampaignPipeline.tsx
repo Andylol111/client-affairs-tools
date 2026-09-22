@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { useNavigate } from 'react-router-dom';
-import { api, type Contact, type YucgRecommendation } from '../../api';
-import CompanyDiscovery from './CompanyDiscovery';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { api, type Contact, type ImportOutcome, type YucgRecommendation } from '../../api';
 import CompanyAutocomplete from '../CompanyAutocomplete';
+import RecipientPicker, { type PickerMode } from './RecipientPicker';
+import CompanyLanes, { type Lane } from './CompanyLanes';
+import RoleSuggestionBubbles from './RoleSuggestionBubbles';
+import { LEVEL_TITLES, companyKey, defaultSelection } from '../../lib/recipients';
+import { type ChosenCompany, type CompanyRun, useDiscoveryRuns } from '../../lib/useDiscoveryRuns';
 
 /**
  * Companies to a reviewable campaign, in the order the work is actually done.
@@ -17,6 +20,13 @@ import CompanyAutocomplete from '../CompanyAutocomplete';
  * cannot write to people you have not found. Each one states what it did, so
  * a member can stop after any of them and still have something real - a
  * campaign here is a draft, and nothing is sent without releasing it.
+ *
+ * The left rail holds the steps; the right surface is the same at every
+ * step - the lanes that say where each company stands, then the sheet of
+ * people - so the flowchart and the list it describes are never apart. A
+ * step's controls sit in its rail body and end in the one button that
+ * advances it. Everything that acts on a company (search it, add who was
+ * found) is on the surface, next to the company.
  */
 
 type Step = 1 | 2 | 3 | 4;
@@ -33,6 +43,11 @@ const FIELD_HINTS = ['{first}', '{last}', '{full_name}', '{title}', '{company}',
 const MAX_COMPANIES_PER_CAMPAIGN = 500;
 /** Chips drawn before the row collapses to a count. */
 const CHIP_WINDOW = 24;
+/** People one search collects unless the member says otherwise. Enough for
+ *  a team, not the whole payroll. */
+const DEFAULT_MAX_PROSPECTS = 60;
+const IDLE: CompanyRun = { state: 'idle', pct: 0, message: '' };
+const PICKER_MODE: Record<Step, PickerMode> = { 1: 'preview', 2: 'select', 3: 'review', 4: 'review' };
 
 /** A numbered step header that is also the way back to that step. Defined
  *  outside the component so React keeps one instance rather than remounting
@@ -43,6 +58,7 @@ function StepHeading({ n, title, hint, step, onSelect }: {
   return (
     <button
       type="button"
+      data-step={n}
       onClick={() => onSelect(n)}
       className={`w-full text-left px-5 py-3 flex items-center gap-3 ${
         step === n ? 'bg-pale-sky/40' : 'hover:bg-pale-sky/20'}`}
@@ -60,7 +76,17 @@ function StepHeading({ n, title, hint, step, onSelect }: {
   );
 }
 
-export default function CampaignPipeline() {
+export type StageState = {
+  step: Step;
+  built: boolean;
+  lanes: { company: string; found: number; ticked: number }[];
+};
+
+function clampProspects(raw: number): number {
+  return Number.isFinite(raw) ? Math.min(800, Math.max(25, raw)) : DEFAULT_MAX_PROSPECTS;
+}
+
+export default function CampaignPipeline({ onStage }: { onStage?: (state: StageState) => void }) {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   // A link that already carries search terms - the register's "Find people
@@ -70,27 +96,57 @@ export default function CampaignPipeline() {
   // company when it has asked what roles to target, and hiding the field
   // behind a step would drop what the member just typed.
   const linkedCompany = (params.get('company') || '').trim();
+  const linkedDomain = (params.get('domain') || '').trim();
   // Several companies at once, which is how Studio hands over a ticked
   // selection: there, ticking people only ever offered to delete them.
   const linkedCompanies = (params.get('companies') || '')
     .split(',').map((c) => c.trim()).filter(Boolean);
+  const linkedRunId = Number(params.get('run') || '') || undefined;
   const arrivedWithSearch = Boolean(
-    linkedCompany || linkedCompanies.length
-    || (params.get('titles') || '').trim() || (params.get('domain') || '').trim(),
+    linkedCompany || linkedCompanies.length || linkedRunId
+    || (params.get('titles') || '').trim() || linkedDomain,
   );
   const [step, setStep] = useState<Step>(arrivedWithSearch ? 2 : 1);
 
   const [suggested, setSuggested] = useState<YucgRecommendation[]>([]);
-  const [chosen, setChosen] = useState<string[]>(
-    linkedCompanies.length ? linkedCompanies : linkedCompany ? [linkedCompany] : [],
-  );
+  // A company is a name and, when something already knows it, a domain: the
+  // register hands one over so the search does not re-derive a domain it
+  // was just given. A typed name has none and the server infers it.
+  const [chosen, setChosen] = useState<ChosenCompany[]>(() => (
+    linkedCompanies.length
+      ? linkedCompanies.map((name) => ({ name }))
+      : linkedCompany ? [{ name: linkedCompany, domain: linkedDomain || undefined }] : []
+  ));
   const [typed, setTyped] = useState('');
 
   const [people, setPeople] = useState<Contact[]>([]);
-  const [dropped, setDropped] = useState<number[]>([]);
+  // Ticked recipients. The old step kept a list of people to *drop*, which
+  // meant the default was "write to everyone found" and the member's real
+  // choice was invisible.
+  const [selected, setSelected] = useState<number[]>([]);
+  // Once the member has touched the ticks, a refresh must not re-decide
+  // them: only people who have just been added get the default treatment.
+  const touchedRef = useRef(false);
+
+  // What the search is told. Shared across companies because it is what the
+  // member wants, not what a company calls it; the role bubbles translate it
+  // per company and only add to it when clicked.
+  const [titleHints, setTitleHints] = useState(() => (params.get('titles') || '').trim());
+  const [maxProspects, setMaxProspects] = useState(() => (
+    params.get('max') ? clampProspects(Number(params.get('max'))) : DEFAULT_MAX_PROSPECTS
+  ));
+  // A domain typed for a company that arrived without one, kept apart from
+  // the company itself so the field that asks for it does not vanish at the
+  // first keystroke.
+  const [typedDomains, setTypedDomains] = useState<Record<string, string>>({});
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
 
   const [showAllChips, setShowAllChips] = useState(false);
   const [subject, setSubject] = useState('');
+  // One message per company, keyed by the company name as chosen. Empty means
+  // the campaign is one message for everybody.
+  const [perCompany, setPerCompany] = useState(false);
+  const [messages, setMessages] = useState<Record<string, { subject: string; body: string }>>({});
   const [body, setBody] = useState('');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [goal, setGoal] = useState('');
@@ -114,72 +170,176 @@ export default function CampaignPipeline() {
       .catch(() => setSuggested([]));
   }, []);
 
-  const toggle = (name: string) =>
-    setChosen((current) => current.includes(name)
-      ? current.filter((c) => c !== name)
-      : [...current, name]);
+  const chosenNames = useMemo(() => chosen.map((c) => c.name), [chosen]);
+  const isChosen = (name: string) => chosen.some((c) => companyKey(c.name) === companyKey(name));
 
-  // Step 2 reads the people already found at the chosen companies. Discovery
-  // itself stays where it is - this shows what it produced and offers to run
-  // it again for a company that came back thin.
+  const toggle = (name: string) =>
+    setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(name))
+      ? current.filter((c) => companyKey(c.name) !== companyKey(name))
+      : [...current, { name }]);
+
   const chipNames = useMemo(() => Array.from(new Set([
     ...suggested.map((rec) => rec.prospect?.company).filter((n): n is string => !!n),
-    ...chosen,
-  ])), [suggested, chosen]);
+    ...chosenNames,
+  ])), [suggested, chosenNames]);
   const visibleChips = showAllChips ? chipNames : chipNames.slice(0, CHIP_WINDOW);
   const hiddenChips = chipNames.length - visibleChips.length;
 
-  const loadPeople = useCallback(async () => {
-    if (chosen.length === 0) return;
+  // The people on file at the chosen companies follow the companies: choose
+  // one and its people appear, at whatever step. Debounced so a run of chip
+  // clicks is one request, and stamped so a slow answer to an old choice
+  // cannot overwrite the current one.
+  const requestRef = useRef(0);
+  const loadPeople = useCallback(async (names: string[], createdIds: number[] = []) => {
+    const requestId = ++requestRef.current;
+    if (names.length === 0) {
+      setPeople([]);
+      setSelected([]);
+      setBusy(false);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      const res = await api.contacts.list({ companies: chosen.join(','), limit: 400 });
-      setPeople(Array.isArray(res?.items) ? res.items : []);
+      const res = await api.contacts.list({ companies: names.join(','), limit: 800 });
+      if (requestId !== requestRef.current) return;
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setPeople(items);
+      setSelected((current) => {
+        if (!touchedRef.current) return defaultSelection(items);
+        const present = new Set(items.map((p) => p.id));
+        const fresh = defaultSelection(items.filter((p) => createdIds.includes(p.id)));
+        return [...new Set([...current.filter((id) => present.has(id)), ...fresh])];
+      });
     } catch (e) {
+      if (requestId !== requestRef.current) return;
       setError(e instanceof Error ? e.message : 'Could not load people');
     } finally {
-      setBusy(false);
+      if (requestId === requestRef.current) setBusy(false);
     }
-  }, [chosen]);
-
-  useEffect(() => {
-    if (!arrivedWithSearch || chosen.length === 0) return;
-    // Deferred so the fetch is not a synchronous setState inside the effect,
-    // which would cascade a render on mount.
-    const timer = window.setTimeout(() => { void loadPeople(); }, 0);
-    return () => window.clearTimeout(timer);
-    // Arrival only: afterwards the member advances the steps themselves.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadPeople(chosenNames); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [chosenNames, loadPeople]);
+
+  const onImported = useCallback(async (outcomes: ImportOutcome[]) => {
+    const createdIds = outcomes
+      .flatMap((o) => (o.outcome === 'created' && o.contact_id !== null ? [o.contact_id] : []));
+    await loadPeople(chosenNames, createdIds);
+  }, [loadPeople, chosenNames]);
+
+  const {
+    runs, found, linkedRun, notice: runNotice, error: runError,
+    startRun, addFound, exportRun, deleteRun,
+  } = useDiscoveryRuns({ chosen, linkedRunId, onImported });
+
+  // A link to a run means that run's company: make sure it has a lane, and
+  // put it in focus. Once per run, deferred out of the effect body.
+  const linkedApplied = useRef<number | null>(null);
+  useEffect(() => {
+    if (!linkedRun || linkedApplied.current === linkedRun.id) return;
+    const timer = window.setTimeout(() => {
+      linkedApplied.current = linkedRun.id;
+      const key = companyKey(linkedRun.company_name);
+      setChosen((current) => current.some((c) => companyKey(c.name) === key)
+        ? current
+        : [...current, { name: linkedRun.company_name, domain: linkedRun.company_domain || undefined }]);
+      setFocusedKey(key);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [linkedRun]);
+
+  const changeSelection = (ids: number[]) => {
+    touchedRef.current = true;
+    setSelected(ids);
+  };
+
+  // Only what was ticked, and only what can be reached: a selection kept from
+  // before an address was removed must not become a silent send failure.
   const recipients = useMemo(
-    () => people.filter((p) => p.email && !dropped.includes(p.id)),
-    [people, dropped],
+    () => people.filter((p) => p.email && selected.includes(p.id)),
+    [people, selected],
   );
 
-  const byCompany = useMemo(() => {
-    const map = new Map<string, Contact[]>();
-    // Every company the member chose gets a row, including the ones with
-    // nobody on file yet. Dropping them would make a company typed in by hand
-    // disappear at step 2 with no explanation and no way to act on it.
-    for (const company of chosen) map.set(company.trim(), []);
-    for (const person of people) {
-      const key = (person.company || 'No company').trim();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(person);
+  // One lane per company: how many people it has (on file, plus found and
+  // not yet on file), how many of them are ticked, and what its search is
+  // doing.
+  const lanes = useMemo<Lane[]>(() => {
+    const byKey: Record<string, Contact[]> = {};
+    for (const person of people) (byKey[companyKey(person.company)] ||= []).push(person);
+    return chosen.map((company) => {
+      const key = companyKey(company.name);
+      const rows = byKey[key] || [];
+      const onFile = new Set(rows.map((p) => (p.email || '').trim().toLowerCase()).filter(Boolean));
+      const extra = (found[key] || []).filter((p) => !onFile.has((p.email || '').trim().toLowerCase())).length;
+      return {
+        company: company.name,
+        found: rows.length + extra,
+        ticked: rows.filter((p) => selected.includes(p.id) && p.email).length,
+        run: runs[key] || IDLE,
+      };
+    });
+  }, [chosen, people, selected, found, runs]);
+
+  useEffect(() => {
+    onStage?.({ step, built: Boolean(built), lanes });
+  }, [onStage, step, built, lanes]);
+
+  // Moving to a step scrolls it to the top of the column, so the work is
+  // where the eye already is instead of below the fold.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const heading = rootRef.current?.querySelector(`[data-step="${step}"]`);
+    if (!heading) return;
+    const timer = window.setTimeout(
+      () => heading.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    return () => window.clearTimeout(timer);
+  }, [step]);
+
+  const byCompanyCount = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const person of recipients) {
+      const key = companyKey(person.company);
+      counts[key] = (counts[key] || 0) + 1;
     }
-    return [...map.entries()];
-  }, [people, chosen]);
+    return counts;
+  }, [recipients]);
+
+  // The company whose vocabulary the search controls are about: the lane
+  // last pointed at, else the first chosen.
+  const focused = chosen.find((c) => companyKey(c.name) === focusedKey) ?? chosen[0] ?? null;
+  const focusedDomain = focused ? (typedDomains[companyKey(focused.name)] || focused.domain || '') : '';
+
+  // One search, from wherever it is asked for: the lane, the group header in
+  // the sheet. It takes the titles and settings from the step, and the
+  // domain from what is known about the company. With no titles typed it
+  // asks for the people who actually answer, so a quick press never comes
+  // back with a board.
+  const findPeople = useCallback((company: ChosenCompany) => {
+    const key = companyKey(company.name);
+    setFocusedKey(key);
+    void startRun(company, {
+      titleHints: titleHints.trim() || LEVEL_TITLES.working,
+      maxProspects,
+      domain: typedDomains[key] || undefined,
+    });
+  }, [startRun, titleHints, maxProspects, typedDomains]);
+
+  const findByName = useCallback((name: string) => {
+    const company = chosen.find((c) => companyKey(c.name) === companyKey(name));
+    if (company) findPeople(company);
+  }, [chosen, findPeople]);
 
   const runPreview = useCallback(async () => {
     setBusy(true);
     setError('');
     try {
       const res = await api.campaigns.build({
-        companies: chosen,
+        companies: chosenNames,
         contact_ids: recipients.map((r) => r.id),
-        subject, body, preview_only: true,
+        subject, body, messages, preview_only: true,
       });
       setPreview(res as Preview);
     } catch (e) {
@@ -188,17 +348,17 @@ export default function CampaignPipeline() {
     } finally {
       setBusy(false);
     }
-  }, [chosen, recipients, subject, body]);
+  }, [chosenNames, recipients, subject, body, messages]);
 
   const build = async () => {
     setBusy(true);
     setError('');
     try {
       const res = await api.campaigns.build({
-        name: `${chosen.slice(0, 2).join(', ')}${chosen.length > 2 ? ` +${chosen.length - 2}` : ''}`,
-        companies: chosen,
+        name: `${chosenNames.slice(0, 2).join(', ')}${chosen.length > 2 ? ` +${chosen.length - 2}` : ''}`,
+        companies: chosenNames,
         contact_ids: recipients.map((r) => r.id),
-        subject, body,
+        subject, body, messages,
       });
       if (wantFollowUp && followUpSubject.trim() && followUpBody.trim()) {
         await api.outreach.sequences.create(
@@ -215,20 +375,62 @@ export default function CampaignPipeline() {
   };
 
   return (
-    <div className="surface-card rounded-2xl border border-[var(--border)] shadow-sm overflow-hidden"
+    // 18.25rem is the shell around this grid at xl: header, main padding,
+    // page header and subnav above; workspace and main padding below. The
+    // grid fills the rest exactly so the page never grows a scrollbar of
+    // its own beside the rail's and the surface's.
+    <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 xl:h-[calc(100vh-18.25rem)]"
          data-section="campaign-pipeline">
+      <div ref={rootRef}
+           data-rail
+           className="xl:col-span-2 min-h-0 xl:max-h-full xl:overflow-y-auto surface-card rounded-2xl border border-[var(--border)] shadow-sm overflow-hidden self-start">
       <StepHeading n={1} title="Choose companies" hint={chosen.length ? `${chosen.length} chosen` : 'From the club list, or type any name'} step={step} onSelect={setStep} />
       {step === 1 && (
         <div className="px-5 pb-5 space-y-3 border-b border-pale-sky">
-          {/* Chips cover the club suggestions and anything typed in. A company
-              the club list and the register have never heard of is still a
-              company: without a chip it would be silently selected, with no way
-              to see it or take it back. Only a screenful is drawn: a selection
-              of several hundred companies is a count plus the ones you are
-              working on, not eight hundred DOM nodes. */}
-          <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1">
+              <CompanyAutocomplete
+                id="pipeline-company"
+                label="Company"
+                value={typed}
+                placeholder="Any company, including the public register"
+                onChange={(name) => setTyped(name)}
+                onSelect={(option) => {
+                  setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(option.name))
+                    ? current
+                    : [...current, { name: option.name, domain: option.domain || undefined }]);
+                  setTyped('');
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              disabled={!typed.trim()}
+              onClick={() => { toggle(typed.trim()); setTyped(''); }}
+              className="ui-button ui-button--secondary shrink-0"
+            >
+              Add
+            </button>
+          </div>
+
+          {chosen.length > 0 && (
+            <p className="text-xs text-slate-500" data-testid="chosen-count">
+              {chosen.length} compan{chosen.length === 1 ? 'y' : 'ies'} chosen
+              {chosen.length > MAX_COMPANIES_PER_CAMPAIGN
+                ? ` — a campaign takes at most ${MAX_COMPANIES_PER_CAMPAIGN}; drop some or split the release.`
+                : ''}
+              {' · '}
+              <button type="button" className="underline" onClick={() => setChosen([])}>Clear all</button>
+            </p>
+          )}
+
+          {/* Only a screenful of chips is drawn: a selection of several hundred
+              companies is a count plus the ones being worked on, not eight
+              hundred DOM nodes. */}
+          <p className="text-xs font-medium text-slate-500 pt-1">Or pick from the club list</p>
+          <div className="flex flex-wrap gap-2" data-testid="company-chips">
             {visibleChips.map((name) => {
-              const on = chosen.includes(name);
+              const on = isChosen(name);
               return (
                 <button
                   key={name}
@@ -252,107 +454,105 @@ export default function CampaignPipeline() {
               </button>
             )}
           </div>
-          {chosen.length > 0 && (
-            <p className="text-xs text-slate-500">
-              {chosen.length} compan{chosen.length === 1 ? 'y' : 'ies'} chosen
-              {chosen.length > MAX_COMPANIES_PER_CAMPAIGN
-                ? ` — a campaign takes at most ${MAX_COMPANIES_PER_CAMPAIGN}; drop some or split the release.`
-                : ''}
-              {' · '}
-              <button type="button" className="underline" onClick={() => setChosen([])}>Clear all</button>
-            </p>
-          )}
-          {/* The same field as everywhere else, so the 214k-company public
-              register is reachable from the first step rather than only from
-              the Companies tab. */}
-          <div className="flex gap-2 items-end">
-            <div className="flex-1">
-              <CompanyAutocomplete
-                id="pipeline-company"
-                label="Company"
-                value={typed}
-                placeholder="Any company, including the public register"
-                onChange={(name) => setTyped(name)}
-                onSelect={(option) => { toggle(option.name); setTyped(''); }}
-              />
-            </div>
-            <button
-              type="button"
-              disabled={!typed.trim()}
-              onClick={() => { toggle(typed.trim()); setTyped(''); }}
-              className="ui-button ui-button--secondary shrink-0"
-            >
-              Add
-            </button>
-          </div>
+
           <button
             type="button"
-            disabled={chosen.length === 0 || busy}
-            onClick={() => { setStep(2); void loadPeople(); }}
-            className="ui-button ui-button--primary"
+            disabled={(chosen.length === 0 && !typed.trim()) || busy}
+            onClick={() => {
+              // Typed a name and pressed the big button without adding it
+              // first: that is the same intent, so take it.
+              const pending = typed.trim();
+              if (pending && !isChosen(pending)) {
+                setChosen((current) => [...current, { name: pending }]);
+                setTyped('');
+              }
+              setStep(2);
+            }}
+            className="ui-button ui-button--primary w-full py-3 text-[15px]"
           >
-            Find people at {chosen.length || 'these'} compan{chosen.length === 1 ? 'y' : 'ies'}
+            {chosen.length > 1
+              ? `Find people at these ${chosen.length} companies`
+              : 'Find people'}
           </button>
         </div>
       )}
 
-      <StepHeading n={2} title="Check the people" hint={people.length ? `${recipients.length} will be written to` : 'Who was found, and who to drop'} step={step} onSelect={setStep} />
+      <StepHeading n={2} title="Choose who gets it" hint={people.length ? `${recipients.length} of ${people.length} chosen` : 'Tick the people this message goes to'} step={step} onSelect={setStep} />
       {step === 2 && (
         <div className="px-5 pb-5 space-y-3 border-b border-pale-sky">
-          {busy && <p className="text-sm text-slate-500">Loading…</p>}
-          {byCompany.map(([company, rows]) => (
-            <div key={company} className="rounded-xl border border-pale-sky">
-              <div className="flex items-center justify-between px-3 py-2 bg-pale-sky/30">
-                <span className="text-sm font-semibold text-deep-navy">{company}</span>
-                <span className="text-xs text-slate-500">{rows.length} found</span>
-              </div>
-              {rows.length === 0 && (
-                <p className="px-3 py-2 text-sm text-slate-500">
-                  Nobody on file here yet. Use Search for people below, or import a list.
-                </p>
-              )}
-              <ul className="divide-y divide-pale-sky">
-                {rows.map((person) => (
-                  <li key={person.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                    <span className="min-w-0">
-                      <span className="font-medium text-deep-navy">{person.name || person.email}</span>
-                      <span className="text-slate-500"> · {person.title || 'no title'}</span>
-                      {!person.email && <span className="text-amber-800"> · no address, cannot be written to</span>}
-                    </span>
-                    {person.email && (
-                      <button
-                        type="button"
-                        onClick={() => setDropped((d) => d.includes(person.id) ? d.filter((x) => x !== person.id) : [...d, person.id])}
-                        className="shrink-0 text-xs font-semibold text-slate-500 hover:underline"
-                      >
-                        {dropped.includes(person.id) ? 'Put back' : 'Drop'}
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+          <p className="text-sm text-deep-navy">
+            <strong>{recipients.length}</strong> of {people.filter((p) => p.email).length} reachable
+            people ticked, at {chosen.length} compan{chosen.length === 1 ? 'y' : 'ies'}. Tick them on
+            the right.
+          </p>
           {people.length === 0 && !busy && (
             <p className="text-sm text-slate-500">
-              Nobody on record at these companies yet. Search for more below.
+              Nobody on record at these companies yet. Search a company from its lane, or import a
+              list.
             </p>
           )}
 
-          {/* Every way people get into the club is the same step of the same
-              job, so they live here rather than as separate destinations
-              competing with the workflow. Searching is the usual one; a
-              spreadsheet you already have is quicker; deep research is the
-              slow, evidence-reviewed route for a batch. */}
-          <details className="rounded-xl border border-pale-sky" open={people.length === 0}>
+          {/* What a search is told. The titles are the member's words; the
+              bubbles under them are the focused company's own words for
+              the same roles, added only when clicked - what one company
+              calls a job is never quietly applied to another. */}
+          <label className="block text-xs font-medium text-slate-600">
+            Titles to prioritise
+            <input
+              className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
+              aria-label="Titles to prioritise"
+              value={titleHints}
+              onChange={(e) => setTitleHints(e.target.value)}
+              placeholder="VPs, project managers"
+            />
+          </label>
+          {focused && (
+            <div data-testid="focused-company" data-company={focused.name}>
+              <RoleSuggestionBubbles
+                company={focused.name}
+                domain={focusedDomain}
+                hints={titleHints}
+                onAdd={(title) => setTitleHints((prev) => {
+                  const parts = prev.split(',').map((p) => p.trim()).filter(Boolean);
+                  if (parts.some((p) => p.toLowerCase() === title.toLowerCase())) return prev;
+                  return [...parts, title].join(', ');
+                })}
+              />
+            </div>
+          )}
+          <details className="rounded-xl border border-pale-sky">
             <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-deep-navy">
-              Search for more people
+              Search settings
             </summary>
-            <div className="border-t border-pale-sky p-3">
-              <CompanyDiscovery />
+            <div className="space-y-2 border-t border-pale-sky p-3">
+              <label className="block text-xs font-medium text-slate-600">
+                People to collect (25–800)
+                <input
+                  type="number"
+                  min={25}
+                  max={800}
+                  className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
+                  aria-label="People to collect"
+                  value={maxProspects}
+                  onChange={(e) => setMaxProspects(clampProspects(Number(e.target.value)))}
+                />
+              </label>
+              {focused && !focused.domain && (
+                <label className="block text-xs font-medium text-slate-600">
+                  Domain for {focused.name} (optional; looked up from the name if blank)
+                  <input
+                    className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
+                    aria-label="Company domain"
+                    value={typedDomains[companyKey(focused.name)] || ''}
+                    onChange={(e) => setTypedDomains((prev) => ({ ...prev, [companyKey(focused.name)]: e.target.value }))}
+                    placeholder="apple.com"
+                  />
+                </label>
+              )}
             </div>
           </details>
 
+          {/* The other way people arrive: the spreadsheet you already have. */}
           <div className="flex flex-wrap items-center gap-4 text-xs">
             <input
               ref={fileRef}
@@ -366,7 +566,7 @@ export default function CampaignPipeline() {
                 setError('');
                 try {
                   const res = await api.contacts.importFile(file);
-                  await loadPeople();
+                  await loadPeople(chosenNames);
                   setError(res.duplicates_skipped
                     ? `Imported ${res.count}; ${res.duplicates_skipped} already on record.`
                     : '');
@@ -386,22 +586,8 @@ export default function CampaignPipeline() {
             >
               {importing ? 'Importing…' : 'Import a spreadsheet instead'}
             </button>
-            <button
-              type="button"
-              onClick={() => navigate('/scraper?view=research')}
-              className="ui-button ui-button--ghost ui-button--sm"
-            >
-              Queue deep research for a batch →
-            </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void loadPeople()}
-            className="ui-button ui-button--ghost ui-button--sm"
-          >
-            Refresh who was found
-          </button>
           <button
             type="button"
             disabled={recipients.length === 0}
@@ -437,6 +623,23 @@ export default function CampaignPipeline() {
               aria-label="Verified proof"
               className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
             />
+            {chosen.length > 1 && (
+              <label className="flex items-start gap-2 text-[13px] text-deep-navy">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={perCompany}
+                  onChange={(e) => { setPerCompany(e.target.checked); setPreview(null); }}
+                />
+                <span>
+                  Write a different message for each company
+                  <span className="block text-xs text-slate-500">
+                    Each one is written from what the club already recorded about that company —
+                    why it fits, the angle, the Yale connection.
+                  </span>
+                </span>
+              </label>
+            )}
             <button
               type="button"
               disabled={drafting || !goal.trim()}
@@ -444,14 +647,20 @@ export default function CampaignPipeline() {
                 setDrafting(true);
                 setError('');
                 try {
-                  const res = await api.campaigns.draftTemplate({
-                    companies: chosen,
-                    goal,
-                    proof,
-                    roles: [...new Set(recipients.map((r) => r.title).filter(Boolean))].slice(0, 6).join(', '),
-                  });
-                  setSubject(res.subject);
-                  setBody(res.body);
+                  const roles = [...new Set(recipients.map((r) => r.title).filter(Boolean))].slice(0, 6).join(', ');
+                  if (perCompany) {
+                    const res = await api.campaigns.draftTemplate({
+                      companies: chosenNames, goal, proof, roles, per_company: true,
+                    });
+                    setMessages(res.messages || {});
+                    setSubject('');
+                    setBody('');
+                  } else {
+                    const res = await api.campaigns.draftTemplate({ companies: chosenNames, goal, proof, roles });
+                    setMessages({});
+                    setSubject(res.subject || '');
+                    setBody(res.body || '');
+                  }
                   setPreview(null);
                 } catch (e) {
                   setError(e instanceof Error ? e.message : 'Could not draft that');
@@ -461,10 +670,53 @@ export default function CampaignPipeline() {
               }}
               className="ui-button ui-button--secondary ui-button--sm"
             >
-              {drafting ? 'Writing…' : `Draft one message for these ${recipients.length}`}
+              {drafting
+                ? 'Writing…'
+                : perCompany
+                  ? `Draft a message for each of these ${chosen.length} companies`
+                  : `Draft one message for these ${recipients.length}`}
             </button>
           </div>
 
+          {/* One editable message per company, so what the AI wrote is what
+              the member corrects rather than something they have to accept. */}
+          {Object.keys(messages).length > 0 && (
+            <div className="space-y-2" data-testid="per-company-messages">
+              {chosenNames.filter((c) => messages[c]).map((company) => (
+                <details key={company} className="rounded-xl border border-pale-sky" open={chosen.length <= 3 || chosenNames.indexOf(company) === 0}>
+                  <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-deep-navy">
+                    {company}
+                    <span className="ml-2 font-normal text-xs text-slate-500">
+                      {byCompanyCount[companyKey(company)] || 0} recipient(s)
+                    </span>
+                  </summary>
+                  <div className="space-y-2 border-t border-pale-sky p-3">
+                    <input
+                      value={messages[company].subject}
+                      aria-label={`Subject for ${company}`}
+                      onChange={(e) => setMessages((m) => ({ ...m, [company]: { ...m[company], subject: e.target.value } }))}
+                      className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
+                    />
+                    <textarea
+                      value={messages[company].body}
+                      aria-label={`Message for ${company}`}
+                      rows={8}
+                      onChange={(e) => setMessages((m) => ({ ...m, [company]: { ...m[company], body: e.target.value } }))}
+                      className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm font-mono"
+                    />
+                  </div>
+                </details>
+              ))}
+            </div>
+          )}
+
+          {/* With a message per company written, this is the one used for any
+              company that has none - so it is offered, not demanded. */}
+          {Object.keys(messages).length > 0 && (
+            <p className="text-[13px] font-semibold text-deep-navy">
+              Message for any company without one of its own (optional)
+            </p>
+          )}
           <input
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
@@ -486,39 +738,12 @@ export default function CampaignPipeline() {
           </p>
           <button
             type="button"
-            disabled={busy || !subject.trim() || !body.trim()}
+            disabled={busy || (!Object.keys(messages).length && (!subject.trim() || !body.trim()))}
             onClick={() => void runPreview()}
-            className="ui-button ui-button--secondary"
+            className="ui-button ui-button--primary"
           >
             {busy ? 'Rendering…' : 'Preview the real message'}
           </button>
-
-          {preview && (
-            <div className="rounded-xl border border-pale-sky bg-pale-sky/20 p-3 space-y-2">
-              <p className="text-[13px] font-semibold text-deep-navy">
-                {preview.ready} of {preview.recipients} ready
-                {preview.held.length ? ` · ${preview.held.length} held` : ''}
-              </p>
-              {preview.sample && (
-                <div className="rounded-lg bg-white border border-pale-sky p-3">
-                  <p className="text-xs text-slate-500">To {preview.sample.email}</p>
-                  <p className="text-sm font-semibold text-deep-navy">{preview.sample.subject}</p>
-                  <p className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{preview.sample.body}</p>
-                </div>
-              )}
-              {preview.held.map((h) => (
-                <p key={h.contact_id} className="text-xs text-amber-900">{h.reason}</p>
-              ))}
-              <button
-                type="button"
-                disabled={preview.ready === 0}
-                onClick={() => setStep(4)}
-                className="ui-button ui-button--primary"
-              >
-                Looks right
-              </button>
-            </div>
-          )}
         </div>
       )}
 
@@ -588,6 +813,89 @@ export default function CampaignPipeline() {
       )}
 
       {error && <p className="px-5 pb-4 text-sm text-red-700">{error}</p>}
+      </div>
+
+      {/* The surface: the same two things at every step, in the same order,
+          so the flowchart and the list it describes are never apart. The
+          aside is the only thing that scrolls; the lanes stay short and the
+          sheet takes whatever is left. */}
+      <aside className="xl:col-span-3 min-h-0 xl:overflow-y-auto space-y-4" data-surface>
+        {runNotice && (
+          <p className="ui-notice ui-notice--info text-sm" role="status">{runNotice}</p>
+        )}
+        {runError && (
+          <p className="ui-notice ui-notice--danger text-sm" role="alert">{runError}</p>
+        )}
+        <CompanyLanes
+          lanes={lanes}
+          built={Boolean(built)}
+          focused={focused?.name ?? null}
+          onFocus={(name) => setFocusedKey(companyKey(name))}
+          onFind={findByName}
+          onExport={(runId) => void exportRun(runId)}
+          onDelete={(runId) => {
+            if (window.confirm('Delete this search and everything it found?')) void deleteRun(runId);
+          }}
+        />
+
+        {step === 3 && (
+          <section className="surface-card rounded-2xl border border-pale-sky px-4 py-3 max-h-[40vh] overflow-y-auto" aria-label="Preview">
+            <h2 className="text-[15px] font-semibold text-deep-navy mb-1">What they will read</h2>
+            {preview ? (
+              <div className="space-y-2">
+                <p className="text-[13px] font-semibold text-deep-navy">
+                  {preview.ready} of {preview.recipients} ready
+                  {preview.held.length ? ` · ${preview.held.length} held` : ''}
+                </p>
+                {preview.sample && (
+                  <div className="rounded-xl border border-pale-sky p-3">
+                    <p className="text-xs text-slate-500">To {preview.sample.email}</p>
+                    <p className="text-sm font-semibold text-deep-navy">{preview.sample.subject}</p>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{preview.sample.body}</p>
+                  </div>
+                )}
+                {preview.held.map((h) => (
+                  <p key={h.contact_id} className="text-xs text-amber-900">{h.reason}</p>
+                ))}
+                <button
+                  type="button"
+                  disabled={preview.ready === 0}
+                  onClick={() => setStep(4)}
+                  className="ui-button ui-button--primary"
+                >
+                  Looks right
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Write the message, then press Preview: the real rendered email the first
+                recipient receives, not the template.
+              </p>
+            )}
+          </section>
+        )}
+
+        {chosen.length > 0 ? (
+          <section className="surface-card rounded-2xl border border-pale-sky px-4 pb-4" aria-label="People" data-testid="sheet">
+            <RecipientPicker
+              mode={PICKER_MODE[step]}
+              companies={chosen}
+              people={people}
+              selected={selected}
+              onSelectedChange={changeSelection}
+              found={found}
+              runs={runs}
+              onFind={findPeople}
+              onAddFound={addFound}
+              busy={busy}
+            />
+          </section>
+        ) : (
+          <section className="surface-card rounded-2xl border border-pale-sky p-4 text-sm text-slate-500" aria-label="People">
+            Choose a company and the people on file there appear here.
+          </section>
+        )}
+      </aside>
     </div>
   );
 }

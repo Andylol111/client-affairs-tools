@@ -234,6 +234,7 @@ def generate_group_template(
     roles: str = "",
     length: str = "short",
     model: Optional[str] = None,
+    company_notes: str = "",
 ) -> tuple[str, str]:
     """One message for a group, written with merge fields rather than a name.
 
@@ -242,6 +243,10 @@ def generate_group_template(
     twenty times or send twenty identical un-personalised notes. This asks for
     the same quality of draft once, with the parts that differ left as fields
     the send path fills in per recipient.
+
+    ``company_notes`` is what the club already decided about this company - why
+    it fits, the angle to open with, the Yale connection. Writing one message
+    per company is only worth doing if the message knows something about it.
     """
     from app.services.llm import complete_json, rank_model_id
     from app.services.merge_fields import unknown_fields
@@ -259,6 +264,8 @@ def generate_group_template(
         "verified_proof_the_email_may_use": (proof or "").strip()[:600],
         "length": LENGTH_INSTRUCTIONS.get(length, LENGTH_INSTRUCTIONS["short"]),
     }
+    if (company_notes or "").strip():
+        brief["what_the_club_already_knows_about_this_company"] = company_notes.strip()[:700]
     parsed = complete_json(json.dumps(brief), model or rank_model_id(), GROUP_TEMPLATE_PROMPT)
     if not parsed or not isinstance(parsed, dict):
         raise ValueError("The model returned nothing usable")

@@ -3,6 +3,8 @@ YUCGoutreach company discovery: SQL-backed runs, parallel enrichment, Excel expo
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from hmac import compare_digest
 from typing import Any
@@ -18,6 +20,7 @@ from app.services.yucgoutreach_discovery import (
     build_yucgoutreach_excel_bytes,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -80,7 +83,20 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
         await db.commit()
     finally:
         await db.close()
+    # The scheduler claims queued runs every 10 seconds, which a member is
+    # watching the whole of. Kick the same drain now: it takes the lease the
+    # same way, so a tick that lands mid-claim finds nothing to take.
+    asyncio.create_task(_kick_discovery_drain())
     return {"id": run_id, "status": "queued", "max_prospects": min(body.max_prospects, YUCG_MAX_PROSPECTS)}
+
+
+async def _kick_discovery_drain() -> None:
+    from app.services.yucgoutreach_discovery import drain_queued_yucgoutreach_runs
+
+    try:
+        await drain_queued_yucgoutreach_runs()
+    except Exception:
+        logger.exception("immediate discovery drain failed; the scheduler tick still owns the queue")
 
 
 @router.get("/runs")
@@ -250,19 +266,34 @@ async def list_prospects(run_id: int, user: dict = Depends(get_current_user), li
         await db.close()
 
 
+class YucgOutreachImportBody(BaseModel):
+    """Which of a run's people to bring on file. Absent means everyone
+    eligible, which is what the one-click flow and older callers expect."""
+
+    prospect_ids: list[int] | None = None
+
+
 @router.post("/runs/{run_id}/import-contacts")
-async def import_run_to_contacts(run_id: int, user: dict = Depends(get_current_user)):
+async def import_run_to_contacts(
+    run_id: int,
+    body: YucgOutreachImportBody | None = None,
+    user: dict = Depends(get_current_user),
+):
     """Copy verified YUCG prospects into the main contacts table."""
     run = await _get_run_for_user(run_id, user["id"])
     if not run:
         raise HTTPException(404, "Run not found")
+    prospect_ids = body.prospect_ids if body else None
+    if prospect_ids is not None and len(prospect_ids) == 0:
+        raise HTTPException(422, "Choose at least one person")
     from app.services.yucgoutreach_import import import_run_prospects
     db = await get_db()
     try:
-        result = await import_run_prospects(db, run=run, user_id=user["id"])
+        result = await import_run_prospects(db, run=run, user_id=user["id"], prospect_ids=prospect_ids)
         await db.commit()
         return {"created": result["created"], "updated": result["updated"],
-                "skipped": result["skipped"], "evidence": result["evidence"]}
+                "skipped": result["skipped"], "results": result["results"],
+                "evidence": result["evidence"]}
     finally:
         await db.close()
 

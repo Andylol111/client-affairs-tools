@@ -247,17 +247,28 @@ async def run() -> None:
         assert capped["sent"] == 1 and capped["pending_left"] == 1
         assert capped_again["sent"] == 0 and capped_sender.await_count == 1
 
-        created = await create_run(
-            YucgOutreachRunCreate(company_name="Example", max_prospects=3),
-            {"id": 1, "role": "standard"},
-        )
-        await rejected(
-            create_run(
-                YucgOutreachRunCreate(company_name="Duplicate", max_prospects=3),
+        # A member watching the page should not wait for the next scheduler
+        # tick, so creating a run kicks the same drain immediately. The kick is
+        # held here so the contention below is still two workers racing for one
+        # queued run rather than one worker and an already-claimed run.
+        import app.routers.yucgoutreach as yucg_router
+
+        kick = AsyncMock()
+        with patch.object(yucg_router, "_kick_discovery_drain", kick):
+            created = await create_run(
+                YucgOutreachRunCreate(company_name="Example", max_prospects=3),
                 {"id": 1, "role": "standard"},
-            ),
-            409,
-        )
+            )
+            await asyncio.sleep(0)
+            await rejected(
+                create_run(
+                    YucgOutreachRunCreate(company_name="Duplicate", max_prospects=3),
+                    {"id": 1, "role": "standard"},
+                ),
+                409,
+            )
+        assert kick.await_count == 1, "a new run waits for the scheduler tick"
+
         guard = AsyncMock()
         with patch("app.services.yucgoutreach_discovery._yucgoutreach_run_guard", guard):
             claims = await asyncio.gather(

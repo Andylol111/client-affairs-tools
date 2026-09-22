@@ -1171,6 +1171,13 @@ async def list_contacts(
                 r["last_campaign_id"] = send["campaign_id"] if send else None
                 r["last_campaign_name"] = send["campaign_name"] if send else None
                 r["last_sent_by_user_id"] = send["sent_by_user_id"] if send else None
+        # Who a title actually is - a job or a board seat - decided in one
+        # place, so choosing recipients by seniority means the same thing here
+        # as it does in the register.
+        from app.services.company_register import classify_person_level
+
+        for r in result:
+            r["person_level"] = classify_person_level(r.get("title"))
         for r in result:
             if r.get("email"):
                 r["email"] = sanitize_email(r["email"])

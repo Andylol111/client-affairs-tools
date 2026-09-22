@@ -120,7 +120,72 @@ def build_endpoint_tests() -> None:
         asyncio.run(scenario())
 
 
+def per_company_message_tests() -> None:
+    """A campaign to several companies is usually several things to say. One
+    message per company, each recipient rendered from their own company's -
+    and a company nobody wrote for is held and named, never quietly sent the
+    wrong pitch."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["DATABASE_URL"] = "sqlite:///" + tmp + "/per-company.db"
+
+        async def scenario() -> None:
+            await init_db()
+            db = await get_db()
+            await db.execute("INSERT INTO users(id,email,role,is_active) VALUES (1,'me@yale.edu','standard',1)")
+            for cid, name, email, company in [
+                (1, "Jean Bartik", "jean.bartik@a24films.com", "A24"),
+                (2, "Klara Dan", "klara.dan@neon.com", "NEON"),
+                (3, "Ada Lovelace", "ada@mubi.com", "MUBI"),
+            ]:
+                await db.execute(
+                    "INSERT INTO contacts(id,name,email,title,company,owner_id) VALUES (?,?,?,'Lead',?,1)",
+                    (cid, name, email, company))
+            await db.commit()
+            await db.close()
+
+            actor = {"id": 1, "role": "standard"}
+            messages = {
+                "A24": {"subject": "Distribution at {company}", "body": "Hi {first}, about your slate."},
+                "NEON": {"subject": "Awards run at {company}", "body": "Hi {first}, about the festival push."},
+            }
+            built = await build_campaign_from_template(
+                BuildFromTemplate(name="Studios", companies=["A24", "NEON", "MUBI"],
+                                  messages=messages), actor)
+            # MUBI has nobody's message, so MUBI's person is held with the reason.
+            assert built["created"] == 2, built
+            assert [h["email"] for h in built["held"]] == ["ada@mubi.com"], built["held"]
+            assert "MUBI" in built["held"][0]["reason"], built["held"]
+
+            db = await get_db()
+            rows = {r["contact_id"]: dict(r) for r in await (await db.execute(
+                "SELECT contact_id, email_subject, email_body FROM campaign_contacts")).fetchall()}
+            await db.close()
+            assert rows[1]["email_subject"] == "Distribution at A24", rows
+            assert rows[2]["email_body"] == "Hi Klara, about the festival push.", rows
+
+            # With a group message written too, it covers the companies that
+            # have none of their own rather than holding them.
+            covered = await build_campaign_from_template(
+                BuildFromTemplate(companies=["A24", "NEON", "MUBI"], messages=messages,
+                                  subject="Working with {company}", body="Hi {first}.",
+                                  preview_only=True), actor)
+            assert covered["ready"] == 3 and covered["held"] == [], covered
+
+            # A typo in one company's message is refused before anything is
+            # written, exactly like the group message.
+            try:
+                await build_campaign_from_template(
+                    BuildFromTemplate(companies=["A24"],
+                                      messages={"A24": {"subject": "x", "body": "Hi {firstname}"}}), actor)
+                raise AssertionError("an unknown field was accepted")
+            except HTTPException as exc:
+                assert exc.status_code == 422 and "firstname" in str(exc.detail)
+
+        asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     tests()
     build_endpoint_tests()
+    per_company_message_tests()
     print("merge fields: ok")

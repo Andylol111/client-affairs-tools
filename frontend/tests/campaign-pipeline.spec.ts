@@ -70,23 +70,24 @@ test('companies to a reviewable campaign without leaving the page', async ({ pag
   await page.goto('/scraper?view=company');
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  const rail = pipeline.locator('[data-rail]');
 
   // 1. Companies are a multiple choice, not one at a time.
-  await pipeline.getByRole('button', { name: 'A24', exact: true }).click();
-  await expect(pipeline.getByText('1 chosen')).toBeVisible();
-  await pipeline.getByRole('button', { name: /^Find people at/ }).click();
+  await rail.getByTestId('company-chips').getByRole('button', { name: 'A24', exact: true }).click();
+  await expect(rail.getByText('1 chosen')).toBeVisible();
+  await rail.getByRole('button', { name: /^Find people/ }).click();
 
   // 2. The people found, grouped by company, with the option to drop one.
   await expect(pipeline.getByText('Jean Bartik')).toBeVisible();
   await expect(pipeline.getByText('Klara Dan')).toBeVisible();
-  await pipeline.getByRole('button', { name: /^Write to these/ }).click();
+  await rail.getByRole('button', { name: /^Write to these/ }).click();
 
   // 3. One message, rendered per recipient. The preview is produced by the
   //    same call that will create the drafts, so it cannot promise something
   //    different from what gets written.
-  await pipeline.getByLabel('Subject').fill('A24 and Yale');
-  await pipeline.getByLabel('Message', { exact: true }).fill('Hi {first}, about {company}.');
-  await pipeline.getByRole('button', { name: /Preview the real message/ }).click();
+  await rail.getByLabel('Subject').fill('A24 and Yale');
+  await rail.getByLabel('Message', { exact: true }).fill('Hi {first}, about {company}.');
+  await rail.getByRole('button', { name: /Preview the real message/ }).click();
 
   await expect(pipeline.getByText('2 of 3 ready · 1 held')).toBeVisible();
   await expect(pipeline.getByText('Hi Jean, about A24.')).toBeVisible();
@@ -96,10 +97,10 @@ test('companies to a reviewable campaign without leaving the page', async ({ pag
   await pipeline.getByRole('button', { name: 'Looks right' }).click();
 
   // 4. Follow-up is opt-in, written here, and stops on a reply.
-  await pipeline.getByLabel(/Send one follow-up/).check();
-  await pipeline.getByLabel('Follow-up subject').fill('Following up on A24');
-  await pipeline.getByLabel('Follow-up message').fill('Hi {first}, circling back.');
-  await pipeline.getByRole('button', { name: /^Build the campaign/ }).click();
+  await rail.getByLabel(/Send one follow-up/).check();
+  await rail.getByLabel('Follow-up subject').fill('Following up on A24');
+  await rail.getByLabel('Follow-up message').fill('Hi {first}, circling back.');
+  await rail.getByRole('button', { name: /^Build the campaign/ }).click();
 
   await expect(pipeline.getByText(/Campaign built with 2 draft/)).toBeVisible();
   // Nothing is sent by building: releasing stays a separate, deliberate act.
@@ -125,17 +126,18 @@ test('a group handed over from Studio arrives loaded, and AI drafts one message 
   // already happened.
   await page.goto('/scraper?view=company&companies=A24');
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  const rail = pipeline.locator('[data-rail]');
   await expect(pipeline.getByText('Jean Bartik')).toBeVisible();
 
-  await pipeline.getByRole('button', { name: /^Write to these/ }).click();
-  await pipeline.getByLabel('Email goal').fill('offer a ten-week student team');
-  await pipeline.getByRole('button', { name: /^Draft one message for these/ }).click();
+  await rail.getByRole('button', { name: /^Write to these/ }).click();
+  await rail.getByLabel('Email goal').fill('offer a ten-week student team');
+  await rail.getByRole('button', { name: /^Draft one message for these/ }).click();
 
   // One draft for the group, holding fields rather than a name the model
   // invented for somebody it was not writing to.
-  await expect(pipeline.getByLabel('Subject')).toHaveValue('A24 and a Yale student team');
-  await expect(pipeline.getByLabel('Message', { exact: true })).toHaveValue(/Hi \{first\},/);
-  await expect(pipeline.getByLabel('Message', { exact: true })).toHaveValue(/About \{company\}/);
+  await expect(rail.getByLabel('Subject')).toHaveValue('A24 and a Yale student team');
+  await expect(rail.getByLabel('Message', { exact: true })).toHaveValue(/Hi \{first\},/);
+  await expect(rail.getByLabel('Message', { exact: true })).toHaveValue(/About \{company\}/);
 });
 
 test('a company in neither the club list nor the public register can still be worked', async ({ page }) => {
@@ -143,22 +145,23 @@ test('a company in neither the club list nor the public register can still be wo
   await page.goto('/scraper?view=company');
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
+  const rail = pipeline.locator('[data-rail]');
 
   // The club target list and the 215k-row register are starting points, not a
   // fence. A member who knows a company nobody has heard of types the name
   // and works it exactly like any other.
-  await pipeline.getByLabel('Company').fill('Bartik Family Foundation');
-  await pipeline.getByRole('button', { name: 'Add', exact: true }).click();
+  await rail.getByLabel('Company').fill('Bartik Family Foundation');
+  await rail.getByRole('button', { name: 'Add', exact: true }).click();
 
-  await expect(pipeline.getByRole('button', { name: '✓ Bartik Family Foundation' })).toBeVisible();
-  await expect(pipeline.getByText('1 chosen')).toBeVisible();
+  await expect(rail.getByRole('button', { name: '✓ Bartik Family Foundation' })).toBeVisible();
+  await expect(rail.getByText('1 chosen')).toBeVisible();
 
   // And it carries into the next step rather than being dropped as unknown.
-  await pipeline.getByRole('button', { name: /^Find people at 1 company/ }).click();
-  await expect(pipeline.getByText('Bartik Family Foundation')).toBeVisible();
-  // With nobody on file it says so and points at the ways to find people,
-  // rather than the company silently vanishing from the step.
-  await expect(pipeline.getByText('Nobody on file here yet')).toBeVisible();
+  await rail.getByRole('button', { name: 'Find people', exact: true }).click();
+  await expect(pipeline.locator('[data-lane="Bartik Family Foundation"]')).toBeVisible();
+  // With nobody on file the company keeps its group and offers the search
+  // that would fill it, rather than silently vanishing from the step.
+  await expect(pipeline.getByRole('button', { name: 'Find people here' })).toBeVisible();
 });
 
 test('a large company selection stays a count and a screenful, not a wall of chips', async ({ page }) => {
@@ -167,19 +170,21 @@ test('a large company selection stays a count and a screenful, not a wall of chi
   await page.goto(`/scraper?view=company&companies=${encodeURIComponent(many.join(','))}`);
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
-  await pipeline.getByRole('button', { name: /Choose companies/ }).click();
+  const rail = pipeline.locator('[data-rail]');
+  await rail.getByRole('button', { name: /Choose companies/ }).click();
 
   // Every chosen company used to become a DOM node. A selection this size is
   // a count plus the ones being worked on, with the rest one click away.
-  await expect(pipeline.getByText('300 companies chosen')).toBeVisible();
-  const collapsed = await pipeline.locator('.flex.flex-wrap button').count();
+  await expect(rail.getByText('300 companies chosen')).toBeVisible();
+  const chips = rail.getByTestId('company-chips').getByRole('button');
+  const collapsed = await chips.count();
   expect(collapsed).toBeLessThanOrEqual(26);
-  await pipeline.getByRole('button', { name: /^\+\d+ more$/ }).click();
-  expect(await pipeline.locator('.flex.flex-wrap button').count()).toBeGreaterThan(collapsed);
+  await rail.getByRole('button', { name: /^\+\d+ more$/ }).click();
+  expect(await chips.count()).toBeGreaterThan(collapsed);
 
   // And the step says the campaign ceiling before the server refuses it.
   await page.goto(`/scraper?view=company&companies=${encodeURIComponent(
     Array.from({ length: 501 }, (_, i) => `Big ${i + 1}`).join(','))}`);
-  await pipeline.getByRole('button', { name: /Choose companies/ }).click();
-  await expect(pipeline.getByText(/at most 500/)).toBeVisible();
+  await rail.getByRole('button', { name: /Choose companies/ }).click();
+  await expect(rail.getByText(/at most 500/)).toBeVisible();
 });
