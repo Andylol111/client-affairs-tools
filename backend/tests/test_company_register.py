@@ -617,6 +617,104 @@ def prominence_rank_tests() -> None:
         assert [i['company_name'] for i in page['items']] == ['Zeta Global Holdings Corp', 'Acme Micro Cap Inc']
 
 
+def sec_fund_exclusion_tests() -> None:
+    """SEC's ticker file lists every registered security, ETFs included, with
+    nothing but the name to tell them from an operating company - reported
+    live: searching the "us" tier surfaced "21Shares Dogecoin ETF" and five
+    others like it between real companies. They are excluded by name, and
+    prominence_rank is still assigned only to what is kept, so a real
+    company's rank reflects its position among real companies, not among
+    funds SEC happened to list ahead of it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DATABASE_URL'] = f'sqlite:///{Path(tmp) / "t.db"}'
+        for mod in [m for m in list(sys.modules) if m.startswith('app.')]:
+            del sys.modules[mod]
+
+        from app.database import init_db
+        from app.services import company_register as cr
+
+        asyncio.run(init_db())
+
+        async def fake_get(url, timeout=120.0):
+            return (
+                b'{"0":{"cik_str":1,"ticker":"IDIB","title":"1stdibs.com, Inc."},'
+                b'"1":{"cik_str":2,"ticker":"DOGE","title":"21Shares Dogecoin ETF"},'
+                b'"2":{"cik_str":3,"ticker":"ETHS","title":"21Shares Ethereum Staking ETF"},'
+                b'"3":{"cik_str":4,"ticker":"XX","title":"22nd Century Group, Inc."}}'
+            )
+
+        with patch.object(cr, '_http_get', fake_get):
+            result = asyncio.run(cr.ingest_sec_public())
+        assert result['written'] == 2, result
+
+        page = asyncio.run(cr.search_register(tier='us_public', limit=10))
+        names = [i['company_name'] for i in page['items']]
+        assert names == ['1stdibs.com, Inc.', '22nd Century Group, Inc.'], names
+        # Rank is dense among what is kept: the ETF at SEC's index 1 does not
+        # leave a gap, and does not make the next real company rank 3.
+        ranks = {i['company_name']: i['prominence_rank'] for i in page['items']}
+        assert ranks == {'1stdibs.com, Inc.': 0, '22nd Century Group, Inc.': 1}, ranks
+
+
+def search_relevance_tests() -> None:
+    """"meta" is a literal four-letter prefix of "metal", so every UK company
+    with "metal"/"metals" in its name or industry-sector text matched the old
+    substring search. Those rows carry real recent Companies House filing
+    dates; a US-listed company like Meta carries none, so recency-first
+    ranking buried an exact match under unrelated noise. This is the bug a
+    member actually hit, reported live: searching "meta" surfaced five UK
+    metal companies and no Meta."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DATABASE_URL'] = f'sqlite:///{Path(tmp) / "t.db"}'
+        for mod in [m for m in list(sys.modules) if m.startswith('app.')]:
+            del sys.modules[mod]
+
+        from app.database import init_db
+        from app.services import company_register as cr
+
+        asyncio.run(init_db())
+        asyncio.run(cr.upsert_companies([
+            {'source': 'sec_public', 'source_key': '1326801', 'tier': 'us_public', 'country': 'US',
+             'company_name': 'Meta Platforms Inc', 'prominence_rank': 5},
+            {'source': 'companies_house', 'source_key': '1', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Ferro Metal And Chemical Corporation Limited',
+             'sector_label': 'Non-specialised wholesale trade', 'last_event_at': '2026-08-01'},
+            {'source': 'companies_house', 'source_key': '2', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Central Asia Metals Plc',
+             'sector_label': 'Activities of head offices', 'last_event_at': '2026-08-15'},
+            {'source': 'companies_house', 'source_key': '3', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Precision Micro Limited',
+             'sector_label': 'Manufacture of other fabricated metal products n.e.c.',
+             'last_event_at': '2026-08-20'},
+            {'source': 'companies_house', 'source_key': '4', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Chris Allsop Metal Recycling Ltd',
+             'sector_label': 'Wholesale of waste and scrap', 'last_event_at': '2026-08-25'},
+        ]))
+
+        page = asyncio.run(cr.search_register(q='meta', limit=10))
+        names = [i['company_name'] for i in page['items']]
+        assert names[0] == 'Meta Platforms Inc', names
+        # Every "metal" row still matches (it is still a substring hit worth
+        # showing), just never ahead of the company the query actually named.
+        assert set(names) == {
+            'Meta Platforms Inc', 'Ferro Metal And Chemical Corporation Limited',
+            'Central Asia Metals Plc', 'Precision Micro Limited', 'Chris Allsop Metal Recycling Ltd',
+        }, names
+
+        # A query naming a whole word inside a longer name ranks that whole
+        # word above a plain substring match, then by recency within the tie.
+        page = asyncio.run(cr.search_register(q='metal', limit=10))
+        metal_names = [i['company_name'] for i in page['items']]
+        assert metal_names == [
+            'Chris Allsop Metal Recycling Ltd', 'Ferro Metal And Chemical Corporation Limited',
+            'Central Asia Metals Plc', 'Precision Micro Limited',
+        ], metal_names
+
+        # A literal % or _ in a query is a character to match, not a wildcard.
+        page = asyncio.run(cr.search_register(q='100%', limit=10))
+        assert page['items'] == []
+
+
 if __name__ == '__main__':
     tests()
     uk_tests()
@@ -626,4 +724,6 @@ if __name__ == '__main__':
     part_vii_officer_tests()
     person_level_tests()
     prominence_rank_tests()
+    sec_fund_exclusion_tests()
+    search_relevance_tests()
     print('company register: ok')
