@@ -555,23 +555,21 @@ export default function Outreach() {
                       <option key={oc.id} value={oc.id}>{oc.name}</option>
                     ))}
                   </select>
-                  {/* The one working entry point into the multi-recipient
-                      drafting flow, mirrored from EmailStudio's own sidebar:
-                      hand the unique companies among what's ticked to the
-                      pipeline, which already pulls their on-file contacts in
-                      at step 2. */}
+                  {/* Hands the exact people ticked to Drafts, where each
+                      gets an advisory draft of their own - the same panel
+                      Find people and Drafts' own sidebar open. */}
                   <button
                     type="button"
                     onClick={() => {
-                      const companies = [...new Set(
-                        contacts.filter((c) => selectedContactIds.has(c.id))
-                          .map((c) => (c.company || '').trim()).filter(Boolean),
-                      )];
-                      navigate(`/scraper?view=company&companies=${encodeURIComponent(companies.join(','))}`);
+                      const chosen = contacts.filter((c) => selectedContactIds.has(c.id));
+                      navigate(`/studio?${new URLSearchParams({
+                        companies: [...new Set(chosen.map((c) => (c.company || '').trim()).filter(Boolean))].join(','),
+                        contact_ids: chosen.map((c) => c.id).join(','),
+                      })}`);
                     }}
                     className="ui-button ui-button--ghost ui-button--sm"
                   >
-                    Write to these {selectedContactIds.size} together →
+                    Write to each of these {selectedContactIds.size} →
                   </button>
                   <button type="button" onClick={() => setSelectedContactIds(new Set())} className="ui-button ui-button--ghost ui-button--sm">
                     Clear

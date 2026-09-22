@@ -101,7 +101,7 @@ async function mockPicker(page: Page, opts: { busy?: boolean } = {}) {
 }
 
 test('the campaign is written to the people who were ticked, not to everyone found', async ({ page }) => {
-  const { built } = await mockPicker(page);
+  await mockPicker(page);
   await page.goto('/scraper?view=company&companies=A24');
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
@@ -133,15 +133,9 @@ test('the campaign is written to the people who were ticked, not to everyone fou
   await expect(picker.getByText('Klara Dan')).toHaveCount(0);
   await expect(picker.getByRole('checkbox')).toHaveCount(0);
 
-  await rail.getByLabel('Subject').fill('A24 and Yale');
-  await rail.getByLabel('Message').fill('Hi {first}, about {company}.');
-  await rail.getByRole('button', { name: 'Preview the real message' }).click();
-  await pipeline.getByRole('button', { name: 'Looks right' }).click();
-  await rail.getByRole('button', { name: /^Build the campaign/ }).click();
-
-  await expect.poll(() => built.length).toBe(1);
-  // Exactly the ticks, and nothing the member turned off.
-  expect(built[0].contact_ids).toEqual([1, 3]);
+  // Exactly the ticks, and nothing the member turned off, go to Drafts.
+  await rail.getByRole('button', { name: /^Write to these 2 in Drafts/ }).click();
+  await expect(page).toHaveURL(/contact_ids=1%2C3$/);
 });
 
 test('a company with nobody on file is searched from its lane, and its people are added one by one', async ({ page }) => {
@@ -228,40 +222,4 @@ test('seniority narrows who is shown and who select-all reaches', async ({ page 
   await pipeline.getByRole('button', { name: /^Clear$/ }).click();
   await pipeline.getByRole('button', { name: /^Select all shown/ }).click();
   await expect(pipeline.getByTestId('selected-count')).toHaveText('1 of 4 selected');
-});
-
-
-test('one message per company, written from what the club knows about it', async ({ page }) => {
-  const { built, drafted } = await mockPicker(page);
-  await page.goto('/scraper?view=company&companies=A24,NEON');
-
-  const pipeline = page.locator('[data-section="campaign-pipeline"]');
-  const rail = pipeline.locator('[data-rail]');
-  await rail.getByRole('button', { name: /^Write to these/ }).click();
-
-  // Several companies is usually several things to say, so saying them is one
-  // checkbox rather than four campaigns.
-  await rail.getByLabel(/Write a different message for each company/).check();
-  await rail.getByLabel('Email goal').fill('Offer a free ops review this term');
-  await rail.getByRole('button', { name: /^Draft a message for each of these 2 companies/ }).click();
-
-  await expect.poll(() => drafted.length).toBe(1);
-  expect(drafted[0].per_company).toBe(true);
-  expect(drafted[0].companies).toEqual(['A24', 'NEON']);
-
-  // What the model wrote is editable per company, not something to accept.
-  const messages = rail.getByTestId('per-company-messages');
-  await expect(messages).toBeVisible();
-  await rail.getByLabel('Subject for NEON').fill('NEON, from Yale');
-
-  await rail.getByRole('button', { name: 'Preview the real message' }).click();
-  await pipeline.getByRole('button', { name: 'Looks right' }).click();
-  await rail.getByRole('button', { name: /^Build the campaign/ }).click();
-
-  await expect.poll(() => built.length).toBe(1);
-  // Each company's message travels with the campaign, so the send path writes
-  // that company's people from that company's text.
-  const sent = built[0].messages as Record<string, { subject: string }>;
-  expect(sent.A24.subject).toBe('A24 and Yale');
-  expect(sent.NEON.subject).toBe('NEON, from Yale');
 });

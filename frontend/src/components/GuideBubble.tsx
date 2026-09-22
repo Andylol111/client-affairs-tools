@@ -23,7 +23,7 @@ const GUIDES: { match: (path: string) => boolean; guide: Guide }[] = [
       title: 'Find contacts',
       steps: [
         'Companies is the index: 215,000 companies from public registers. Tick any, then "Find people and write to them".',
-        'Find people runs the four steps in order — choose, check who was found, write one message, build the campaign.',
+        'Find people runs three steps in order — choose companies, choose who gets it, then hand them to Drafts to write to each.',
         'Step 2 is where people come from: search again, import a spreadsheet, or queue deep research.',
         'Step 3 personalises per recipient. Anyone missing a field the message uses is held back, never sent a blank.',
         'Building creates drafts only. Nothing leaves until you release it.',
@@ -60,7 +60,7 @@ const GUIDES: { match: (path: string) => boolean; guide: Guide }[] = [
       title: 'Drafts',
       steps: [
         'Studio writes one bespoke email to one named person.',
-        'Writing to several people is the pipeline: tick them and use "Write to these N together".',
+        'To write to several people, tick them and use "Write to each of these N": each gets an advisory draft of their own.',
       ],
       next: { to: '/scraper?view=company', label: 'Find people' },
     },

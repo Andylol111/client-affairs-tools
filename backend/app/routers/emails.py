@@ -47,6 +47,13 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
         company_domain = normalize_domain(contact.get("company_domain") or "")
         from app.services.generation_policy import draft_evidence
         evidence = await draft_evidence(db, contact, user["id"])
+        # The register's notes on the company steer which projects an
+        # advisory draft proposes; the other angles do not use them.
+        company_context = ""
+        if req.angle == "advisory" and contact.get("company"):
+            from app.routers.campaigns import _company_notes
+            notes = await _company_notes(db, [contact["company"]])
+            company_context = notes.get(contact["company"].strip().lower(), "")
 
         # A draft is a pure function of its brief. Regenerating an unchanged
         # brief bills a second Bedrock call to produce a near-identical email,
@@ -56,7 +63,7 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
             "contact": [contact.get("name"), contact.get("title"), contact.get("company"), company_domain],
             "tone": req.tone, "length": req.length, "angle": req.angle,
             "instructions": req.custom_instructions, "value": req.value_proposition,
-            "model": req.model,
+            "model": req.model, "company_context": company_context,
             "evidence": sorted(str(s.get("id")) for s in (evidence or {}).get("sources", [])),
         }, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -88,6 +95,7 @@ async def generate_email_for_contact(req: EmailGenerateRequest, user: dict = Dep
             value_proposition=req.value_proposition,
             model=req.model,
             evidence=evidence,
+            company_context=company_context,
         )
         await db.execute(
             """INSERT INTO generated_emails (user_id, contact_id, subject, body, evidence_json, brief_hash)

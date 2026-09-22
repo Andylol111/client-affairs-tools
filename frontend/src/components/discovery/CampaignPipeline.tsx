@@ -29,16 +29,8 @@ import { type ChosenCompany, type CompanyRun, useDiscoveryRuns } from '../../lib
  * found) is on the surface, next to the company.
  */
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3;
 
-type Preview = {
-  recipients: number;
-  ready: number;
-  held: { contact_id?: number; email?: string; name?: string; reason: string }[];
-  sample: { subject: string; body: string; email?: string } | null;
-};
-
-const FIELD_HINTS = ['{first}', '{last}', '{full_name}', '{title}', '{company}', '{date}'];
 /** Server-side ceilings, restated so the step can warn before the request. */
 const MAX_COMPANIES_PER_CAMPAIGN = 500;
 /** Chips drawn before the row collapses to a count. */
@@ -47,7 +39,7 @@ const CHIP_WINDOW = 24;
  *  a team, not the whole payroll. */
 const DEFAULT_MAX_PROSPECTS = 60;
 const IDLE: CompanyRun = { state: 'idle', pct: 0, message: '' };
-const PICKER_MODE: Record<Step, PickerMode> = { 1: 'preview', 2: 'select', 3: 'review', 4: 'review' };
+const PICKER_MODE: Record<Step, PickerMode> = { 1: 'preview', 2: 'select', 3: 'review' };
 
 /** A numbered step header that is also the way back to that step. Defined
  *  outside the component so React keeps one instance rather than remounting
@@ -78,7 +70,6 @@ function StepHeading({ n, title, hint, step, onSelect }: {
 
 export type StageState = {
   step: Step;
-  built: boolean;
   lanes: { company: string; found: number; ticked: number }[];
 };
 
@@ -141,29 +132,11 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
 
   const [showAllChips, setShowAllChips] = useState(false);
-  const [subject, setSubject] = useState('');
-  // One message per company, keyed by the company name as chosen. Empty means
-  // the campaign is one message for everybody.
-  const [perCompany, setPerCompany] = useState(false);
-  const [messages, setMessages] = useState<Record<string, { subject: string; body: string }>>({});
-  const [body, setBody] = useState('');
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [goal, setGoal] = useState('');
-  const [proof, setProof] = useState('');
-  const [citing, setCiting] = useState(false);
-  const [citeNote, setCiteNote] = useState('');
-  const [drafting, setDrafting] = useState(false);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [wantFollowUp, setWantFollowUp] = useState(false);
-  const [followUpDays, setFollowUpDays] = useState(4);
-  const [followUpSubject, setFollowUpSubject] = useState('');
-  const [followUpBody, setFollowUpBody] = useState('');
-
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [built, setBuilt] = useState<{ campaign_id: number; created: number } | null>(null);
 
 
   const chosenNames = useMemo(() => chosen.map((c) => c.name), [chosen]);
@@ -276,8 +249,8 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   }, [chosen, people, selected, found, runs]);
 
   useEffect(() => {
-    onStage?.({ step, built: Boolean(built), lanes });
-  }, [onStage, step, built, lanes]);
+    onStage?.({ step, lanes });
+  }, [onStage, step, lanes]);
 
   // Moving to a step scrolls it to the top of the column, so the work is
   // where the eye already is instead of below the fold.
@@ -290,14 +263,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
     return () => window.clearTimeout(timer);
   }, [step]);
 
-  const byCompanyCount = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const person of recipients) {
-      const key = companyKey(person.company);
-      counts[key] = (counts[key] || 0) + 1;
-    }
-    return counts;
-  }, [recipients]);
 
   // The company whose vocabulary the search controls are about: the lane
   // last pointed at, else the first chosen.
@@ -351,48 +316,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
     const company = chosen.find((c) => companyKey(c.name) === companyKey(name));
     if (company) findPeople(company);
   }, [chosen, findPeople]);
-
-  const runPreview = useCallback(async () => {
-    setBusy(true);
-    setError('');
-    try {
-      const res = await api.campaigns.build({
-        companies: chosenNames,
-        contact_ids: recipients.map((r) => r.id),
-        subject, body, messages, preview_only: true,
-      });
-      setPreview(res as Preview);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not render that message');
-      setPreview(null);
-    } finally {
-      setBusy(false);
-    }
-  }, [chosenNames, recipients, subject, body, messages]);
-
-  const build = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      const res = await api.campaigns.build({
-        name: `${chosenNames.slice(0, 2).join(', ')}${chosen.length > 2 ? ` +${chosen.length - 2}` : ''}`,
-        companies: chosenNames,
-        contact_ids: recipients.map((r) => r.id),
-        subject, body, messages,
-      });
-      if (wantFollowUp && followUpSubject.trim() && followUpBody.trim()) {
-        await api.outreach.sequences.create(
-          `Follow-up for ${res.name}`,
-          [{ days_after: followUpDays, subject: followUpSubject, body: followUpBody }],
-        );
-      }
-      setBuilt({ campaign_id: res.campaign_id, created: res.created });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not build the campaign');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     // 18.25rem is the shell around this grid at xl: header, main padding,
@@ -631,247 +554,29 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
         </div>
       )}
 
-      <StepHeading n={3} title="Write the message" hint="One message, personalised per recipient" step={step} onSelect={setStep} />
+      <StepHeading n={3} title="Write to each of them" hint="An advisory email per person, in Drafts" step={step} onSelect={setStep} />
       {step === 3 && (
         <div className="px-5 pb-5 space-y-3 border-b border-pale-sky">
-          {/* Generating and allocating are one act here. Studio drafts to a
-              single named person, which is right for a bespoke email and
-              wrong for a group: the same message has to reach everyone
-              chosen, so the parts that differ are fields rather than a name
-              the model invents. */}
-          <div className="rounded-xl border border-pale-sky p-3 space-y-2">
-            <p className="text-[13px] font-semibold text-deep-navy">Write it with AI, or skip and type it yourself</p>
-            <input
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="What should this email achieve?"
-              aria-label="Email goal"
-              className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
-            />
-            <input
-              value={proof}
-              onChange={(e) => setProof(e.target.value)}
-              placeholder="Anything true the email may cite (optional)"
-              aria-label="Verified proof"
-              className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={citing || chosenNames.length === 0}
-                onClick={async () => {
-                  setCiting(true);
-                  setCiteNote('');
-                  setError('');
-                  try {
-                    const res = await api.projects.suggestCitations(chosenNames[0]);
-                    const parts: string[] = [];
-                    const clients = (res.projects || []).map((p) => p.client_name).filter(Boolean);
-                    if (clients.length) parts.push(`Past clients we can discuss: ${clients.join(', ')}.`);
-                    const team = (res.team_experience || [])
-                      .filter((t) => t.user_name)
-                      .map((t) => `${t.user_name}${t.role_in_project ? ` (${t.role_in_project}${t.client_name ? `, ${t.client_name}` : ''})` : ''}`);
-                    if (team.length) parts.push(`Team members with relevant experience: ${team.join(', ')}.`);
-                    if (!parts.length) {
-                      setCiteNote('No nameable past projects on file yet');
-                    } else {
-                      const text = parts.join(' ');
-                      setProof((prev) => (prev.trim() ? `${prev}\n\n${text}` : text));
-                    }
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : 'Could not suggest what to cite');
-                  } finally {
-                    setCiting(false);
-                  }
-                }}
-                className="ui-button ui-button--ghost ui-button--sm"
-              >
-                {citing ? 'Suggesting…' : 'Suggest what to cite'}
-              </button>
-              {citeNote && <span className="text-xs text-slate-500" data-testid="cite-suggestion-note">{citeNote}</span>}
-            </div>
-            {chosen.length > 1 && (
-              <label className="flex items-start gap-2 text-[13px] text-deep-navy">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={perCompany}
-                  onChange={(e) => { setPerCompany(e.target.checked); setPreview(null); }}
-                />
-                <span>
-                  Write a different message for each company
-                </span>
-              </label>
-            )}
-            <button
-              type="button"
-              disabled={drafting || !goal.trim()}
-              onClick={async () => {
-                setDrafting(true);
-                setError('');
-                try {
-                  const roles = [...new Set(recipients.map((r) => r.title).filter(Boolean))].slice(0, 6).join(', ');
-                  if (perCompany) {
-                    const res = await api.campaigns.draftTemplate({
-                      companies: chosenNames, goal, proof, roles, per_company: true,
-                    });
-                    setMessages(res.messages || {});
-                    setSubject('');
-                    setBody('');
-                  } else {
-                    const res = await api.campaigns.draftTemplate({ companies: chosenNames, goal, proof, roles });
-                    setMessages({});
-                    setSubject(res.subject || '');
-                    setBody(res.body || '');
-                  }
-                  setPreview(null);
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : 'Could not draft that');
-                } finally {
-                  setDrafting(false);
-                }
-              }}
-              className="ui-button ui-button--secondary ui-button--sm"
-            >
-              {drafting
-                ? 'Writing…'
-                : perCompany
-                  ? `Draft a message for each of these ${chosen.length} companies`
-                  : `Draft one message for these ${recipients.length}`}
-            </button>
-          </div>
-
-          {/* One editable message per company, so what the AI wrote is what
-              the member corrects rather than something they have to accept. */}
-          {Object.keys(messages).length > 0 && (
-            <div className="space-y-2" data-testid="per-company-messages">
-              {chosenNames.filter((c) => messages[c]).map((company) => (
-                <details key={company} className="rounded-xl border border-pale-sky" open={chosen.length <= 3 || chosenNames.indexOf(company) === 0}>
-                  <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-deep-navy">
-                    {company}
-                    <span className="ml-2 font-normal text-xs text-slate-500">
-                      {byCompanyCount[companyKey(company)] || 0} recipient(s)
-                    </span>
-                  </summary>
-                  <div className="space-y-2 border-t border-pale-sky p-3">
-                    <input
-                      value={messages[company].subject}
-                      aria-label={`Subject for ${company}`}
-                      onChange={(e) => setMessages((m) => ({ ...m, [company]: { ...m[company], subject: e.target.value } }))}
-                      className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
-                    />
-                    <textarea
-                      value={messages[company].body}
-                      aria-label={`Message for ${company}`}
-                      rows={8}
-                      onChange={(e) => setMessages((m) => ({ ...m, [company]: { ...m[company], body: e.target.value } }))}
-                      className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm font-mono"
-                    />
-                  </div>
-                </details>
-              ))}
-            </div>
-          )}
-
-          {/* With a message per company written, this is the one used for any
-              company that has none - so it is offered, not demanded. */}
-          {Object.keys(messages).length > 0 && (
-            <p className="text-[13px] font-semibold text-deep-navy">
-              Message for any company without one of its own (optional)
-            </p>
-          )}
-          <input
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="Subject"
-            aria-label="Subject"
-            className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
-          />
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={8}
-            placeholder={'Hi {first},\n\nI am writing from the Yale Undergraduate Consulting Group about {company}…'}
-            aria-label="Message"
-            className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm font-mono"
-          />
-          <p className="text-xs text-slate-500">
-            Fields: {FIELD_HINTS.join('  ')} — each recipient gets their own. A recipient missing a
-            field the message uses is held back rather than sent a blank.
+          {/* This step used to write one template for everybody, with
+              {first} and {company} as the only parts that changed - which is
+              exactly how it read. Drafts writes to one person at a time, so
+              the chosen people go there and each gets a draft of their own. */}
+          <p className="text-sm text-slate-700">
+            Each of the {recipients.length} gets their own email in Drafts: an advisory note on two
+            or three projects a YUCG team could build for their company, chosen for their role.
+            Every draft is yours to read and edit before anything is sent.
           </p>
           <button
             type="button"
-            disabled={busy || (!Object.keys(messages).length && (!subject.trim() || !body.trim()))}
-            onClick={() => void runPreview()}
+            disabled={recipients.length === 0}
+            onClick={() => navigate(`/studio?${new URLSearchParams({
+              companies: [...new Set(recipients.map((r) => (r.company || '').trim()).filter(Boolean))].join(','),
+              contact_ids: recipients.map((r) => r.id).join(','),
+            })}`)}
             className="ui-button ui-button--primary"
           >
-            {busy ? 'Rendering…' : 'Preview the real message'}
+            Write to these {recipients.length} in Drafts →
           </button>
-        </div>
-      )}
-
-      <StepHeading n={4} title="Follow-up, then build" hint={wantFollowUp ? `One follow-up after ${followUpDays} days` : 'Optional'} step={step} onSelect={setStep} />
-      {step === 4 && (
-        <div className="px-5 pb-5 space-y-3">
-          <label className="flex items-center gap-2 text-sm text-deep-navy">
-            <input type="checkbox" checked={wantFollowUp} onChange={(e) => setWantFollowUp(e.target.checked)} />
-            Send one follow-up to anyone who has not replied
-          </label>
-          {wantFollowUp && (
-            <div className="space-y-2 rounded-xl border border-pale-sky p-3">
-              <label className="block text-xs font-medium text-slate-600">
-                Days to wait
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={followUpDays}
-                  onChange={(e) => setFollowUpDays(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
-                  className="ml-2 w-20 px-2 py-1 rounded-lg border border-pale-sky text-sm"
-                />
-              </label>
-              <input
-                value={followUpSubject}
-                onChange={(e) => setFollowUpSubject(e.target.value)}
-                placeholder="Follow-up subject"
-                aria-label="Follow-up subject"
-                className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm"
-              />
-              <textarea
-                value={followUpBody}
-                onChange={(e) => setFollowUpBody(e.target.value)}
-                rows={5}
-                placeholder={'Hi {first}, following up on my note about {company}.'}
-                aria-label="Follow-up message"
-                className="w-full px-3 py-2 rounded-xl border border-pale-sky text-sm font-mono"
-              />
-              <p className="text-xs text-slate-500">
-                It stops the moment they reply. You can see it queued under Pipeline → Follow-ups.
-              </p>
-            </div>
-          )}
-
-          {built ? (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              Campaign built with {built.created} draft(s). Nothing has been sent.{' '}
-              <button
-                type="button"
-                className="font-semibold underline"
-                onClick={() => navigate(`/campaigns/${built.campaign_id}`)}
-              >
-                Review and release it
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void build()}
-              className="ui-button ui-button--primary"
-            >
-              {busy ? 'Building…' : `Build the campaign (${recipients.length} draft${recipients.length === 1 ? '' : 's'})`}
-            </button>
-          )}
         </div>
       )}
 
@@ -897,7 +602,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
         )}
         <CompanyLanes
           lanes={lanes}
-          built={Boolean(built)}
           focused={focused?.name ?? null}
           onFocus={(name) => setFocusedKey(companyKey(name))}
           onFind={findByName}
@@ -906,43 +610,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
             if (window.confirm('Delete this search and everything it found?')) void deleteRun(runId);
           }}
         />
-
-        {step === 3 && (
-          <section className="surface-card rounded-2xl border border-pale-sky px-4 py-3 max-h-[40vh] overflow-y-auto" aria-label="Preview">
-            <h2 className="text-[15px] font-semibold text-deep-navy mb-1">What they will read</h2>
-            {preview ? (
-              <div className="space-y-2">
-                <p className="text-[13px] font-semibold text-deep-navy">
-                  {preview.ready} of {preview.recipients} ready
-                  {preview.held.length ? ` · ${preview.held.length} held` : ''}
-                </p>
-                {preview.sample && (
-                  <div className="rounded-xl border border-pale-sky p-3">
-                    <p className="text-xs text-slate-500">To {preview.sample.email}</p>
-                    <p className="text-sm font-semibold text-deep-navy">{preview.sample.subject}</p>
-                    <p className="text-sm text-slate-700 whitespace-pre-wrap mt-1">{preview.sample.body}</p>
-                  </div>
-                )}
-                {preview.held.map((h) => (
-                  <p key={h.contact_id} className="text-xs text-amber-900">{h.reason}</p>
-                ))}
-                <button
-                  type="button"
-                  disabled={preview.ready === 0}
-                  onClick={() => setStep(4)}
-                  className="ui-button ui-button--primary"
-                >
-                  Looks right
-                </button>
-              </div>
-            ) : (
-              <p className="text-xs text-slate-500">
-                Write the message, then press Preview: the real rendered email the first
-                recipient receives, not the template.
-              </p>
-            )}
-          </section>
-        )}
 
         {chosen.length > 0 ? (
           <section className="surface-card rounded-2xl border border-pale-sky px-4 pb-4" aria-label="People" data-testid="sheet">
