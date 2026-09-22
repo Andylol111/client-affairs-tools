@@ -21,7 +21,7 @@ from app.services.contact_scraper import (
     strict_email_name_alignment,
 )
 from app.services.email_verifier import get_mx_cached
-from app.services.roster_watch import company_key, roster_detail
+from app.services.roster_watch import _ensure_roster, company_key, roster_detail
 
 
 def _now() -> datetime:
@@ -62,18 +62,27 @@ def _row_email(full_name: str, dom: str, built: str | None) -> str | None:
     return None
 
 
-async def cached_roster_contacts(company_name: str, domain: str | None, limit: int = 100) -> list[dict[str, Any]]:
+async def cached_roster_contacts(
+    company_name: str, domain: str | None, limit: int = 100, *, pin_domain: bool = False
+) -> list[dict[str, Any]]:
     """Current roster people as contact dicts for the Find people merge stage.
 
     Rows carry NO email unless a derived+aligned work email already exists; the
     verify pipeline rebuilds missing emails through the same learned-pattern path,
     so cache rows go through identical gates as live sources.
+
+    ``pin_domain`` says the member typed ``domain`` on this run. It then replaces
+    the roster's stored domain before anything is read, because below the stored
+    domain wins over the run's: a wrong one (globaldata.com for Meta) otherwise
+    kept minting addresses no matter what the member entered.
     """
     name = (company_name or "").strip()
     if not name:
         return []
     key = company_key(name)
     dom = normalize_domain(domain or "")
+    if pin_domain and dom:
+        await _ensure_roster(name, dom, pin_domain=True)
     like = f"%{name}%"
     db = await get_db()
     try:
@@ -283,33 +292,18 @@ async def _ensure_emails(roster: dict[str, Any], *, mx_cache: dict[str, tuple[bo
     finally:
         await db.close()
 
-async def refresh_roster_on_demand(company_name: str, domain: str | None = None) -> list[dict[str, Any]]:
+async def refresh_roster_on_demand(
+    company_name: str, domain: str | None = None, *, pin_domain: bool = False
+) -> list[dict[str, Any]]:
     """SEC-refresh a single company now (Find people cold path), then return cache rows."""
-    from app.services.roster_watch import (
-        _ensure_roster,
-        load_tickers,
-        refresh_roster,
-    )
+    from app.services.roster_watch import load_tickers_or_reason, refresh_roster
 
-    roster = await _ensure_roster(company_name, domain)
-    dom = normalize_domain(domain or "")
-    if dom and not roster.get("company_domain"):
-        db = await get_db()
-        try:
-            await db.execute(
-                "UPDATE company_rosters SET company_domain=?, updated_at=? WHERE id=?",
-                (dom, _iso(), int(roster["id"])),
-            )
-            await db.commit()
-        finally:
-            await db.close()
-        roster["company_domain"] = dom
+    # _ensure_roster fills an empty domain, and replaces a stored one when the
+    # member typed this one (pin_domain).
+    roster = await _ensure_roster(company_name, domain, pin_domain=pin_domain)
     if int(roster.get("id") or 0):
-        try:
-            tickers = await load_tickers()
-        except Exception:
-            tickers = {}
-        await refresh_roster(roster, tickers)
+        tickers, tickers_error = await load_tickers_or_reason()
+        await refresh_roster(roster, tickers, tickers_error=tickers_error)
         await _ensure_emails(roster)
     return await cached_roster_contacts(company_name, domain)
 

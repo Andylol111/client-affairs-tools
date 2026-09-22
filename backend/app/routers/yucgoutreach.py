@@ -144,6 +144,17 @@ async def domain_guess(company: str, user: dict = Depends(get_current_user)):
     return await verify_domain_guess(company)
 
 
+@router.get("/resolve-company")
+async def resolve_company_endpoint(q: str, user: dict = Depends(get_current_user)):
+    """One company from what a member typed or pasted (a name, or a
+    LinkedIn company page URL): display name, a domain only when verified,
+    and up to four alternatives. LinkedIn is never fetched; at most one web
+    search runs, on this member's web quota."""
+    from app.services.company_resolve import resolve_company
+
+    return await resolve_company(q, user_id=user["id"])
+
+
 @router.get("/register")
 async def browse_register(
     q: str | None = None,

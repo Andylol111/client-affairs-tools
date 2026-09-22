@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import unicodedata
@@ -18,8 +19,10 @@ from urllib.parse import quote
 import httpx
 
 from app.database import get_db
-from app.services.company_email_cache import build_email_for_person_sync
+from app.services.company_email_cache import build_email_for_person_sync, company_brand_words
 from app.services.contact_scraper import normalize_domain, person_name_key
+
+logger = logging.getLogger(__name__)
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -45,6 +48,12 @@ PLATFORM_HOSTS = frozenset({
     "substack.com", "medium.com", "notion.site", "carrd.co", "cargo.site", "webflow.io",
     
     "companieshouse.gov.uk", "gov.uk", "sec.gov", "yelp.com", "mapquest.com", "yellowpages.com",
+    # Company-profile and contact-data vendors. A search for a company's
+    # official site often ranks their profile page first; "Meta Platforms,
+    # Inc." resolved to globaldata.com that way.
+    "globaldata.com", "dnb.com", "owler.com", "craft.co", "signalhire.com", "pitchbook.com",
+    "cbinsights.com", "lusha.com", "contactout.com", "theorg.com", "leadiq.com",
+    "wikipedia.com", "wikidata.org",
 })
 
 
@@ -205,6 +214,14 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
     token_hit: dict[str, str] | None = None
     prefix: dict[str, str] | None = None
     head_hits: list[dict[str, str]] = []
+    # "Meta" against SEC's "Meta Platforms, Inc.": the token keys differ
+    # ("meta" vs "meta platforms") and "Meta Critical Minerals Inc." also starts
+    # with "meta", so neither rule below picked one and Meta came back
+    # unmatched. Comparing brands (the name without its legal and listing
+    # suffixes, the same reading web discovery uses) settles it when exactly
+    # one company carries that brand.
+    query_brand = company_brand_words(company_name)
+    brand_hits: dict[str, dict[str, str]] = {}
     for row in tickers.values() if isinstance(tickers, dict) else []:
         if not isinstance(row, dict):
             continue
@@ -222,10 +239,14 @@ def match_public_company(company_name: str, tickers: dict[str, Any]) -> dict[str
             prefix = prefix or hit
         if len(tokens[0]) >= 4 and tokens[0] == title_tokens[0]:
             head_hits.append(hit)
+        if tokens[0] == title_tokens[0] and company_brand_words(title) == query_brand:
+            brand_hits.setdefault(cik, hit)
         if len(tokens) >= 2 and all(t in title_tokens for t in tokens[:3]):
             token_hit = token_hit or hit
         elif len(title_tokens) >= 2 and all(t in tokens for t in title_tokens[:2]) and len(title_tokens[0]) >= 5:
             token_hit = token_hit or hit
+    if len(brand_hits) == 1:
+        return next(iter(brand_hits.values()))
     if len(head_hits) == 1:
         return head_hits[0]
     return token_hit or prefix
@@ -337,6 +358,24 @@ async def load_tickers(*, force: bool = False) -> dict[str, Any]:
     _TICKERS = data
     _TICKERS_AT = utcnow()
     return data
+
+
+async def load_tickers_or_reason() -> tuple[dict[str, Any], str | None]:
+    """The SEC ticker list, or what is left of it plus why it could not load.
+
+    Both roster paths used to swallow this failure into an empty list, so every
+    company came back "unmatched" as if it were private. The usual cause is SEC
+    answering 403 to a User-Agent without a real contact (the built-in default
+    is one). The reason goes on the roster as last_error and into the log."""
+    try:
+        return await load_tickers(), None
+    except Exception as exc:
+        configured = bool((os.getenv("SEC_USER_AGENT") or "").strip())
+        reason = f"SEC company list unavailable: {str(exc)[:200]}"
+        if not configured:
+            reason += " (SEC_USER_AGENT is not set; SEC wants 'Name contact@example.org')"
+        logger.warning("roster: %s", reason)
+        return _TICKERS or {}, reason
 
 
 def _archive_url(cik: str, accession: str, document: str) -> str:
@@ -453,7 +492,9 @@ async def enroll_prospect_companies() -> int:
         await db.close()
 
 
-async def _ensure_roster(company_name: str, domain: str | None = None) -> dict[str, Any]:
+async def _ensure_roster(
+    company_name: str, domain: str | None = None, *, pin_domain: bool = False
+) -> dict[str, Any]:
     key = company_key(company_name)
     now = iso()
     dom = normalize_domain(domain or "") or None
@@ -469,11 +510,26 @@ async def _ensure_roster(company_name: str, domain: str | None = None) -> dict[s
             )
             await db.commit()
             row = await (await db.execute("SELECT * FROM company_rosters WHERE company_key=?", (key,))).fetchone()
-        elif dom and not (row["company_domain"] if not isinstance(row, tuple) else None):
+        elif dom and (pin_domain or not row["company_domain"]) and dom != row["company_domain"]:
+            # A found domain only fills a gap. A domain the member typed wins
+            # over the stored one: otherwise one wrong lookup (globaldata.com
+            # for Meta) stuck for good and meta.com never reached the roster.
+            # Every address derived from the old domain goes with it, bounce
+            # tombstones and provider checks included: those were verdicts on a
+            # mailbox at the wrong company, and keeping a bounce would hide the
+            # person from ever getting an address at the right one.
             await db.execute(
-                "UPDATE company_rosters SET company_domain=?, updated_at=? WHERE company_key=?",
+                "UPDATE company_rosters SET company_domain=?, next_email_check_at=NULL, updated_at=? WHERE company_key=?",
                 (dom, now, key),
             )
+            if row["company_domain"]:
+                await db.execute(
+                    """UPDATE company_roster_people
+                       SET inferred_email=NULL, email_status=NULL, email_checked_at=NULL,
+                           email_provider_checked_at=NULL
+                       WHERE roster_id=?""",
+                    (row["id"],),
+                )
             await db.commit()
             row = await (await db.execute("SELECT * FROM company_rosters WHERE company_key=?", (key,))).fetchone()
         return dict(row)
@@ -672,16 +728,40 @@ def _registrable_domain(url: str) -> str:
     return dom
 
 
+#: Words a company's own domain may carry after its name ("garmin-group",
+#: "shopifyinc") without it becoming someone else's site.
+_DOMAIN_TAIL_WORDS = frozenset({
+    "inc", "corp", "co", "group", "global", "hq", "usa", "us", "uk", "online",
+    "official", "company", "world", "intl", "international",
+})
+
+
 def _domain_matches_company(company_name: str, dom: str) -> bool:
+    """Whether a domain is plausibly the company's own.
+
+    The domain's name must BE the company's name, its opening words, or its
+    initials, with at most a generic tail. Starting with the first word was
+    not enough: "warner-access.com" passed for Warner Bros. Discovery and was
+    stored as its verified website, and "metacritic.com" would pass for Meta.
+    """
     tokens = _company_tokens(company_name)
+    if tokens and tokens[0] == "the":
+        tokens = tokens[1:]
     if not tokens or not dom:
         return False
     label = re.sub(r"[^a-z0-9]", "", dom.split(".")[0].lower())
-    head = tokens[0]
-    if len(head) < 4:
-        # short names (ATR, DHL) only accept the exact registrable label
-        return label == "".join(tokens[:2]) and dom.split(".")[0].lower() == head
-    return label.startswith(head)
+    if not label:
+        return False
+    stems = {"".join(tokens[:k]) for k in range(1, len(tokens) + 1)}
+    if len(tokens) >= 2:
+        stems.add("".join(t[0] for t in tokens))
+    for stem in stems:
+        if label == stem:
+            return True
+        # A tail is allowed only after a real word: "atrgroup" is not ATR's.
+        if len(stem) >= 4 and label.startswith(stem) and label[len(stem):] in _DOMAIN_TAIL_WORDS:
+            return True
+    return False
 
 
 def _seed_domain(company_name: str, extra_json: str | None) -> str:
@@ -814,13 +894,16 @@ async def _claim_due(limit: int) -> list[dict[str, Any]]:
         await db.close()
 
 
-async def refresh_roster(roster: dict[str, Any], tickers: dict[str, Any]) -> dict[str, Any]:
+async def refresh_roster(
+    roster: dict[str, Any], tickers: dict[str, Any], *, tickers_error: str | None = None
+) -> dict[str, Any]:
     roster_id = int(roster["id"])
     name = roster["company_name"]
     domain = roster.get("company_domain")
     now = iso()
     if roster.get("cik"):
         match = {"cik": roster["cik"], "ticker": roster.get("ticker") or "", "title": name}
+        tickers_error = None  # the CIK is already known; the list was not needed
     else:
         match = match_public_company(name, tickers)
 
@@ -855,8 +938,17 @@ async def refresh_roster(roster: dict[str, Any], tickers: dict[str, Any]) -> dic
     except Exception as exc:
         error = str(exc)[:500]
         status = roster.get("source_status") or "pending"
+    if tickers_error and not match and not error:
+        # SEC was never asked, so "unmatched" would claim this is a private
+        # company. Keep whatever the other sources found, record why SEC is
+        # missing, and retry on the error schedule rather than the monthly one.
+        error = tickers_error[:500]
+        if status == "unmatched":
+            status = roster.get("source_status") or "pending"
 
-    nxt = utcnow() + timedelta(days=verify_days() if status in ("public", "register") else 30)
+    # A failed refresh is retried on the weekly schedule; only a clean
+    # "no register knows this company" waits a month.
+    nxt = utcnow() + timedelta(days=verify_days() if status in ("public", "register") or error else 30)
     counts = await _upsert_people(roster_id, people, domain=domain, mark_missing=mark_missing)
     db = await get_db()
     try:
@@ -894,12 +986,10 @@ async def drain_roster_queue() -> dict[str, Any]:
     if not due:
         return {"ok": True, "enrolled": enrolled, "domains": domains, "claimed": 0, "refreshed": []}
     tickers: dict[str, Any] = _TICKERS or {}
+    tickers_error = None
     if any(not row.get("cik") for row in due):
-        try:
-            tickers = await load_tickers()
-        except Exception:
-            tickers = _TICKERS or {}
-    refreshed = [await refresh_roster(row, tickers) for row in due]
+        tickers, tickers_error = await load_tickers_or_reason()
+    refreshed = [await refresh_roster(row, tickers, tickers_error=tickers_error) for row in due]
     return {"ok": True, "enrolled": enrolled, "domains": domains, "claimed": len(due), "refreshed": refreshed}
 
 

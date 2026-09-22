@@ -294,6 +294,15 @@ export type Campaign = {
   updated_at?: string;
 };
 
+export type ResolvedCompany = {
+  name: string;
+  domain: string | null;
+  domain_verified: boolean;
+  linkedin_url: string | null;
+  source: 'linkedin' | 'register' | 'club' | 'typed';
+  alternatives: { name: string; domain: string | null }[];
+};
+
 export type GeneratedEmail = {
   id: number;
   user_id: number;
@@ -1208,6 +1217,12 @@ export const api = {
       if (params.hints) q.set('hints', params.hints);
       return fetchApi<RoleSuggestions>(`/api/yucgoutreach/role-suggestions?${q.toString()}`, signal ? { signal } : undefined);
     },
+    /** A typed name or a pasted LinkedIn company page, resolved to one
+     *  company and - only when it can be checked - its website. */
+    resolveCompany: (q: string, signal?: AbortSignal) =>
+      fetchApi<ResolvedCompany>(
+        `/api/yucgoutreach/resolve-company?q=${encodeURIComponent(q)}`, signal ? { signal } : undefined
+      ),
     domainGuess: (company: string, signal?: AbortSignal) =>
       fetchApi<{ domain: string | null; verified: boolean }>(
         `/api/yucgoutreach/domain-guess?company=${encodeURIComponent(company)}`, signal ? { signal } : undefined

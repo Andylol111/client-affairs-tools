@@ -22,7 +22,18 @@ import { companyKey } from './recipients';
  * finishes, rather than refused.
  */
 
-export type ChosenCompany = { name: string; domain?: string };
+export type ChosenCompany = {
+  name: string;
+  domain?: string;
+  /** The website was checked (or came from a trusted record), not guessed. */
+  verified?: boolean;
+  linkedinUrl?: string;
+  /** How the name was found: a pasted LinkedIn page, the club's own list,
+   *  the public register, or the text exactly as typed. */
+  source?: 'linkedin' | 'register' | 'club' | 'typed';
+  /** Other companies the same words could have meant, for "Not this?". */
+  alternatives?: { name: string; domain: string | null }[];
+};
 
 export type LaneState = 'idle' | 'queued' | 'searching' | 'done' | 'failed';
 
@@ -38,9 +49,14 @@ export type FoundPerson = DiscoveryProspect & { skippedReason?: string };
 
 export type SearchOptions = { titleHints: string; maxProspects: number; domain?: string };
 
-type Queued = { company: ChosenCompany; options: SearchOptions };
+/** Options are read when the search starts, not when it joins the queue:
+ *  a member who changes who to look for while three companies wait should
+ *  have all three look for the new people. */
+type Queued = { company: ChosenCompany; options: () => SearchOptions };
 
 const POLL_MS = 2500;
+/** How long a search paused by a limit waits before asking again. */
+const RETRY_AFTER_LIMIT_MS = 5 * 60 * 1000;
 const ACTIVE: Record<string, true> = { queued: true, running: true };
 
 /** Prospects a member could actually add: junk and address-less rows are
@@ -114,10 +130,17 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
   // Arrival, and every change of companies: what the server already knows.
   // Deferred so the fetch is not a synchronous setState inside the effect,
   // which would cascade a render on mount.
+  // Which set of companies the run list has been read for: anything that
+  // starts searches on its own must wait for it, or a company searched an
+  // hour ago looks unsearched and is searched again.
+  const [runsReadyFor, setRunsReadyFor] = useState<string | null>(null);
   useEffect(() => {
-    const timer = window.setTimeout(() => { void refreshRuns(); }, 0);
+    const timer = window.setTimeout(() => {
+      void refreshRuns().then(() => setRunsReadyFor(chosenKeyList));
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [refreshRuns, chosenKeyList]);
+  const runsReady = runsReadyFor === chosenKeyList;
 
   const linkedRun = linkedRunId ? runsById[linkedRunId] ?? null : null;
 
@@ -134,13 +157,16 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
     return () => window.clearTimeout(timer);
   }, [latestByKey, chosenKeys, loadFound]);
 
+  // The queue's next step, for a paused search to call back into later.
+  const startNextRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const startNow = useCallback(async (item: Queued): Promise<'started' | 'busy' | 'failed'> => {
+    const options = item.options();
     try {
       const res = await api.yucgoutreach.createRun({
         company_name: item.company.name,
-        company_domain: item.options.domain || item.company.domain || undefined,
-        title_hints: item.options.titleHints.trim() || undefined,
-        max_prospects: item.options.maxProspects,
+        company_domain: options.domain || item.company.domain || undefined,
+        title_hints: options.titleHints.trim() || undefined,
+        max_prospects: options.maxProspects,
       });
       loadedProspects.current.delete(res.id);
       setRunsById((prev) => ({
@@ -161,6 +187,13 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
         setNotice(`Already searching ${busy ? busy.company_name : 'another company'}; ${item.company.name} is queued behind it.`);
         return 'busy';
       }
+      if (e instanceof ApiError && e.status === 429) {
+        // The club's search queue or an hourly limit: a pause, not a
+        // failure. The company keeps its place and is asked for again.
+        setNotice(`Searches are paused for a few minutes (the hourly limit). ${item.company.name} and anything after it start by themselves; meanwhile you can tick people already found or import a spreadsheet.`);
+        window.setTimeout(() => { void startNextRef.current(); }, RETRY_AFTER_LIMIT_MS);
+        return 'busy';
+      }
       setError(e instanceof Error ? e.message : 'Could not start that search');
       return 'failed';
     }
@@ -174,6 +207,7 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
       setQueue(queueRef.current);
     }
   }, [startNow]);
+  useEffect(() => { startNextRef.current = startNext; }, [startNext]);
 
   // One poll for every active run this member has, whether it was started
   // here or before a reload. When a run finishes, its people are read and
@@ -211,7 +245,7 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [activeIds, chosenKeys, loadFound, startNext]);
 
-  const startRun = useCallback(async (company: ChosenCompany, options: SearchOptions) => {
+  const startRun = useCallback(async (company: ChosenCompany, options: () => SearchOptions) => {
     setError('');
     const key = companyKey(company.name);
     if (queueRef.current.some((q) => companyKey(q.company.name) === key)) return;
@@ -309,5 +343,5 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
     return map;
   }, [chosenKeys, latestByKey, queue]);
 
-  return { runs, found, linkedRun, error, notice, startRun, addFound, exportRun, deleteRun };
+  return { runs, runsReady, found, linkedRun, error, notice, startRun, addFound, exportRun, deleteRun };
 }

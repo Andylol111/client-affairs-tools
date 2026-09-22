@@ -84,6 +84,9 @@ export default function RoleSuggestionBubbles({
   }, [observedKey, onObserved]);
 
   if (company.trim().length < 2) return null;
+  // A limit is not the member's problem to read about: the search already
+  // looks for the level they chose, so the suggestions just stay quiet.
+  const quiet = (text: string | null | undefined) => !text || /limit|try again later/i.test(text);
   const present = new Set(
     hints.split(/[,;/]|\band\b|\bor\b/i).map((s) => s.trim().toLowerCase()).filter(Boolean),
   );
@@ -91,7 +94,7 @@ export default function RoleSuggestionBubbles({
   return (
     <div className="space-y-2" data-testid="role-suggestions" aria-live="polite">
       {loading && !data && <p className="text-xs text-slate-500">Looking up roles at {company.trim()}…</p>}
-      {error && <p className="text-xs text-slate-500">{error}</p>}
+      {!quiet(error) && <p className="text-xs text-slate-500">{error}</p>}
 
       {data && data.equivalents.length > 0 && (
         <ul className="space-y-1.5">
@@ -146,9 +149,9 @@ export default function RoleSuggestionBubbles({
         </div>
       )}
 
-      {data && data.note && <p className="text-xs text-slate-500">{data.note}</p>}
+      {data && !quiet(data.note) && <p className="text-xs text-slate-500">{data.note}</p>}
       {data && data.roles.length === 0 && !loading && !data.note && (
-        <p className="text-xs text-slate-500">No roles seen yet at {data.company}; the search will use your titles as typed.</p>
+        <p className="text-xs text-slate-500">No roles seen yet at {data.company}; the search looks for the level you chose.</p>
       )}
     </div>
   );

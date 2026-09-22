@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
-from app.services.company_email_cache import build_email_for_person_sync
+from app.services.company_email_cache import build_email_for_person_sync, text_names_brand
 from app.services.contact_scraper import (
     extract_employee_emails_from_text,
     is_valid_person_contact,
@@ -207,21 +207,17 @@ EMPLOYMENT_PHRASE = re.compile(
 MENTION_WINDOW = 220
 
 
-def _company_tokens(company_name: str) -> list[str]:
-    """The words that actually identify the company, so "The Walt Disney
-    Company" is not matched by the word "company" in an unrelated page."""
-    stop = {"the", "inc", "inc.", "llc", "ltd", "co", "co.", "corp", "corp.",
-            "company", "group", "holdings", "plc", "sa", "ag", "&"}
-    return [t for t in re.findall(r"[A-Za-z0-9]+", company_name.lower()) if t not in stop and len(t) > 2]
-
-
 def _names_the_company(text: str, company_name: str, domain: str | None) -> bool:
-    low = (text or "").lower()
-    tokens = _company_tokens(company_name)
-    if tokens and all(t in low for t in tokens):
+    """Whether the text names the company by its brand, or by its domain's name.
+
+    Brand, not legal name: "Engineering Manager at Meta" is Meta Platforms, Inc.
+    evidence, and requiring "platforms" too threw it away. Whole words, both
+    ways: "meta" inside "Metadata Engineer" is not the company. The brand rule
+    and its one known over-match live in text_names_brand."""
+    if text_names_brand(text, company_name):
         return True
     base = (normalize_domain(domain or "") or "").split(".")[0]
-    return bool(base) and len(base) > 2 and base in low
+    return len(base) > 2 and text_names_brand(text, base)
 
 
 #: "CEO & Founding Trainer @ Warner Digital", "Senior Buyer at Amazon" - the
