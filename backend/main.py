@@ -36,10 +36,7 @@ from app.services.yucgoutreach_discovery import (
     drain_queued_yucgoutreach_runs,
     recover_interrupted_yucgoutreach_runs,
 )
-from app.services.outreach_flow import drain_outreach_flows
 from app.services.company_register import drain_company_register
-from app.routers import research
-from app.services.research_service import recover_research_jobs, drain_research_queue
 from app.services.roster_watch import drain_roster_queue, enroll_prospect_companies
 from app.services.roster_email import drain_roster_emails, drain_roster_verification
 from app.services.roster_adjudicate import drain_roster_adjudication
@@ -57,7 +54,6 @@ CORS_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _co
 async def lifespan(app: FastAPI):
     await init_db()
     await recover_interrupted_yucgoutreach_runs()
-    await recover_research_jobs()
     await enroll_prospect_companies()
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -75,22 +71,6 @@ async def lifespan(app: FastAPI):
         "interval",
         minutes=int(os.getenv("REGISTER_INGEST_MINUTES", "20") or 20),
         id="company_register_ingest",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        drain_outreach_flows,
-        "interval",
-        seconds=10,
-        id="outreach_flow_queue",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        drain_research_queue,
-        "interval",
-        seconds=10,
-        id="contact_research_queue",
         max_instances=1,
         coalesce=True,
     )
@@ -221,7 +201,6 @@ app.include_router(operations.router, prefix="/api/admin/operations", tags=["ope
 app.include_router(yucgoutreach.router, prefix="/api/yucgoutreach", tags=["yucgoutreach"])
 app.include_router(yucg_prospects.router, prefix="/api/yucg", tags=["yucg-coordinator"])
 app.include_router(releases.router, prefix="/api/yucg/releases", tags=["releases"], dependencies=_require_user)
-app.include_router(research.router, prefix="/api/research", tags=["research"], dependencies=_require_user)
 
 
 @app.get("/api/health")

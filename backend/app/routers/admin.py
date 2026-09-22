@@ -721,19 +721,6 @@ async def set_email_verification_enabled(
     return result
 
 
-# --- Contact research operational metrics (admin only) ---
-@router.get("/research/metrics")
-async def research_metrics_view(admin: dict = Depends(get_current_admin)):
-    """Privacy-safe research run, evidence, and provider aggregates."""
-    from app.services.research_service import research_metrics
-
-    db = await get_db()
-    try:
-        return await research_metrics(db, actor_id=admin["id"])
-    finally:
-        await db.close()
-
-
 # --- Club target list (admin only) ---
 @router.get("/target-list")
 async def target_list_status(_admin: dict = Depends(get_current_admin)):

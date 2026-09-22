@@ -1,16 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
-import { useOutletContext, useSearchParams } from 'react-router-dom';
+import { useOutletContext } from 'react-router-dom';
 import { api, type Contact, type DiscoveryLogEntry, type TargetListStatus } from '../api';
 import AppSubnav from '../components/AppSubnav';
 import PageHeader from '../components/PageHeader';
 import CompanyRegister from '../components/discovery/CompanyRegister';
-import ContactSheet from '../components/discovery/ContactSheet';
 import CampaignPipeline from '../components/discovery/CampaignPipeline';
-import { Notice } from '../components/ui/Primitives';
-import ResearchWorkspace from '../components/discovery/ResearchWorkspace';
-import { useProjects } from '../lib/useProjects';
 import { useUrlTab } from '../lib/useUrlTab';
-type ScraperTab = 'research' | 'company' | 'import' | 'register';
+type ScraperTab = 'company' | 'import' | 'register';
 
 
 function aiVerdictClass(v?: string | null): string {
@@ -74,32 +70,13 @@ function inboxStatusClass(status?: string | null): string {
 
 
 
-function ResearchTab() {
-  const { projects, error } = useProjects();
-  if (error) return <Notice tone="danger">{error}</Notice>;
-  return (
-    <div className="space-y-6">
-      <div className="surface-card rounded-2xl border border-[var(--border)] p-5 sm:p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-deep-navy mb-1">Research many companies at once</h2>
-        <p className="text-sm text-slate-600">
-          Define an audience once, then let research run across a batch of companies over time.
-          Results land in a review queue instead of returning immediately - use Find people when
-          you already know the one company to search.
-        </p>
-      </div>
-      <ResearchWorkspace projects={projects} />
-    </div>
-  );
-}
-
 type ImportKind = 'contacts' | 'club_targets';
 
 export default function Scraper() {
-  const [params] = useSearchParams();
   const { user } = useOutletContext<{ user: { role?: string } }>();
   const isAdmin = user?.role === 'admin';
   // Default to the crawl: it is the one door that turns a company name into people.
-  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['research', 'company', 'import', 'register'], 'register');
+  const [activeTab, setActiveTab] = useUrlTab<ScraperTab>(['company', 'import', 'register'], 'register');
   const [importing, setImporting] = useState(false);
   const [importKind, setImportKind] = useState<ImportKind>('contacts');
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -184,24 +161,8 @@ export default function Scraper() {
 
       {activeTab === 'register' && <CompanyRegister />}
 
-      {activeTab === 'company' && (
-        <>
-          {/* Finding people and seeing who was found are one task. The search
-              form is a fixed-width column; the rest of the page is the sheet,
-              which used to be empty space that sent the member to another
-              page to read their own results. */}
-          <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-start">
-            <div className="xl:col-span-2 space-y-4">
-              <CampaignPipeline />
-            </div>
-            <div className="xl:col-span-3">
-              <ContactSheet company={params.get('company') || ''} />
-            </div>
-          </div>
-        </>
-      )}
+      {activeTab === 'company' && <CampaignPipeline />}
 
-      {activeTab === 'research' && <ResearchTab />}
 
 
 

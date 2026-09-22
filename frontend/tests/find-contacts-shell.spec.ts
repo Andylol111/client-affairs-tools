@@ -83,9 +83,10 @@ test('every Find contacts surface is a pill, and the company field reaches the p
   // percentages: a format is only useful at the moment an address is missing,
   // so it appears on the contact row that lacks one, and only once confirmed.
   await expect(page.getByText('Company email formats')).toHaveCount(0);
-  // Find people shows who was found, rather than sending the member elsewhere
-  // to read their own results.
-  await expect(page.getByRole('heading', { name: /People found/ })).toBeVisible();
+  // Find people is the campaign itself: a rail of numbered steps, with the
+  // work of the current step in the wide column beside it.
+  await expect(page.getByRole('button', { name: /Choose companies/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Choose who gets it/ })).toBeVisible();
 
   // Looking up a single named person is gone: it was a company search with
   // one name in it, which Find people already does, and the address guess it
