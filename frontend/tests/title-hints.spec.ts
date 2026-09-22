@@ -49,18 +49,23 @@ async function mockFlow(page: Page) {
 
 test('role bubbles translate asked roles into the focused company vocabulary, and only add when clicked', async ({ page }) => {
   const mutations = await mockFlow(page);
-  await page.goto('/scraper?view=company&companies=OpenAI,A24');
+  // A link can carry how many people to collect; there is no field for it.
+  await page.goto('/scraper?view=company&companies=OpenAI,A24&max=120');
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
   const rail = pipeline.locator('[data-rail]');
   const bubbles = rail.getByTestId('role-suggestions');
-  const titles = rail.getByLabel('Titles to prioritise');
+  const titles = rail.getByLabel('Other titles');
 
   // The first chosen company is in focus; its observed roles are offered,
-  // not typed into the field.
+  // not typed into a field - the titles field stays folded away.
   await expect(bubbles.getByText('Roles seen at OpenAI')).toBeVisible({ timeout: 10_000 });
   await expect(bubbles.getByRole('button', { name: /Member of Technical Staff/ })).toBeVisible();
-  await expect(titles).toHaveValue('');
+  await expect(titles).toHaveCount(0);
+
+  // Clicking one of the company's titles opens the field with it.
+  await bubbles.getByRole('button', { name: /Member of Technical Staff/ }).click();
+  await expect(titles).toHaveValue('Member of Technical Staff');
 
   // Typing hints triggers the equivalence strip.
   await titles.fill('healthcare PMs, VPs');
@@ -79,9 +84,9 @@ test('role bubbles translate asked roles into the focused company vocabulary, an
   await expect(bubbles.getByRole('button', { name: /Member of Technical Staff/ })).toHaveCount(0);
   await expect(titles).toHaveValue('healthcare PMs, VPs, Product Lead');
 
-  // The titles and the collection size reach the run request.
-  await rail.getByText('Search settings').click();
-  await rail.getByLabel('People to collect').fill('120');
+  // Typed titles win over who-to-look-for, and they and the collection
+  // size reach the run request.
+  await expect(rail.getByText('Searching for: healthcare PMs, VPs, Product Lead')).toBeVisible();
   const lane = pipeline.locator('[data-lane="A24"]');
   await lane.hover();
   await lane.getByRole('button', { name: 'Find people' }).click();
@@ -102,8 +107,9 @@ test('a malformed role-suggestions payload never breaks the Find people page', a
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
   const rail = pipeline.locator('[data-rail]');
-  await rail.getByLabel('Titles to prioritise').fill('PMs');
-  await expect(rail.getByLabel('Titles to prioritise')).toHaveValue('PMs');
+  await rail.getByRole('button', { name: 'Other titles…' }).click();
+  await rail.getByLabel('Other titles').fill('PMs');
+  await expect(rail.getByLabel('Other titles')).toHaveValue('PMs');
   const lane = pipeline.locator('[data-lane="OpenAI"]');
   await lane.hover();
   await expect(lane.getByRole('button', { name: 'Find people' })).toBeEnabled();

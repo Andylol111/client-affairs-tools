@@ -150,8 +150,10 @@ test('a company with nobody on file is searched from its lane, and its people ar
   // Wait for the people already on file, so the row states are settled.
   await expect(picker.getByText('Jean Bartik')).toBeVisible();
 
-  // The titles the member typed reach the search as typed.
-  await rail.getByLabel('Titles to prioritise').fill('Head of Partnerships');
+  // Titles the member types win over who-to-look-for, and reach the search
+  // as typed.
+  await rail.getByRole('button', { name: 'Other titles…' }).click();
+  await rail.getByLabel('Other titles').fill('Head of Partnerships');
 
   // Searching used to mean a second panel with its own company field. The
   // company that needs people carries the button that finds them, on its lane.

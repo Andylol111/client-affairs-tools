@@ -694,11 +694,14 @@ def search_relevance_tests() -> None:
         page = asyncio.run(cr.search_register(q='meta', limit=10))
         names = [i['company_name'] for i in page['items']]
         assert names[0] == 'Meta Platforms Inc', names
-        # Every "metal" row still matches (it is still a substring hit worth
-        # showing), just never ahead of the company the query actually named.
+        # Every "metal" name still matches (a word starting with the query is
+        # a hit worth showing), just never ahead of the company the query
+        # actually named. Precision Micro matched only through its sector
+        # text ("fabricated metal products"); a four-letter query no longer
+        # counts a sector-only hit, since it names no company.
         assert set(names) == {
             'Meta Platforms Inc', 'Ferro Metal And Chemical Corporation Limited',
-            'Central Asia Metals Plc', 'Precision Micro Limited', 'Chris Allsop Metal Recycling Ltd',
+            'Central Asia Metals Plc', 'Chris Allsop Metal Recycling Ltd',
         }, names
 
         # A query naming a whole word inside a longer name ranks that whole
@@ -715,6 +718,73 @@ def search_relevance_tests() -> None:
         assert page['items'] == []
 
 
+def size_ranking_tests() -> None:
+    """Reported live: typing "HBO" returned "Hbo Film & Television
+    Development Limited", "Hbos Financial Services Limited", "Hbos Uk
+    Limited" and "Frelif (Loughborough) Llp", and never Warner Bros.
+    Discovery. Three causes, each pinned here: recency ranked every dated UK
+    row above a listed company in the same match level; a short query matched
+    mid-word ("Loug-hbo-rough"); and HBO is a brand with no register row of
+    its own."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DATABASE_URL'] = f'sqlite:///{Path(tmp) / "t.db"}'
+        for mod in [m for m in list(sys.modules) if m.startswith('app.')]:
+            del sys.modules[mod]
+
+        from app.database import init_db
+        from app.services import company_register as cr
+
+        asyncio.run(init_db())
+        asyncio.run(cr.upsert_companies([
+            {'source': 'sec_public', 'source_key': '1437107', 'tier': 'us_public', 'country': 'US',
+             'company_name': 'Warner Bros. Discovery, Inc.', 'prominence_rank': 180,
+             'metadata': {'ticker': 'WBD', 'cik': '1437107'}},
+            {'source': 'sec_public', 'source_key': '1652044', 'tier': 'us_public', 'country': 'US',
+             'company_name': 'Alphabet Inc.', 'prominence_rank': 2,
+             'metadata': {'ticker': 'GOOGL', 'cik': '1652044'}},
+            {'source': 'companies_house', 'source_key': 'U1', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Hbo Film & Television Development Limited', 'last_event_at': '2026-08-30',
+             'metadata': {'account_category': 'FULL'}},
+            {'source': 'companies_house', 'source_key': 'U2', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Hbos Financial Services Limited', 'last_event_at': '2026-08-29',
+             'metadata': {'account_category': 'MEDIUM'}},
+            {'source': 'companies_house', 'source_key': 'U3', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Hbos Uk Limited', 'last_event_at': '2026-08-28',
+             'metadata': {'account_category': 'GROUP'}},
+            {'source': 'companies_house', 'source_key': 'U4', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Frelif (Loughborough) Llp', 'last_event_at': '2026-09-01'},
+            # Same match level ("acme" starts both names as a whole word):
+            # the listed company has no filing date, the UK one a fresh one.
+            {'source': 'companies_house', 'source_key': 'U5', 'tier': 'uk', 'country': 'GB',
+             'company_name': 'Acme Holdings Limited', 'last_event_at': '2026-09-10'},
+            {'source': 'sec_public', 'source_key': '9', 'tier': 'us_public', 'country': 'US',
+             'company_name': 'Acme United Corp', 'prominence_rank': 4000},
+        ]))
+
+        names = [i['company_name'] for i in asyncio.run(cr.search_register(q='hbo', limit=10))['items']]
+        assert names[0] == 'Warner Bros. Discovery, Inc.', names
+        assert 'Frelif (Loughborough) Llp' not in names, names
+        # The UK rows that do start with "hbo" still show, whole word first.
+        assert names[1] == 'Hbo Film & Television Development Limited', names
+        # Between the two plain-prefix "Hbos" rows the statutory band decides
+        # (group accounts before medium), not which filed a day later.
+        assert names[2:] == ['Hbos Uk Limited', 'Hbos Financial Services Limited'], names
+
+        acme = [i['company_name'] for i in asyncio.run(cr.search_register(q='acme', limit=10))['items']]
+        assert acme == ['Acme United Corp', 'Acme Holdings Limited'], acme
+
+        # Exact ticker, any case, is the top match level even though the
+        # letters appear nowhere in the registered name.
+        page = asyncio.run(cr.search_register(q='googl', limit=10))
+        assert [i['company_name'] for i in page['items']] == ['Alphabet Inc.'], page['items']
+        assert page['items'][0]['match_level'] == 0
+        assert asyncio.run(cr.search_register(q='WBD'))['items'][0]['company_name'] == 'Warner Bros. Discovery, Inc.'
+        # A brand alias for a company outside the register finds nothing
+        # rather than something wrong.
+        assert asyncio.run(cr.search_register(q='tiktok'))['items'] == []
+        assert cr.brand_alias_names('  YouTube ') == ('alphabet inc',)
+
+
 if __name__ == '__main__':
     tests()
     uk_tests()
@@ -726,4 +796,5 @@ if __name__ == '__main__':
     prominence_rank_tests()
     sec_fund_exclusion_tests()
     search_relevance_tests()
+    size_ranking_tests()
     print('company register: ok')

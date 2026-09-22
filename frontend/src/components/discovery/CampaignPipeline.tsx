@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api, type Contact, type ImportOutcome } from '../../api';
-import CompanyAutocomplete, { type CompanyOption } from '../CompanyAutocomplete';
+import { ApiError, api, type Contact, type ImportOutcome, type ResolvedCompany } from '../../api';
+import CompanyAutocomplete from '../CompanyAutocomplete';
 import RecipientPicker, { type PickerMode } from './RecipientPicker';
 import CompanyLanes, { type Lane } from './CompanyLanes';
 import RoleSuggestionBubbles from './RoleSuggestionBubbles';
-import { LEVEL_TITLES, companyKey, defaultSelection } from '../../lib/recipients';
+import { LEVEL_TITLES, type Level, companyKey, defaultSelection } from '../../lib/recipients';
 import { type ChosenCompany, type CompanyRun, useDiscoveryRuns } from '../../lib/useDiscoveryRuns';
 
 /**
@@ -39,6 +39,99 @@ const CHIP_WINDOW = 24;
  *  a team, not the whole payroll. */
 const DEFAULT_MAX_PROSPECTS = 60;
 const IDLE: CompanyRun = { state: 'idle', pct: 0, message: '' };
+/** Searches that start by themselves in one sitting. Past this, a lane
+ *  offers the search instead: the hourly limit is shared with everything
+ *  else the member does. */
+const AUTO_SEARCH_LIMIT = 5;
+/** Who to look for, in the member's words, mapped to the titles a search
+ *  asks for. Team leads by default: they are the people who answer. */
+const WHO: { id: Exclude<Level, 'unknown'>; label: string }[] = [
+  { id: 'working', label: 'Team leads' },
+  { id: 'executive', label: 'Senior leaders' },
+  { id: 'board', label: 'Board' },
+];
+
+/** Pasted text as the companies it names: one per line, or several LinkedIn
+ *  pages on one line. A single line is one company even with commas in it -
+ *  "Meta Platforms, Inc." is one name. */
+function splitCompanies(text: string): string[] {
+  const lines = text.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+  return lines.flatMap((line) => {
+    const links = line.match(/(?:https?:\/\/)?(?:[a-z]+\.)?linkedin\.com\/(?:company|showcase)\/[^\s,;]+/gi);
+    return links && links.length > 1 ? links : [line];
+  });
+}
+
+function fromResolved(r: ResolvedCompany): ChosenCompany {
+  return {
+    name: r.name,
+    domain: r.domain || undefined,
+    verified: Boolean(r.domain_verified),
+    linkedinUrl: r.linkedin_url || undefined,
+    source: r.source,
+    alternatives: Array.isArray(r.alternatives) ? r.alternatives : [],
+  };
+}
+
+/** Sure enough to search on its own: the member pasted its LinkedIn page,
+ *  the club already works it, or its website was checked. */
+function isSure(company: ChosenCompany): boolean {
+  return Boolean(company.verified || company.source === 'linkedin' || company.source === 'club');
+}
+
+/** One chosen company: its name and website, a way to correct it, and a way
+ *  to drop it. Clicking the name no longer removes it - that was a toggle
+ *  that lost companies to stray clicks. */
+function CompanyChip({ company, onRemove, onReplace }: {
+  company: ChosenCompany;
+  onRemove: () => void;
+  onReplace: (q: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [link, setLink] = useState('');
+  const sure = isSure(company);
+  return (
+    <span className="relative inline-flex max-w-full" data-company-chip={company.name}>
+      <span className={`inline-flex h-10 max-w-full items-center gap-2 rounded-full border pl-4 pr-1 text-sm ${
+        sure ? 'border-deep-navy bg-deep-navy text-white' : 'border-amber-300 bg-amber-50 text-amber-950'}`}>
+        <span className="truncate font-medium" title={company.name}>{company.name}</span>
+        {company.domain && (
+          <span className="shrink-0 text-xs opacity-80">· {company.domain}{company.verified ? ' ✓' : ''}</span>
+        )}
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+                className="shrink-0 text-xs underline opacity-90">
+          {sure ? 'Not this?' : 'Best guess · Not this?'}
+        </button>
+        <button type="button" onClick={onRemove} aria-label={`Remove ${company.name}`}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-base leading-none hover:bg-black/10">
+          ×
+        </button>
+      </span>
+      {open && (
+        <div className="absolute left-0 top-full z-30 mt-1 w-80 max-w-[90vw] space-y-1 rounded-xl border border-pale-sky bg-white p-2 text-sm text-deep-navy shadow-lg">
+          {(company.alternatives || []).length > 0 && <p className="px-2 text-xs text-slate-500">Did you mean</p>}
+          {(company.alternatives || []).map((alt) => (
+            <button key={alt.name} type="button" onClick={() => { setOpen(false); onReplace(alt.name); }}
+                    className="block w-full truncate rounded-lg px-2 py-1.5 text-left hover:bg-pale-sky/40">
+              {alt.name}{alt.domain ? <span className="text-xs text-slate-500"> · {alt.domain}</span> : null}
+            </button>
+          ))}
+          <form className="flex gap-1 px-1 pt-1" onSubmit={(e) => {
+            e.preventDefault();
+            if (!link.trim()) return;
+            setOpen(false);
+            onReplace(link.trim());
+          }}>
+            <input value={link} onChange={(e) => setLink(e.target.value)} aria-label="Their LinkedIn page"
+                   placeholder="Paste their LinkedIn page instead"
+                   className="min-w-0 flex-1 rounded-lg border border-pale-sky px-2 py-1.5 text-xs" />
+            <button type="submit" className="ui-button ui-button--secondary ui-button--sm">Use</button>
+          </form>
+        </div>
+      )}
+    </span>
+  );
+}
 const PICKER_MODE: Record<Step, PickerMode> = { 1: 'preview', 2: 'select', 3: 'review' };
 
 /** A numbered step header that is also the way back to that step. Defined
@@ -105,7 +198,15 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   const [chosen, setChosen] = useState<ChosenCompany[]>(() => (
     linkedCompanies.length
       ? linkedCompanies.map((name) => ({ name }))
-      : linkedCompany ? [{ name: linkedCompany, domain: linkedDomain || undefined }] : []
+      // A company handed over with its website comes from the register,
+      // whose websites come from filings: the same trusted record the
+      // resolver accepts, so it is sure enough to search on its own.
+      : linkedCompany ? [{
+        name: linkedCompany,
+        domain: linkedDomain || undefined,
+        verified: Boolean(linkedDomain),
+        source: linkedDomain ? 'register' as const : undefined,
+      }] : []
   ));
   const [typed, setTyped] = useState('');
 
@@ -121,15 +222,17 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   // What the search is told. Shared across companies because it is what the
   // member wants, not what a company calls it; the role bubbles translate it
   // per company and only add to it when clicked.
+  // Who to look for is one choice; titles in the member's own words are
+  // optional and, when given, win. Nobody has to type a title to search.
+  const [level, setLevel] = useState<Exclude<Level, 'unknown'>>('working');
   const [titleHints, setTitleHints] = useState(() => (params.get('titles') || '').trim());
-  const [maxProspects, setMaxProspects] = useState(() => (
+  const [showOtherTitles, setShowOtherTitles] = useState(() => Boolean((params.get('titles') || '').trim()));
+  const [maxProspects] = useState(() => (
     params.get('max') ? clampProspects(Number(params.get('max'))) : DEFAULT_MAX_PROSPECTS
   ));
-  // A domain typed for a company that arrived without one, kept apart from
-  // the company itself so the field that asks for it does not vanish at the
-  // first keystroke.
-  const [typedDomains, setTypedDomains] = useState<Record<string, string>>({});
+  const searchTitles = titleHints.trim() || LEVEL_TITLES[level];
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(0);
 
   const [showAllChips, setShowAllChips] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -140,28 +243,64 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
 
 
   const chosenNames = useMemo(() => chosen.map((c) => c.name), [chosen]);
-  const isChosen = (name: string) => chosen.some((c) => companyKey(c.name) === companyKey(name));
 
-  const toggle = (name: string) =>
-    setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(name))
-      ? current.filter((c) => companyKey(c.name) !== companyKey(name))
-      : [...current, { name }]);
-
-  // The dropdown's suggestion for what is typed. Add and Find people take it,
-  // name and domain, instead of the raw text: "Shopi" used to become a
-  // company of its own with no domain and nobody on file under that name.
-  const [suggested, setSuggested] = useState<CompanyOption | undefined>();
-  const pendingCompany = (): ChosenCompany | null => {
-    const text = typed.trim();
-    if (!text) return null;
-    return suggested ? { name: suggested.name, domain: suggested.domain || undefined } : { name: text };
-  };
   // Adding never removes: Add on a company already chosen used to toggle it
   // off again.
   const addCompany = (company: ChosenCompany) =>
     setChosen((current) => current.some((c) => companyKey(c.name) === companyKey(company.name))
       ? current
       : [...current, company]);
+
+  // Every way a company arrives - typed, picked, pasted, a LinkedIn page -
+  // goes through one resolver, which returns the company and a website only
+  // when it could check it. The member never picks a domain; a wrong guess
+  // is corrected from the chip, not from a settings panel.
+  const resolve = async (q: string): Promise<ChosenCompany | null> => {
+    try {
+      const res = await api.yucgoutreach.resolveCompany(q);
+      return res && typeof res.name === 'string' && res.name ? fromResolved(res) : { name: q, source: 'typed' };
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422) {
+        setError(e.message);
+        return null;
+      }
+      // Lookup unavailable: keep the name as typed rather than lose it.
+      return { name: q, source: 'typed' };
+    }
+  };
+  const addFromText = async (text: string) => {
+    const items = splitCompanies(text);
+    if (!items.length) return;
+    setError('');
+    setResolving((n) => n + items.length);
+    await Promise.all(items.map(async (q) => {
+      try {
+        const company = await resolve(q);
+        if (company) addCompany(company);
+      } finally {
+        setResolving((n) => n - 1);
+      }
+    }));
+  };
+  const replaceCompany = async (oldName: string, q: string) => {
+    setResolving((n) => n + 1);
+    try {
+      const company = await resolve(q);
+      if (!company) return;
+      autoTried.current.delete(companyKey(company.name));
+      setChosen((current) => {
+        const rest = current.filter((c) => companyKey(c.name) !== companyKey(oldName)
+          && companyKey(c.name) !== companyKey(company.name));
+        const at = current.findIndex((c) => companyKey(c.name) === companyKey(oldName));
+        rest.splice(at < 0 ? rest.length : at, 0, company);
+        return rest;
+      });
+    } finally {
+      setResolving((n) => n - 1);
+    }
+  };
+  const autoTried = useRef<Set<string>>(new Set());
+  const autoStarted = useRef(0);
 
   const visibleChips = showAllChips ? chosenNames : chosenNames.slice(0, CHIP_WINDOW);
   const hiddenChips = chosenNames.length - visibleChips.length;
@@ -171,6 +310,9 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   // clicks is one request, and stamped so a slow answer to an old choice
   // cannot overwrite the current one.
   const requestRef = useRef(0);
+  // Which companies the people list currently answers for: a search that
+  // starts by itself must not mistake "not loaded yet" for "nobody on file".
+  const [peopleFor, setPeopleFor] = useState<string | null>(null);
   const loadPeople = useCallback(async (names: string[], createdIds: number[] = []) => {
     const requestId = ++requestRef.current;
     if (names.length === 0) {
@@ -186,6 +328,7 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
       if (requestId !== requestRef.current) return;
       const items = Array.isArray(res?.items) ? res.items : [];
       setPeople(items);
+      setPeopleFor(names.map(companyKey).sort().join('\n'));
       setSelected((current) => {
         if (!touchedRef.current) return defaultSelection(items);
         const present = new Set(items.map((p) => p.id));
@@ -212,7 +355,7 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   }, [loadPeople, chosenNames]);
 
   const {
-    runs, found, linkedRun, notice: runNotice, error: runError,
+    runs, runsReady, found, linkedRun, notice: runNotice, error: runError,
     startRun, addFound, exportRun, deleteRun,
   } = useDiscoveryRuns({ chosen, linkedRunId, onImported });
 
@@ -283,50 +426,43 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   // The company whose vocabulary the search controls are about: the lane
   // last pointed at, else the first chosen.
   const focused = chosen.find((c) => companyKey(c.name) === focusedKey) ?? chosen[0] ?? null;
-  const focusedDomain = focused ? (typedDomains[companyKey(focused.name)] || focused.domain || '') : '';
-
-  // Best-effort awareness of the one input the search leans on hardest: a
-  // company's own domain lets a search crawl the company's own pages
-  // instead of falling back to web search alone. Asked only for the
-  // company in view, only while its field is still blank, and debounced
-  // so it fires once per company rather than on every keystroke or for
-  // every chosen company on page load.
-  const [domainGuess, setDomainGuess] = useState<{ company: string; domain: string | null; verified: boolean } | null>(null);
-  useEffect(() => {
-    if (!focused || (step !== 1 && step !== 2) || focusedDomain) return;
-    const name = focused.name;
-    const timer = window.setTimeout(() => {
-      api.yucgoutreach.domainGuess(name)
-        .then((res) => {
-          // A malformed or absent payload (proxy hiccup, an endpoint an
-          // older deploy or an unrelated test never mocked) must read as
-          // no answer yet, never as a fabricated "nothing found".
-          if (typeof res?.verified !== 'boolean') return;
-          setDomainGuess({ company: name, domain: res.domain ?? null, verified: res.verified });
-        })
-        .catch(() => {});
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [focused, step, focusedDomain]);
-  const domainSuggestion = focused && (step === 1 || step === 2) && !focusedDomain
-      && domainGuess?.company === focused.name
-    ? domainGuess
-    : null;
+  // What a search is told, read when it starts rather than when it was
+  // queued: changing who to look for while companies wait changes what all
+  // of them look for.
+  const searchOptionsRef = useRef({ titleHints: searchTitles, maxProspects });
+  useEffect(() => { searchOptionsRef.current = { titleHints: searchTitles, maxProspects }; }, [searchTitles, maxProspects]);
 
   // One search, from wherever it is asked for: the lane, the group header in
-  // the sheet. It takes the titles and settings from the step, and the
-  // domain from what is known about the company. With no titles typed it
-  // asks for the people who actually answer, so a quick press never comes
-  // back with a board.
+  // the sheet, or on its own when a company arrives with nobody on file.
   const findPeople = useCallback((company: ChosenCompany) => {
-    const key = companyKey(company.name);
-    setFocusedKey(key);
-    void startRun(company, {
-      titleHints: titleHints.trim() || LEVEL_TITLES.working,
-      maxProspects,
-      domain: typedDomains[key] || undefined,
+    setFocusedKey(companyKey(company.name));
+    void startRun(company, () => searchOptionsRef.current);
+  }, [startRun]);
+
+  // A company the member is sure of, with nobody on file and no search yet,
+  // is searched as soon as it is added - the search is the reason it was
+  // added. Waits until both the people and the earlier searches are known,
+  // and stops starting searches on its own after AUTO_SEARCH_LIMIT.
+  const chosenKeyString = chosen.map((c) => companyKey(c.name)).sort().join('\n');
+  useEffect(() => {
+    if (busy || !runsReady || peopleFor !== chosenKeyString) return;
+    const due = chosen.filter((c) => {
+      const key = companyKey(c.name);
+      if (autoTried.current.has(key) || !isSure(c)) return false;
+      const lane = lanes.find((l) => companyKey(l.company) === key);
+      return Boolean(lane && lane.found === 0 && lane.run.state === 'idle');
     });
-  }, [startRun, titleHints, maxProspects, typedDomains]);
+    if (!due.length) return;
+    const timer = window.setTimeout(() => {
+      for (const company of due) {
+        autoTried.current.add(companyKey(company.name));
+        if (autoStarted.current >= AUTO_SEARCH_LIMIT) continue;
+        autoStarted.current += 1;
+        findPeople(company);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [busy, runsReady, peopleFor, chosenKeyString, chosen, lanes, findPeople]);
 
   const findByName = useCallback((name: string) => {
     const company = chosen.find((c) => companyKey(c.name) === companyKey(name));
@@ -343,7 +479,7 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
       <div ref={rootRef}
            data-rail
            className="xl:col-span-2 min-h-0 xl:max-h-full xl:overflow-y-auto surface-card rounded-2xl border border-[var(--border)] shadow-sm overflow-hidden self-start">
-      <StepHeading n={1} title="Choose companies" hint={chosen.length ? `${chosen.length} chosen` : 'Type any company name'} step={step} onSelect={setStep} />
+      <StepHeading n={1} title="Add companies" hint={chosen.length ? `${chosen.length} added` : 'A name or its LinkedIn page'} step={step} onSelect={setStep} />
       {step === 1 && (
         <div className="px-5 pb-5 space-y-3 border-b border-pale-sky">
           <div className="flex gap-2 items-end">
@@ -352,29 +488,30 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
                 id="pipeline-company"
                 label="Company"
                 value={typed}
-                placeholder="Any company, including the public register"
+                placeholder="Type a company, or paste its LinkedIn page"
                 onChange={(name) => setTyped(name)}
-                onSelect={(option) => {
-                  addCompany({ name: option.name, domain: option.domain || undefined });
-                  setTyped('');
-                }}
-                onSuggestion={setSuggested}
+                onSelect={(option) => { setTyped(''); void addFromText(option.name); }}
+                onSubmitText={(text) => { setTyped(''); void addFromText(text); }}
               />
             </div>
             <button
               type="button"
               disabled={!typed.trim()}
-              onClick={() => { addCompany(pendingCompany()!); setTyped(''); }}
-              className="ui-button ui-button--secondary shrink-0 max-w-[45%] truncate"
-              title={suggested ? `Add ${suggested.name}${suggested.domain ? ` (${suggested.domain})` : ''}` : undefined}
+              onClick={() => { const text = typed; setTyped(''); void addFromText(text); }}
+              className="ui-button ui-button--secondary shrink-0"
             >
-              {suggested ? `Add ${suggested.name}` : 'Add'}
+              Add
             </button>
           </div>
+          <p className="text-xs text-slate-500">
+            {resolving > 0
+              ? 'Looking it up…'
+              : 'Paste a LinkedIn company page for an exact match. Several at once work too, one per line.'}
+          </p>
 
           {chosen.length > 0 && (
             <p className="text-xs text-slate-500" data-testid="chosen-count">
-              {chosen.length} compan{chosen.length === 1 ? 'y' : 'ies'} chosen
+              {chosen.length} compan{chosen.length === 1 ? 'y' : 'ies'} added
               {chosen.length > MAX_COMPANIES_PER_CAMPAIGN
                 ? ` — a campaign takes at most ${MAX_COMPANIES_PER_CAMPAIGN}; drop some or split the release.`
                 : ''}
@@ -386,28 +523,20 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
           {/* Only a screenful of chips is drawn: a selection of several hundred
               companies is a count plus the ones being worked on, not eight
               hundred DOM nodes. */}
-          {chosenNames.length > 0 && <p className="text-xs font-medium text-slate-500 pt-1">Chosen companies</p>}
           <div className="flex flex-wrap gap-2" data-testid="company-chips">
-            {visibleChips.map((name) => {
-              const on = isChosen(name);
-              return (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() => toggle(name)}
-                  title={name}
-                  className={`inline-flex h-11 max-w-full items-center rounded-full border px-4 text-sm ${
-                    on ? 'border-deep-navy bg-deep-navy text-white' : 'border-pale-sky bg-white text-deep-navy hover:border-steel-blue'}`}
-                >
-                  <span className="truncate">{on ? '✓ ' : ''}{name}</span>
-                </button>
-              );
-            })}
+            {chosen.slice(0, showAllChips ? undefined : CHIP_WINDOW).map((company) => (
+              <CompanyChip
+                key={company.name}
+                company={company}
+                onRemove={() => setChosen((current) => current.filter((c) => companyKey(c.name) !== companyKey(company.name)))}
+                onReplace={(q) => { void replaceCompany(company.name, q); }}
+              />
+            ))}
             {hiddenChips > 0 && (
               <button
                 type="button"
                 onClick={() => setShowAllChips((v) => !v)}
-                className="inline-flex h-11 items-center rounded-full border border-dashed border-steel-blue px-4 text-sm text-deep-navy"
+                className="inline-flex h-10 items-center rounded-full border border-dashed border-steel-blue px-4 text-sm text-deep-navy"
               >
                 {showAllChips ? 'Show fewer' : `+${hiddenChips} more`}
               </button>
@@ -416,27 +545,16 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
 
           <button
             type="button"
-            disabled={(chosen.length === 0 && !typed.trim()) || busy}
-            onClick={() => {
-              // Typed a name and pressed the big button without adding it
-              // first: that is the same intent, so take it.
-              const pending = pendingCompany();
-              if (pending) {
-                addCompany(pending);
-                setTyped('');
-              }
-              setStep(2);
-            }}
+            disabled={chosen.length === 0 || resolving > 0}
+            onClick={() => setStep(2)}
             className="ui-button ui-button--primary w-full py-3 text-[15px]"
           >
-            {chosen.length > 1
-              ? `Find people at these ${chosen.length} companies`
-              : 'Find people'}
+            {chosen.length === 0 ? 'Add a company to start' : 'Next: tick who gets it'}
           </button>
         </div>
       )}
 
-      <StepHeading n={2} title="Choose who gets it" hint={people.length ? `${recipients.length} of ${people.length} chosen` : 'Tick the people this message goes to'} step={step} onSelect={setStep} />
+      <StepHeading n={2} title="Tick who gets it" hint={people.length ? `${recipients.length} of ${people.length} ticked` : 'Searches start by themselves'} step={step} onSelect={setStep} />
       {step === 2 && (
         <div className="px-5 pb-5 space-y-3 border-b border-pale-sky">
           <p className="text-sm text-deep-navy">
@@ -446,82 +564,63 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
           </p>
           {people.length === 0 && !busy && (
             <p className="text-sm text-slate-500">
-              Nobody on record at these companies yet. Search a company from its lane, or import a
-              list.
+              Nobody on record at these companies yet. Searches start by themselves for companies we
+              could confirm; press Find people on any other lane.
             </p>
           )}
 
-          {/* What a search is told. The titles are the member's words; the
-              bubbles under them are the focused company's own words for
-              the same roles, added only when clicked - what one company
-              calls a job is never quietly applied to another. */}
-          <label className="block text-xs font-medium text-slate-600">
-            Titles to prioritise
-            <input
-              className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
-              aria-label="Titles to prioritise"
-              value={titleHints}
-              onChange={(e) => setTitleHints(e.target.value)}
-              placeholder="VPs, project managers"
-            />
-          </label>
+          {/* Who a search looks for is one choice, not a title the member has
+              to guess. Titles in their own words are there for anyone who
+              wants them, and the company's own titles are one click each. */}
+          <div>
+            <p className="text-xs font-medium text-slate-600" id="who-to-look-for">Who to look for</p>
+            <div role="radiogroup" aria-labelledby="who-to-look-for" className="mt-1 inline-flex rounded-lg border border-pale-sky p-0.5">
+              {WHO.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={level === option.id}
+                  onClick={() => setLevel(option.id)}
+                  className={`rounded-md px-3 py-1.5 text-sm ${level === option.id ? 'bg-deep-navy text-white' : 'text-deep-navy hover:bg-pale-sky/40'}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Searching for: {searchTitles}{' · '}
+              <button type="button" className="underline" onClick={() => setShowOtherTitles((v) => !v)}>
+                {showOtherTitles ? 'Hide other titles' : 'Other titles…'}
+              </button>
+            </p>
+            {showOtherTitles && (
+              <input
+                className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
+                aria-label="Other titles"
+                value={titleHints}
+                onChange={(e) => setTitleHints(e.target.value)}
+                placeholder="In your words, e.g. Head of Partnerships, Producer"
+              />
+            )}
+          </div>
           {focused && (
             <div data-testid="focused-company" data-company={focused.name}>
               <RoleSuggestionBubbles
                 company={focused.name}
-                domain={focusedDomain}
+                domain={focused.domain || ''}
                 hints={titleHints}
-                onAdd={(title) => setTitleHints((prev) => {
-                  const parts = prev.split(',').map((p) => p.trim()).filter(Boolean);
-                  if (parts.some((p) => p.toLowerCase() === title.toLowerCase())) return prev;
-                  return [...parts, title].join(', ');
-                })}
+                onAdd={(title) => {
+                  setShowOtherTitles(true);
+                  setTitleHints((prev) => {
+                    const parts = prev.split(',').map((p) => p.trim()).filter(Boolean);
+                    if (parts.some((p) => p.toLowerCase() === title.toLowerCase())) return prev;
+                    return [...parts, title].join(', ');
+                  });
+                }}
               />
             </div>
           )}
-          <details className="rounded-xl border border-pale-sky">
-            <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-deep-navy">
-              Search settings
-            </summary>
-            <div className="space-y-2 border-t border-pale-sky p-3">
-              <label className="block text-xs font-medium text-slate-600">
-                People to collect (25–800)
-                <input
-                  type="number"
-                  min={25}
-                  max={800}
-                  className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
-                  aria-label="People to collect"
-                  value={maxProspects}
-                  onChange={(e) => setMaxProspects(clampProspects(Number(e.target.value)))}
-                />
-              </label>
-              {focused && !focused.domain && (
-                <label className="block text-xs font-medium text-slate-600">
-                  Domain for {focused.name} (optional; looked up from the name if blank)
-                  <input
-                    className="mt-1 w-full rounded-lg border border-pale-sky px-3 py-2 text-sm text-deep-navy"
-                    aria-label="Company domain"
-                    value={typedDomains[companyKey(focused.name)] || ''}
-                    onChange={(e) => setTypedDomains((prev) => ({ ...prev, [companyKey(focused.name)]: e.target.value }))}
-                    placeholder="apple.com"
-                  />
-                </label>
-              )}
-              {domainSuggestion?.verified && domainSuggestion.domain && (
-                <p className="mt-1 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2" data-testid="domain-guess-suggestion">
-                  We think this might be <strong>{domainSuggestion.domain}</strong> for {focused?.name}.{' '}
-                  <button
-                    type="button"
-                    onClick={() => focused && setTypedDomains((prev) => ({ ...prev, [companyKey(focused.name)]: domainSuggestion.domain || '' }))}
-                    className="font-semibold underline"
-                  >
-                    Use it
-                  </button>
-                </p>
-              )}
-            </div>
-          </details>
 
           {/* The other way people arrive: the spreadsheet you already have. */}
           <div className="flex flex-wrap items-center gap-4 text-xs">
@@ -555,7 +654,7 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
               onClick={() => fileRef.current?.click()}
               className="ui-button ui-button--ghost ui-button--sm"
             >
-              {importing ? 'Importing…' : 'Import a spreadsheet instead'}
+              {importing ? 'Importing…' : 'Or import a spreadsheet'}
             </button>
           </div>
 
@@ -609,12 +708,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
         )}
         {runError && (
           <p className="ui-notice ui-notice--danger text-sm" role="alert">{runError}</p>
-        )}
-        {domainSuggestion && !domainSuggestion.verified && (
-          <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" data-testid="domain-guess-warning">
-            No confirmed website found for {focused?.name} - people-search will rely on web search
-            alone and may find very few results. Add a domain above if you know one.
-          </p>
         )}
         <CompanyLanes
           lanes={lanes}

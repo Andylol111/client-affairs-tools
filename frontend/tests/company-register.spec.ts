@@ -113,10 +113,9 @@ test('register browses the free public pool and hands a company to Find people',
   await expect(lane).toBeVisible();
   await expect(pipeline.getByTestId('recipient-picker').locator('[data-company="Gilgamesh Pharma Inc."]')).toBeVisible();
   // The company came with its domain, so the step does not ask for one.
-  await pipeline.locator('[data-rail]').getByText('Search settings').click();
   await expect(pipeline.getByLabel('Company domain')).toHaveCount(0);
-  await lane.hover();
-  await lane.getByRole('button', { name: 'Find people' }).click();
+  // Its website came from the register's filings, so its search starts by
+  // itself - no button to press, and exactly one search.
   await expect.poll(() => runsCreated.length).toBe(1);
   expect(runsCreated[0].company_name).toBe('Gilgamesh Pharma Inc.');
   expect(runsCreated[0].company_domain).toBe('gilgameshpharma.com');

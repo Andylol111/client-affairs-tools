@@ -73,13 +73,13 @@ for (const count of [4, 20, 300]) {
     expect(await inViewport(page, SHEET_HEADER)).toBe(true);
 
     // Step 1.
-    await rail.getByRole('button', { name: /Choose companies/ }).click();
+    await rail.getByRole('button', { name: /Add companies/ }).click();
     await expect(pipeline.getByTestId('recipient-picker')).toHaveAttribute('data-mode', 'preview');
     expect(await inViewport(page, LANES)).toBe(true);
     expect(await inViewport(page, SHEET_HEADER)).toBe(true);
 
     // Step 3, the hand-off to Drafts.
-    await rail.getByRole('button', { name: /^Find people/ }).click();
+    await rail.getByRole('button', { name: 'Next: tick who gets it' }).click();
     await rail.getByRole('button', { name: /^Write to these/ }).click();
     await expect(pipeline.getByTestId('recipient-picker')).toHaveAttribute('data-mode', 'review');
     expect(await inViewport(page, LANES)).toBe(true);
