@@ -71,6 +71,13 @@ FORM_D_SKIP_GROUPS = frozenset(_skip.lower() for _skip in (
     "Other Banking and Financial Services", "Investing", "Investment Banking",
 ))
 
+# SEC's company_tickers.json has no industry classification to filter on the
+# way Form D and Form 5500 do, so exchange-traded funds are excluded by name
+# instead - the only signal this feed carries. "ETF" is unambiguous: no
+# operating company is named that. "Trust" is not included here on its own,
+# since real operating companies (REITs above all) legitimately use it.
+_SEC_FUND_NAME = re.compile(r"\bETF\b", re.I)
+
 
 def _group_key(group: str) -> str:
     return re.sub(r"\s+", " ", (group or "").replace("&", "and")).strip().lower()
@@ -291,6 +298,12 @@ async def ingest_sec_public() -> dict[str, Any]:
     ``prominence_rank`` is what lets search_register put them back where a
     member expects to find them.
     """
+    # SEC's ticker file lists every registered security, not just operating
+    # companies: ETFs ("21Shares Dogecoin ETF") sit alongside real companies
+    # ("1stDibs.com, Inc.") with nothing distinguishing them in this feed
+    # except the name. Excluded the same way Form D and Form 5500 already
+    # exclude pooled/financial vehicles - just by name here, since this file
+    # carries no industry classification to filter on instead.
     batch = datetime.now(timezone.utc).strftime("%Y-%m")
     try:
         raw = await _http_get(SEC_TICKERS_URL, timeout=60.0)
@@ -299,12 +312,17 @@ async def ingest_sec_public() -> dict[str, Any]:
         await _record_ingest("sec_public", batch, 0, 0, "failed", f"{type(exc).__name__}: {exc}")
         return {"ok": False, "source": "sec_public", "error": str(exc)}
     rows = []
-    for rank, item in enumerate((data or {}).values()):
+    skipped_etf = 0
+    rank = 0
+    for item in (data or {}).values():
         if not isinstance(item, dict):
             continue
         cik = str(item.get("cik_str") or "").strip()
         name = _title_case(str(item.get("title") or "").strip())
         if not cik or not name:
+            continue
+        if _SEC_FUND_NAME.search(name):
+            skipped_etf += 1
             continue
         rows.append({
             "source": "sec_public", "source_key": cik.zfill(10), "tier": "us_public", "country": "US",
@@ -312,8 +330,9 @@ async def ingest_sec_public() -> dict[str, Any]:
             "metadata": {"ticker": str(item.get("ticker") or "").strip(), "cik": cik},
             "prominence_rank": rank,
         })
+        rank += 1
     written = await upsert_companies(rows)
-    await _record_ingest("sec_public", batch, len(rows), written, "ok")
+    await _record_ingest("sec_public", batch, len(rows), written, "ok", f"{skipped_etf} fund/ETF ticker(s) excluded")
     return {"ok": True, "source": "sec_public", "seen": len(rows), "written": written}
 
 
@@ -1221,10 +1240,40 @@ async def search_register(
 ) -> dict[str, Any]:
     where: list[str] = []
     args: list[Any] = []
+    # A query ranked only by recency/amount treats "contains these letters
+    # anywhere" as good as "is this company". Typing "meta" must not bury
+    # Meta Platforms under every UK company with "metal" in its name or
+    # sector, just because "meta" is a literal prefix of "metal". Match
+    # quality is ranked first, in tiers a plain substring search cannot
+    # express: exact name, name starts with the query as a whole word, the
+    # query as a whole word elsewhere in the name, a plain prefix, a plain
+    # substring in the name, and last a sector-label-only match.
+    relevance_case = "0.0"
+    relevance_args: list[Any] = []
     if q and q.strip():
-        where.append("(lower(company_name) LIKE ? OR lower(COALESCE(sector_label,'')) LIKE ?)")
-        term = f"%{q.strip().lower()}%"
-        args.extend([term, term])
+        raw = q.strip().lower()
+        # Escape the query's own literal % and _ so a member searching for
+        # them is not exposed to SQL LIKE wildcard behaviour.
+        escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append(
+            "(lower(company_name) LIKE ? ESCAPE '\\' OR lower(COALESCE(sector_label,'')) LIKE ? ESCAPE '\\')"
+        )
+        args.extend([f"%{escaped}%", f"%{escaped}%"])
+        relevance_case = """CASE
+            WHEN lower(company_name) = ? THEN 0
+            WHEN lower(company_name) LIKE ? ESCAPE '\\' THEN 1
+            WHEN lower(company_name) LIKE ? ESCAPE '\\' OR lower(company_name) LIKE ? ESCAPE '\\' THEN 2
+            WHEN lower(company_name) LIKE ? ESCAPE '\\' THEN 3
+            WHEN lower(company_name) LIKE ? ESCAPE '\\' THEN 4
+            ELSE 5
+        END"""
+        relevance_args = [
+            raw,
+            f"{escaped} %",
+            f"% {escaped} %", f"% {escaped}",
+            f"{escaped}%",
+            f"%{escaped}%",
+        ]
     if tier and tier.strip():
         where.append("tier = ?")
         args.append(tier.strip())
@@ -1249,7 +1298,8 @@ async def search_register(
                        (SELECT COUNT(*) FROM company_register_people p
                          WHERE p.register_id = r.id AND p.person_level = 'working') AS working_count
                 FROM company_register r {clause}
-                ORDER BY COALESCE(last_event_at, '') DESC, COALESCE(last_event_amount, 0) DESC,
+                ORDER BY {relevance_case} ASC,
+                         COALESCE(last_event_at, '') DESC, COALESCE(last_event_amount, 0) DESC,
                          officer_count DESC,
                          -- A listed company has no filing date or dollar amount to
                          -- rank by - nothing above this line ever distinguishes it
@@ -1261,7 +1311,7 @@ async def search_register(
                          CASE WHEN prominence_rank IS NOT NULL THEN prominence_rank ELSE 999999999 END ASC,
                          company_name
                 LIMIT ? OFFSET ?""",
-            (*args, limit, max(0, int(offset))),
+            (*args, *relevance_args, limit, max(0, int(offset))),
         )).fetchall()
         items = []
         for row in rows:
