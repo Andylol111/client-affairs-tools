@@ -37,8 +37,6 @@ async function mockWorkspace(page: Page) {
     else if (/\/documents\/\d+\/shares$/.test(path)) body = [];
     else if (path === '/api/contacts') body = { items: [], total: 0, limit: 100, offset: 0 };
     else if (path === '/api/ai/models') body = { groups: [] };
-    else if (path === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (path === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
     else if (path === '/api/outreach/metrics/pipeline') body = { by_status: [] };
     else if (path === '/api/analytics/time-series') body = { labels: [], sent: [], opened: [], replied: [] };
     else if (path === '/api/analytics/insights') body = { insights: [] };
@@ -53,19 +51,21 @@ async function mockWorkspace(page: Page) {
 
 test.beforeEach(async ({ page }) => { await mockWorkspace(page); });
 
-test('campaign summaries never expose another sender’s controls', async ({ page }) => {
-  await page.goto('/campaigns');
-  const own = page.getByRole('article').filter({ hasText: 'Alice outreach' });
-  await expect(own.getByRole('button', { name: 'Review', exact: true })).toBeVisible();
-  const other = page.getByRole('article').filter({ hasText: 'Bob outreach' });
-  await expect(other.getByText('Shared activity · read only')).toBeVisible();
-  await expect(other.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
-  await expect(other.getByRole('button', { name: 'Review', exact: true })).toHaveCount(0);
-  const legacy = page.getByRole('article').filter({ hasText: 'Legacy outreach' });
-  await expect(legacy.getByText('Ownership needs review')).toBeVisible();
-  await legacy.getByRole('button', { name: 'Review ownership evidence' }).click();
-  await expect(legacy.getByText('Recorded senders:', { exact: false })).toContainText('bob@yale.edu');
-  await expect(legacy.getByRole('button', { name: 'Review assignment' })).toBeDisabled();
+test('home only lists campaigns the signed-in member can manage', async ({ page }) => {
+  await page.goto('/');
+  const campaignsSection = page.getByRole('region', { name: 'Your campaigns' });
+  await expect(campaignsSection.getByText('Alice outreach')).toBeVisible();
+  await expect(campaignsSection.getByText('Bob outreach')).toHaveCount(0);
+  await expect(campaignsSection.getByText('Legacy outreach')).toHaveCount(0);
+});
+
+test('an admin can resolve an orphaned campaign’s ownership from home', async ({ page }) => {
+  await page.goto('/');
+  const review = page.getByRole('region', { name: 'Needs ownership review' });
+  await expect(review.getByText('Legacy outreach')).toBeVisible();
+  await review.getByRole('button', { name: 'Review ownership evidence' }).click();
+  await expect(review.getByText('Recorded senders:', { exact: false })).toContainText('bob@yale.edu');
+  await expect(review.getByRole('button', { name: 'Review assignment' })).toBeDisabled();
 });
 
 test('unauthorized detail displays an error instead of loading forever', async ({ page }) => {
@@ -75,32 +75,7 @@ test('unauthorized detail displays an error instead of loading forever', async (
   await expect(page.getByRole('button', { name: 'Review & release' })).toHaveCount(0);
 });
 
-test('document owner controls stay separate from project viewing', async ({ page }) => {
-  await page.goto('/documents');
-  await page.getByRole('button', { name: 'Project report 2', exact: true }).click();
-  const details = page.getByRole('region', { name: 'Document details' });
-  await expect(details.getByRole('button', { name: 'Download latest' })).toBeVisible();
-  await expect(details.getByRole('button', { name: 'Create external share link' })).toHaveCount(0);
-  await expect(details.getByLabel('Upload a version', { exact: false })).toHaveCount(0);
-});
-
-test('workspace scroll keeps navigation stable without a fixed backdrop', async ({ page }, testInfo) => {
-  await page.goto('/documents');
-  await expect(page.getByRole('heading', { level: 1, name: 'Documents' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Project report 24', exact: true })).toBeAttached();
-  const header = page.locator('.app-shell-header');
-  const before = await header.boundingBox();
-  await page.evaluate(() => window.scrollTo(0, 700));
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
-  const after = await header.boundingBox();
-  expect(Math.abs((before?.y || 0) - (after?.y || 0))).toBeLessThan(2);
-  expect(await page.locator('main').evaluate(el => getComputedStyle(el).overflowY)).toBe('visible');
-  expect(await page.locator('.app-shell').evaluate(el => getComputedStyle(el).backgroundImage)).toBe('none');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath('documents-scrolled.png'), fullPage: false });
-});
-
-for (const [path, title] of [['/', 'Home'], ['/campaigns', 'Campaigns'], ['/documents', 'Documents'], ['/projects', 'Projects'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Full breakdown'], ['/yucgoutreach', 'Target lists'], ['/admin', 'Admin']]) {
+for (const [path, title] of [['/', 'Home'], ['/profile?tab=integrations', 'Profile & preferences'], ['/studio', 'Drafts'], ['/scraper', 'Find contacts'], ['/outreach', 'Pipeline'], ['/analytics', 'Full breakdown'], ['/admin', 'Admin']]) {
   test(`accessible page: ${title}`, async ({ page }, testInfo) => {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
@@ -174,28 +149,15 @@ test('campaign review exposes the exact recipient message for repair before rele
   await expect.poll(() => updateBody).toBe('Recipient-specific revision');
 });
 
-test('pending file reservations expose recovery only to the owner', async ({ page }) => {
-  await page.route('**/api/workspace/documents/1/versions', route => route.fulfill({ json: [{ id: 7, state: 'pending', filename: 'unfinished.pdf', byte_size: 1500, created_at: 1788960000 }] }));
-  await page.route('**/api/workspace/documents/1/uploads/7/abandon', route => route.fulfill({ status: 409, json: { detail: 'Upload link has not expired.' } }));
-  await page.goto('/documents');
-  await page.getByRole('button', { name: 'Project report 1', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Check upload' })).toBeVisible();
-  await page.getByRole('button', { name: 'Cancel unused upload' }).click();
-  await expect(page.getByRole('alert')).toContainText('Upload link has not expired.');
-  await expect(page.getByText('unfinished.pdf')).toBeVisible();
-});
-
-test('invalid quota is visible and never rendered as NaN', async ({ page }) => {
-  await page.route('**/api/workspace/storage-quota', route => route.fulfill({ json: {} }));
-  await page.goto('/documents');
-  await expect(page.getByRole('alert')).toContainText('Storage usage is unavailable');
-  await expect(page.getByText(/NaN/)).toHaveCount(0);
-});
-
 test('campaign deletion confirmation contains keyboard focus', async ({ page }) => {
-  await page.goto('/campaigns');
-  const own = page.getByRole('article').filter({ hasText: 'Alice outreach' });
-  await own.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.route('**/api/campaigns/1', async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    return route.fulfill({ json: { ...campaigns[0], readiness: { ready: true, issues: [] }, counts: {}, contacts: [] } });
+  });
+  await page.route('**/api/campaigns/1/dispatches', route => route.fulfill({ json: [] }));
+  await page.goto('/campaigns/1');
+  const deleteButton = page.getByRole('button', { name: 'Delete', exact: true });
+  await deleteButton.click();
   const dialog = page.getByRole('dialog', { name: 'Delete campaign?' });
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Shift+Tab');
@@ -204,7 +166,7 @@ test('campaign deletion confirmation contains keyboard focus', async ({ page }) 
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expect(own.getByRole('button', { name: 'Delete', exact: true })).toBeFocused();
+  await expect(deleteButton).toBeFocused();
 });
 
 test('studio workbench fills the desktop viewport instead of leaving a short generator column', async ({ page }, testInfo) => {

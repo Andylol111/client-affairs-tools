@@ -4,35 +4,14 @@ import { api } from '../api';
 export type CompanyOption = {
   name: string;
   domain?: string;
-  source: 'pipeline' | 'targets' | 'register';
+  source: 'pipeline' | 'register';
   contactCount?: number;
   sector?: string;
-  angle?: string;
   hint?: string;
 };
 
 function norm(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function mergeOptions(pipeline: CompanyOption[], targets: CompanyOption[]): CompanyOption[] {
-  const byKey = new Map<string, CompanyOption>();
-  for (const option of [...pipeline, ...targets]) {
-    const key = option.domain ? `d:${norm(option.domain)}` : `n:${norm(option.name)}`;
-    const prior = byKey.get(key);
-    if (!prior) {
-      byKey.set(key, option);
-      continue;
-    }
-    byKey.set(key, {
-      ...prior,
-      ...option,
-      contactCount: option.contactCount ?? prior.contactCount,
-      domain: option.domain || prior.domain,
-      source: prior.source === 'pipeline' || option.source === 'pipeline' ? 'pipeline' : option.source,
-    });
-  }
-  return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export default function CompanyAutocomplete({
@@ -63,10 +42,7 @@ export default function CompanyAutocomplete({
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      api.contacts.companiesSummary().catch(() => []),
-      api.yucg.listProspects({ limit: 400 }).catch(() => ({ prospects: [], count: 0 })),
-    ]).then(([summary, prospects]) => {
+    api.contacts.companiesSummary().then((summary) => {
       if (cancelled) return;
       const pipeline = (Array.isArray(summary) ? summary : []).map((row) => ({
         name: row.company,
@@ -74,14 +50,8 @@ export default function CompanyAutocomplete({
         source: 'pipeline' as const,
         contactCount: row.contact_count,
       }));
-      const targets = (prospects.prospects || []).map((row) => ({
-        name: row.company,
-        source: 'targets' as const,
-        sector: row.sector,
-        angle: row.recommended_message_angle,
-      }));
-      setOptions(mergeOptions(pipeline, targets));
-    });
+      setOptions(pipeline.sort((a, b) => a.name.localeCompare(b.name)));
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -193,8 +163,7 @@ export default function CompanyAutocomplete({
               <div className="font-medium text-deep-navy">{option.name}</div>
               <div className="text-xs text-slate-500">
                 {option.domain || option.sector
-                  || (option.source === 'pipeline' ? 'In pipeline'
-                    : option.source === 'register' ? 'Public register' : 'Target list')}
+                  || (option.source === 'pipeline' ? 'In pipeline' : 'Public register')}
                 {option.source === 'register' && option.hint ? ` · ${option.hint}` : ''}
                 {option.contactCount != null ? ` · ${option.contactCount} saved` : ''}
               </div>

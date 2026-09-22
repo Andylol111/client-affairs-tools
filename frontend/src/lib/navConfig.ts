@@ -6,13 +6,9 @@ export type NavItemId =
   | 'dashboard'
   | 'scraper'
   | 'studio'
-  | 'campaigns'
   | 'analytics'
   | 'outreach'
-  | 'yucgoutreach'
-  | 'admin'
-  | 'documents'
-  | 'projects';
+  | 'admin';
 
 export type NavItem = {
   id: NavItemId;
@@ -24,11 +20,7 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', to: '/', label: 'Home', shortLabel: 'Home' },
-  { id: 'projects', to: '/projects', label: 'Projects', shortLabel: 'Projects' },
-  { id: 'documents', to: '/documents', label: 'Documents', shortLabel: 'Documents' },
-  { id: 'yucgoutreach', to: '/yucgoutreach', label: 'Target lists', shortLabel: 'Targets' },
   { id: 'studio', to: '/studio', label: 'Drafts', shortLabel: 'Drafts' },
-  { id: 'campaigns', to: '/campaigns', label: 'Campaigns', shortLabel: 'Campaigns' },
   { id: 'outreach', to: '/outreach', label: 'Pipeline', shortLabel: 'Pipeline' },
   { id: 'scraper', to: '/scraper', label: 'Find contacts', shortLabel: 'Contacts' },
 ];
@@ -49,14 +41,13 @@ export const ADMIN_NAV_ITEM: NavItem = {
  * Both shells read this: desktop renders TOP_LEVEL_IDS then NAV_GROUPS, mobile
  * renders MOBILE_PRIMARY_IDS with the drawer covering the rest.
  */
-export const TOP_LEVEL_IDS: NavItemId[] = ['dashboard', 'scraper', 'campaigns'];
+export const TOP_LEVEL_IDS: NavItemId[] = ['dashboard', 'scraper'];
 
 export const NAV_GROUPS: { label: string; ids: NavItemId[] }[] = [
   { label: 'Outreach', ids: ['studio', 'outreach'] },
-  { label: 'Club', ids: ['projects', 'documents'] },
 ];
 
-export const MOBILE_PRIMARY_IDS: NavItemId[] = ['dashboard', 'scraper', 'studio', 'campaigns'];
+export const MOBILE_PRIMARY_IDS: NavItemId[] = ['dashboard', 'scraper', 'studio'];
 
 export function getNavItems(isAdmin: boolean): NavItem[] {
   return isAdmin ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;

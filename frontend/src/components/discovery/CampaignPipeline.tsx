@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api, type Contact, type ImportOutcome, type YucgRecommendation } from '../../api';
+import { api, type Contact, type ImportOutcome } from '../../api';
 import CompanyAutocomplete from '../CompanyAutocomplete';
 import RecipientPicker, { type PickerMode } from './RecipientPicker';
 import CompanyLanes, { type Lane } from './CompanyLanes';
@@ -108,7 +108,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   );
   const [step, setStep] = useState<Step>(arrivedWithSearch ? 2 : 1);
 
-  const [suggested, setSuggested] = useState<YucgRecommendation[]>([]);
   // A company is a name and, when something already knows it, a domain: the
   // register hands one over so the search does not re-derive a domain it
   // was just given. A typed name has none and the server infers it.
@@ -164,11 +163,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
   const [error, setError] = useState('');
   const [built, setBuilt] = useState<{ campaign_id: number; created: number } | null>(null);
 
-  useEffect(() => {
-    api.yucg.recommend({ n: 12 })
-      .then((res) => setSuggested(Array.isArray(res.recommendations) ? res.recommendations : []))
-      .catch(() => setSuggested([]));
-  }, []);
 
   const chosenNames = useMemo(() => chosen.map((c) => c.name), [chosen]);
   const isChosen = (name: string) => chosen.some((c) => companyKey(c.name) === companyKey(name));
@@ -178,12 +172,8 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
       ? current.filter((c) => companyKey(c.name) !== companyKey(name))
       : [...current, { name }]);
 
-  const chipNames = useMemo(() => Array.from(new Set([
-    ...suggested.map((rec) => rec.prospect?.company).filter((n): n is string => !!n),
-    ...chosenNames,
-  ])), [suggested, chosenNames]);
-  const visibleChips = showAllChips ? chipNames : chipNames.slice(0, CHIP_WINDOW);
-  const hiddenChips = chipNames.length - visibleChips.length;
+  const visibleChips = showAllChips ? chosenNames : chosenNames.slice(0, CHIP_WINDOW);
+  const hiddenChips = chosenNames.length - visibleChips.length;
 
   // The people on file at the chosen companies follow the companies: choose
   // one and its people appear, at whatever step. Debounced so a run of chip
@@ -384,7 +374,7 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
       <div ref={rootRef}
            data-rail
            className="xl:col-span-2 min-h-0 xl:max-h-full xl:overflow-y-auto surface-card rounded-2xl border border-[var(--border)] shadow-sm overflow-hidden self-start">
-      <StepHeading n={1} title="Choose companies" hint={chosen.length ? `${chosen.length} chosen` : 'From the club list, or type any name'} step={step} onSelect={setStep} />
+      <StepHeading n={1} title="Choose companies" hint={chosen.length ? `${chosen.length} chosen` : 'Type any company name'} step={step} onSelect={setStep} />
       {step === 1 && (
         <div className="px-5 pb-5 space-y-3 border-b border-pale-sky">
           <div className="flex gap-2 items-end">
@@ -427,7 +417,7 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
           {/* Only a screenful of chips is drawn: a selection of several hundred
               companies is a count plus the ones being worked on, not eight
               hundred DOM nodes. */}
-          <p className="text-xs font-medium text-slate-500 pt-1">Or pick from the club list</p>
+          {chosenNames.length > 0 && <p className="text-xs font-medium text-slate-500 pt-1">Chosen companies</p>}
           <div className="flex flex-wrap gap-2" data-testid="company-chips">
             {visibleChips.map((name) => {
               const on = isChosen(name);
@@ -633,10 +623,6 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
                 />
                 <span>
                   Write a different message for each company
-                  <span className="block text-xs text-slate-500">
-                    Each one is written from what the club already recorded about that company —
-                    why it fits, the angle, the Yale connection.
-                  </span>
                 </span>
               </label>
             )}

@@ -17,13 +17,6 @@ async function mockPipeline(page: Page) {
     const p = url.pathname;
     let body: unknown = {};
     if (p === '/api/auth/me') body = { authenticated: true, user };
-    else if (p === '/api/yucg/prospects/recommend') body = {
-      recommendations: [
-        { prospect: { row_index: 1, company: 'A24', sector: 'Entertainment' } },
-        { prospect: { row_index: 2, company: 'NEON', sector: 'Entertainment' } },
-      ],
-      count: 2,
-    };
     else if (p === '/api/contacts') body = { items: PEOPLE, total: PEOPLE.length, limit: 400, offset: 0 };
     else if (p === '/api/campaigns/build') {
       const payload = route.request().postDataJSON();
@@ -53,8 +46,6 @@ async function mockPipeline(page: Page) {
     else if (p === '/api/contacts/email-patterns') body = { domain: '', count: 0, patterns: [] };
     else if (p === '/api/yucgoutreach/runs') body = [];
     else if (p === '/api/outreach/flows') body = [];
-    else if (p === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (p === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
     else if (p === '/api/yucgoutreach/register/summary') body = { tiers: [], sectors: [], recent_ingests: [] };
     else if (p === '/api/yucgoutreach/register') body = { items: [], total: 0, limit: 40, offset: 0 };
     else if (p === '/api/ai/models') body = { groups: [] };
@@ -73,7 +64,8 @@ test('companies to a reviewable campaign without leaving the page', async ({ pag
   const rail = pipeline.locator('[data-rail]');
 
   // 1. Companies are a multiple choice, not one at a time.
-  await rail.getByTestId('company-chips').getByRole('button', { name: 'A24', exact: true }).click();
+  await rail.getByLabel('Company').fill('A24');
+  await rail.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(rail.getByText('1 chosen')).toBeVisible();
   await rail.getByRole('button', { name: /^Find people/ }).click();
 
@@ -140,16 +132,16 @@ test('a group handed over from Studio arrives loaded, and AI drafts one message 
   await expect(rail.getByLabel('Message', { exact: true })).toHaveValue(/About \{company\}/);
 });
 
-test('a company in neither the club list nor the public register can still be worked', async ({ page }) => {
+test('a company that is not on file anywhere can still be worked', async ({ page }) => {
   await mockPipeline(page);
   await page.goto('/scraper?view=company');
 
   const pipeline = page.locator('[data-section="campaign-pipeline"]');
   const rail = pipeline.locator('[data-rail]');
 
-  // The club target list and the 215k-row register are starting points, not a
-  // fence. A member who knows a company nobody has heard of types the name
-  // and works it exactly like any other.
+  // The public register is a starting point, not a fence. A member who knows
+  // a company nobody has heard of types the name and works it exactly like
+  // any other.
   await rail.getByLabel('Company').fill('Bartik Family Foundation');
   await rail.getByRole('button', { name: 'Add', exact: true }).click();
 

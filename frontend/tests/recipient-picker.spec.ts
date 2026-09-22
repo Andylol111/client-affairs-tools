@@ -37,10 +37,6 @@ async function mockPicker(page: Page, opts: { busy?: boolean } = {}) {
     let body: unknown = {};
     let status = 200;
     if (p === '/api/auth/me') body = { authenticated: true, user };
-    else if (p === '/api/yucg/prospects/recommend') body = {
-      recommendations: [{ prospect: { row_index: 1, company: 'A24', sector: 'Entertainment' } }],
-      count: 1,
-    };
     else if (p === '/api/contacts') {
       const items = added ? [...FOUND, AFTER_ADD] : FOUND;
       body = { items, total: items.length, limit: 800, offset: 0 };
@@ -93,8 +89,6 @@ async function mockPicker(page: Page, opts: { busy?: boolean } = {}) {
     }
     else if (p === '/api/contacts/companies/summary') body = [];
     else if (p === '/api/outreach/flows') body = [];
-    else if (p === '/api/yucg/prospects') body = { prospects: [], count: 0 };
-    else if (p === '/api/yucg/prospects/meta') body = { sectors: [], contact_types: [] };
     else if (p === '/api/yucgoutreach/register/summary') body = { tiers: [], sectors: [], recent_ingests: [] };
     else if (p === '/api/yucgoutreach/register') body = { items: [], total: 0, limit: 40, offset: 0 };
     else if (p === '/api/yucgoutreach/role-suggestions') body = { company: url.searchParams.get('company'), roles: [], equivalents: [], sources: {} };

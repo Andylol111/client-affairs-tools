@@ -4,7 +4,6 @@ import { api, type RegisterCompany, type RegisterSummary } from '../../api';
 
 const TIERS: { id: string; label: string; hint: string }[] = [
   { id: '', label: 'All', hint: 'Everything on record' },
-  { id: 'club_targets', label: 'Club target list', hint: 'Companies the club picked and wrote up: why they fit, the Yale connection, the role to aim at' },
   { id: 'us_nonprofit', label: 'Nonprofits that buy advice', hint: 'US nonprofits with $5M+ revenue that already pay outside firms for management, legal or accounting work (IRS Form 990), with the officers they named on the same return' },
   { id: 'us_employer', label: 'US employers', hint: 'US companies that file a benefit plan for their own staff (DOL Form 5500), with the headcount they reported' },
   { id: 'us_private', label: 'Recently funded', hint: 'US companies that filed a Reg D raise — the startup pool' },
@@ -27,7 +26,7 @@ function money(value?: number | null): string {
 export default function CompanyRegister() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
-  const [tier, setTier] = useState('club_targets');
+  const [tier, setTier] = useState('');
   const [sector, setSector] = useState('');
   const [withOfficers, setWithOfficers] = useState(false);
   const [items, setItems] = useState<RegisterCompany[]>([]);

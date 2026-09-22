@@ -839,6 +839,11 @@ async def init_db():
             await db.commit()
         except Exception:
             pass
+        try:
+            await db.execute("ALTER TABLE company_register ADD COLUMN prominence_rank INTEGER")
+            await db.commit()
+        except Exception:
+            pass
 
         for col, col_type in [
             ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
