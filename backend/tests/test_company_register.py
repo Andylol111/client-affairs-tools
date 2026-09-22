@@ -136,6 +136,15 @@ def tests() -> None:
         names = {item['company_name'] for item in page['items']}
         assert names == {'Apple Inc.', 'Microsoft Corp', 'Nova Robotics Inc'}  # shouty name title-cased
         assert page['items'][0]['company_name'] == 'Nova Robotics Inc'  # newest raise ranks first
+        # Neither listed company has a filing date or dollar amount to rank
+        # by - that used to mean alphabetical, so "Apple" beat "Microsoft"
+        # only because of the letter A. SEC serves company_tickers.json in
+        # market-cap order (Apple at key "0", Microsoft at "1" here); keeping
+        # that order is what lets a big company outrank an obscure one with
+        # nothing else to go on.
+        assert [i['company_name'] for i in page['items'][1:]] == ['Apple Inc.', 'Microsoft Corp']
+        assert page['items'][1]['prominence_rank'] == 0
+        assert page['items'][2]['prominence_rank'] == 1
         assert page['items'][0]['officer_count'] == 2
 
         startups = asyncio.run(cr.search_register(tier='us_private'))
@@ -567,30 +576,46 @@ def person_level_tests() -> None:
     assert level(None) == 'unknown'
 
 
-def club_name_is_the_company_not_the_segment() -> None:
-    """The sheet's company cell sometimes holds the segment to pitch —
-    "McKinsey & Company — New Haven / Public Sector" — and that cell is the
-    search key Find people crawls with, so the whole string matched no
-    website and McKinsey appeared twice under different names. The segment is
-    kept; it just stops being part of the name."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from app.services.company_register import _split_company_qualifier
+def prominence_rank_tests() -> None:
+    """The Apple/Microsoft case above also happens to be alphabetical, which
+    would let a regression back to plain `company_name` ordering slip past
+    unnoticed. This uses a big company with a late-alphabet name and a small
+    one with an early-alphabet name, so only real rank-based ordering passes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DATABASE_URL'] = f'sqlite:///{Path(tmp) / "t.db"}'
+        for mod in [m for m in list(sys.modules) if m.startswith('app.')]:
+            del sys.modules[mod]
 
-    assert _split_company_qualifier('McKinsey & Company — New Haven / Public Sector') == (
-        'McKinsey & Company', 'New Haven / Public Sector')
-    assert _split_company_qualifier('Deloitte – Public Sector') == ('Deloitte', 'Public Sector')
+        from app.database import init_db
+        from app.services import company_register as cr
 
-    # Only a spaced em or en dash splits. Names that really contain a hyphen,
-    # a slash or a parenthetical stay whole, or Find people would search for
-    # half an airport.
-    for whole in (
-        'Tweed-New Haven Airport (HVN)',
-        'Savannah/Hilton Head (SAV)',
-        'GE Aerospace (CF34 / regional engine MRO)',
-        'Zipcar / Avis Budget',
-        'Mitsubishi Aircraft (SpaceJet legacy / MRO partners)',
-    ):
-        assert _split_company_qualifier(whole) == (whole, None), whole
+        asyncio.run(init_db())
+
+        async def fake_get(url, timeout=120.0):
+            return (
+                b'{"0":{"cik_str":1,"ticker":"ZETA","title":"ZETA GLOBAL HOLDINGS CORP"},'
+                b'"1":{"cik_str":2,"ticker":"ACME","title":"ACME MICRO CAP INC"}}'
+            )
+
+        with patch.object(cr, '_http_get', fake_get):
+            result = asyncio.run(cr.ingest_sec_public())
+        assert result['written'] == 2
+
+        page = asyncio.run(cr.search_register(limit=10))
+        # Plain alphabetical would put Acme first. SEC's own order (Zeta at
+        # key "0") is what a member actually wants: the company that exists
+        # first in the source ranks first, not the one whose name starts
+        # earlier in the alphabet.
+        assert [i['company_name'] for i in page['items']] == ['Zeta Global Holdings Corp', 'Acme Micro Cap Inc']
+
+        # Re-ingesting must not scramble the order: SEC's file order is
+        # stable across runs, and the stored rank should be too.
+        with patch.object(cr, '_http_get', fake_get):
+            again = asyncio.run(cr.ingest_sec_public())
+        assert again['written'] == 2
+        page = asyncio.run(cr.search_register(limit=10))
+        assert [i['company_name'] for i in page['items']] == ['Zeta Global Holdings Corp', 'Acme Micro Cap Inc']
+
 
 if __name__ == '__main__':
     tests()
@@ -600,5 +625,5 @@ if __name__ == '__main__':
     nonprofit_buyer_tests()
     part_vii_officer_tests()
     person_level_tests()
-    club_name_is_the_company_not_the_segment()
+    prominence_rank_tests()
     print('company register: ok')

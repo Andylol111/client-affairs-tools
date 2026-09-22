@@ -6,6 +6,16 @@ import GmailConnection from '../components/GmailConnection';
 import SlackIntegration from '../components/SlackIntegration';
 import { canManageCampaign } from '../lib/campaignAccess';
 import OutcomePie from '../components/OutcomePie';
+import { StatusBadge } from '../components/ui/Primitives';
+import CampaignOwnershipReview from '../components/campaigns/CampaignOwnershipReview';
+
+function campaignTone(status: string): 'neutral' | 'info' | 'warning' | 'success' | 'danger' {
+  if (status === 'sent') return 'success';
+  if (status === 'releasing') return 'info';
+  if (status === 'needs_attention') return 'danger';
+  if (status === 'paused') return 'warning';
+  return 'neutral';
+}
 
 const DEFAULT_DATA = {
   contacts_discovered_today: 0,
@@ -27,14 +37,14 @@ function slicesFor(split: OutcomeSplit | null | undefined, mine: boolean) {
   return [
     { label: 'replied', value: split?.replied ?? 0, colour: 'var(--chart-good)', to: `/outreach?status=replied${scope}` },
     { label: 'awaiting a reply', value: split?.awaiting ?? 0, colour: 'var(--chart-4)', to: `/outreach?status=contacted${scope}` },
-    { label: 'bounced', value: split?.bounced ?? 0, colour: 'var(--chart-bad)', to: `/campaigns?filter=needs_attention` },
-    { label: 'still queued', value: split?.queued ?? 0, colour: 'var(--chart-idle)', to: `/campaigns` },
+    { label: 'bounced', value: split?.bounced ?? 0, colour: 'var(--chart-bad)', to: `/?filter=needs_attention` },
+    { label: 'still queued', value: split?.queued ?? 0, colour: 'var(--chart-idle)', to: `/` },
   ];
 }
 
 
 export default function Dashboard() {
-  const { user } = useOutletContext<{ user: { id?: number; name?: string; picture?: string } }>();
+  const { user } = useOutletContext<{ user: { id?: number; name?: string; picture?: string; role?: string } }>();
   const [data, setData] = useState<typeof DEFAULT_DATA>(DEFAULT_DATA);
   const [dueFollowUps, setDueFollowUps] = useState(0);
   const [apiError, setApiError] = useState(false);
@@ -42,6 +52,15 @@ export default function Dashboard() {
   const [myCompanies, setMyCompanies] = useState<CompanyReached[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [pipeline, setPipeline] = useState<PipelineMetrics['by_status']>([]);
+
+  const refreshCampaigns = async () => {
+    try {
+      const rows = await api.campaigns.list();
+      setCampaigns(Array.isArray(rows) ? rows : []);
+    } catch {
+      setCampaigns([]);
+    }
+  };
 
   useEffect(() => {
     api.analytics
@@ -79,9 +98,11 @@ export default function Dashboard() {
       .catch(() => setMyCompanies([]));
   }, [user?.id]);
 
-  const needsAttention = campaigns.filter(
-    (c) => canManageCampaign(c, user?.id) && (c.status === 'needs_attention' || c.status === 'paused')
-  );
+  const myCampaigns = [...campaigns]
+    .filter((c) => canManageCampaign(c, user?.id))
+    .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  const needsAttention = myCampaigns.filter((c) => c.status === 'needs_attention' || c.status === 'paused');
+  const orphanedCampaigns = campaigns.filter((c) => !c.owner_user_id && !c.sender_user_id);
   const pipelineTotal = pipeline.reduce((sum, p) => sum + p.count, 0);
 
   return (
@@ -116,12 +137,62 @@ export default function Dashboard() {
             </section>
           )}
 
+          {user.role === 'admin' && orphanedCampaigns.length > 0 && (
+            <section className="surface-card p-5" aria-label="Needs ownership review">
+              <h2 className="app-section-title mb-1">Needs ownership review</h2>
+              <p className="text-sm text-slate-600 mb-3">
+                These campaigns have no account on record. They cannot send until one is confirmed.
+              </p>
+              <div className="space-y-3">
+                {orphanedCampaigns.map((c) => (
+                  <div key={c.id}>
+                    <p className="font-medium text-deep-navy">{c.name}</p>
+                    <CampaignOwnershipReview campaignId={c.id} onResolved={refreshCampaigns} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* The standalone Campaigns page is disabled - a member's whole
+              campaign list lives here now, not just the ones needing
+              attention above. Creating one still only happens through
+              Drafts/Find people; an empty campaign with nobody in it was
+              never a page worth keeping. */}
+          <section className="surface-card p-5" aria-labelledby="my-campaigns-title">
+            <h2 id="my-campaigns-title" className="app-section-title mb-3">Your campaigns</h2>
+            {myCampaigns.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Nothing built yet. Draft a message in Find people or Drafts, then build the campaign.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {myCampaigns.slice(0, 8).map((c) => (
+                  <li key={c.id}>
+                    <Link
+                      to={`/campaigns/${c.id}`}
+                      className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 hover:bg-pale-sky/30"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="font-medium text-deep-navy truncate">{c.name}</span>
+                        <span className="block text-xs text-slate-500">
+                          {c.contact_count ?? 0} recipients · {c.sent_count ?? 0} sent
+                        </span>
+                      </span>
+                      <StatusBadge tone={campaignTone(c.status)}>{c.status.replace('_', ' ')}</StatusBadge>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Link to="/campaigns" className="surface-card p-4 block hover:bg-pale-sky/10">
+            <div className="surface-card p-4">
               <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Sending</div>
               <div className="mt-1 text-2xl font-bold text-deep-navy">{data.active_campaigns}</div>
               <div className="text-xs text-slate-500">active · {data.emails_in_queue} queued</div>
-            </Link>
+            </div>
             <Link to="/outreach" className="surface-card p-4 block hover:bg-pale-sky/10">
               <div className="text-xs font-medium text-slate-500 uppercase tracking-wide">Follow-ups due</div>
               <div className="mt-1 text-2xl font-bold text-deep-navy">{dueFollowUps}</div>

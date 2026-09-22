@@ -11,14 +11,11 @@ import { API_BASE } from './api';
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Scraper = lazy(() => import('./pages/Scraper'));
 const EmailStudio = lazy(() => import('./pages/EmailStudio'));
-const Campaigns = lazy(() => import('./pages/Campaigns'));
 const CampaignDetail = lazy(() => import('./pages/CampaignDetail'));
 const Analytics = lazy(() => import('./pages/Analytics'));
 const Outreach = lazy(() => import('./pages/Outreach'));
-const YucgOutreach = lazy(() => import('./pages/YucgOutreach'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Profile = lazy(() => import('./pages/Profile'));
-const Documents = lazy(() => import('./pages/Documents'));
 
 function AppContent() {
   const [user, setUser] = useState<{ id?: number; email: string; name?: string; picture?: string; role?: string } | null>(null);
@@ -106,16 +103,15 @@ function AppContent() {
         <Route index element={<Dashboard />} />
         <Route path="scraper" element={<Scraper />} />
         <Route path="studio" element={<EmailStudio />} />
-        <Route path="campaigns" element={<Campaigns />} />
+        {/* The campaign list is disabled: Home shows a member's own
+            campaigns now, so a stray link or bookmark lands there instead
+            of an empty shell - the same courtesy /settings already gets. */}
+        <Route path="campaigns" element={<Navigate to="/" replace />} />
         <Route path="campaigns/:id" element={<CampaignDetail />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="outreach" element={<Outreach />} />
-        <Route path="discovery" element={<Navigate to="/yucgoutreach" replace />} />
-        <Route path="yucgoutreach" element={<YucgOutreach />} />
         <Route path="admin" element={<Admin />} />
         <Route path="profile" element={<Profile />} />
-        <Route path="documents" element={<Documents />} />
-        <Route path="projects" element={<Documents projectsOnly />} />
         <Route path="settings" element={<Navigate to="/profile?tab=settings" replace />} />
       </Route>
     </Routes>

@@ -114,7 +114,7 @@ test('slice keyboard focus reaches the same rows as the mouse', async ({ page })
     .getByRole('link', { name: '1 bounced — open the list' }).first();
   await bounced.focus();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/\/campaigns\?filter=needs_attention/);
+  await expect(page).toHaveURL(/\/\?filter=needs_attention/);
 });
 
 test('"yours" stays yours after the click: the pipeline asks for your rows only', async ({ page }) => {

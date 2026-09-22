@@ -169,8 +169,9 @@ async def upsert_companies(rows: Iterable[dict[str, Any]]) -> int:
                 """INSERT INTO company_register (
                        source, source_key, tier, country, company_name, company_domain,
                        sector_code, sector_label, region, employees, employees_source,
-                       last_event_at, last_event_amount, last_event_kind, metadata_json
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       last_event_at, last_event_amount, last_event_kind, metadata_json,
+                       prominence_rank
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(source, source_key) DO UPDATE SET
                        company_name=excluded.company_name,
                        tier=excluded.tier,
@@ -184,6 +185,7 @@ async def upsert_companies(rows: Iterable[dict[str, Any]]) -> int:
                        last_event_amount=COALESCE(excluded.last_event_amount, company_register.last_event_amount),
                        last_event_kind=COALESCE(excluded.last_event_kind, company_register.last_event_kind),
                        metadata_json=COALESCE(excluded.metadata_json, company_register.metadata_json),
+                       prominence_rank=COALESCE(excluded.prominence_rank, company_register.prominence_rank),
                        updated_at=CURRENT_TIMESTAMP""",
                 (
                     row["source"], row["source_key"], row["tier"], row.get("country") or "US",
@@ -192,6 +194,7 @@ async def upsert_companies(rows: Iterable[dict[str, Any]]) -> int:
                     row.get("employees"), row.get("employees_source"),
                     row.get("last_event_at"), row.get("last_event_amount"), row.get("last_event_kind"),
                     json.dumps(row["metadata"]) if row.get("metadata") else None,
+                    row.get("prominence_rank"),
                 ),
             )
             written += 1
@@ -274,150 +277,20 @@ async def _attach_people(people_by_key: dict[tuple[str, str], list[dict[str, Any
     return attached
 
 
-_QUALIFIER = re.compile(r"\s+[—–]\s+(.+)$")
-
-
-def _split_company_qualifier(name: str) -> tuple[str, str | None]:
-    """Separate "McKinsey & Company — New Haven / Public Sector".
-
-    The sheet's company cell sometimes carries the segment to pitch rather
-    than the company's name, and that cell is the search key: Find people
-    would crawl for the whole string and match no website. The qualifier is
-    kept as the row's segment, so nothing a member wrote is lost — only a
-    spaced em or en dash splits, which no company name uses, so
-    "Tweed-New Haven Airport (HVN)" is left exactly as it is.
-    """
-    cleaned = (name or "").strip()
-    match = _QUALIFIER.search(cleaned)
-    if not match:
-        return cleaned, None
-    return cleaned[: match.start()].strip(), match.group(1).strip() or None
-
-
-async def ingest_club_targets() -> dict[str, Any]:
-    """Fold the club's own curated target list into the register.
-
-    Two company indexes that cannot talk to each other is the whole problem:
-    the spreadsheet holds ~600 companies somebody thought about - why they
-    fit, the Yale connection, the role to aim at, the angle to open with -
-    while the register holds 200k+ found in public filings. Judgement lives
-    in one and reach in the other, and a member had to know which page to
-    visit.
-
-    So the curated rows become a tier like any other, keeping their reasoning
-    in metadata. Rows key on the **company and segment**, not the spreadsheet
-    line: an admin who inserts or deletes a row in the middle of the sheet
-    moves every line beneath it, and line-keyed rows would be deleted and
-    recreated under new keys - losing their first-seen date and their register
-    id for half the tier on a one-row edit. Keyed by company, moving a row
-    changes nothing, editing one updates it in place, and deleting one takes
-    it out of the tier, because an admin who can add a target must be able to
-    remove one.
-
-    Two lines for the same company and the same segment are two notes on one
-    target: they become one row holding both write-ups, and the fold is
-    reported rather than done quietly. Lines that differ by segment stay
-    separate, because they are separate pitches.
-    """
-    from app.services.prospect_coordinator import load_prospects
-
-    batch = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    try:
-        prospects = load_prospects()
-    except FileNotFoundError as exc:
-        await _record_ingest("club_sheet", batch, 0, 0, "failed", str(exc)[:200])
-        return {"ok": False, "source": "club_sheet", "error": str(exc)[:200]}
-
-    by_company: dict[str, dict[str, Any]] = {}
-    folded: list[str] = []
-    lines = 0
-    for row in prospects:
-        name, segment = _split_company_qualifier(_title_case(str(row.get("company") or "").strip()))
-        index = row.get("row_index")
-        if not name or index is None:
-            continue
-        lines += 1
-        key = _club_key(name, segment)
-        score = row.get("incentive_score")
-        entry = {
-            # The reasoning is the point of this tier. It is what a member
-            # would otherwise have to rebuild from scratch.
-            "why_attractive": (row.get("why_attractive") or None),
-            "engagement_theme": (row.get("engagement_theme") or None),
-            "yale_hook": (row.get("yale_hook") or None),
-            "target_role_title": (row.get("target_role_title") or row.get("contact_type") or None),
-            "first_message_angle": (row.get("first_message_angle") or None),
-            "priority_score": float(score) if isinstance(score, (int, float)) else None,
-            "segment": segment,
-            # The first sheet line for this company and segment. Later lines
-            # keep their own row_index inside also_listed.
-            "row_index": int(index),
-        }
-        existing = by_company.get(key)
-        if existing:
-            # Two lines naming the same company and the same segment are two
-            # notes on one target, so they become one row carrying both
-            # write-ups - never one reasoning quietly overwriting the other.
-            existing["metadata"].setdefault("also_listed", []).append(entry)
-            # Name the row it merged into, which is the one an admin can open.
-            folded.append(existing["company_name"])
-            continue
-        by_company[key] = {
-            "source": "club_sheet",
-            "source_key": key,
-            "tier": "club_targets",
-            "country": "US",
-            "company_name": name,
-            "sector_label": (row.get("sector") or segment or None),
-            "last_event_kind": "curated_by_the_club",
-            "metadata": entry,
-        }
-
-    rows = list(by_company.values())
-    written = await upsert_companies(rows)
-    dropped = await _prune_club_targets(set(by_company)) if rows else 0
-    await _record_ingest("club_sheet", batch, lines, written, "ok")
-    return {"ok": True, "source": "club_sheet", "seen": lines, "written": written,
-            "dropped": dropped, "folded": sorted(set(folded))}
-
-
-def _flatten_key(text: str | None) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
-
-
-def _club_key(name: str, segment: str | None) -> str:
-    """One row per company *and* segment.
-
-    "McKinsey & Company - New Haven / Public Sector" is a different pitch from
-    plain "McKinsey & Company", and the sheet's author meant both, so both
-    stay. Only lines identical in company and segment collapse.
-    """
-    return f"{_flatten_key(name)}|{_flatten_key(segment)}"
-
-
-async def _prune_club_targets(keys: set[str]) -> int:
-    """Delete curated rows the current sheet no longer lists."""
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT id, source_key FROM company_register WHERE source = 'club_sheet'")
-        stale = [row[0] for row in await cursor.fetchall() if str(row[1]) not in keys]
-        if not stale:
-            return 0
-        placeholders = ",".join("?" for _ in stale)
-        await db.execute(
-            f"DELETE FROM company_register_people WHERE register_id IN ({placeholders})", stale)
-        await db.execute(
-            f"DELETE FROM company_register WHERE id IN ({placeholders})", stale)
-        await db.commit()
-        return len(stale)
-    finally:
-        await db.close()
-
-
 async def ingest_sec_public() -> dict[str, Any]:
     """Every US listed company from SEC's ticker file. Sector is filled in
-    later by backfill_sec_sectors; SEC publishes no bulk SIC file."""
+    later by backfill_sec_sectors; SEC publishes no bulk SIC file.
+
+    SEC serves this file with the companies already ordered by market cap,
+    largest first - a fact the browsing endpoint has nothing else to rank
+    listed companies by, since none of them carry a filing date the way a
+    DOL, IRS or Companies House row does. Losing that order was why Meta and
+    every other big listed company sorted no differently from an obscure
+    micro-cap: alphabetically, wherever that happened to land among 200k+
+    rows with real recent activity. Keeping the file's own order as
+    ``prominence_rank`` is what lets search_register put them back where a
+    member expects to find them.
+    """
     batch = datetime.now(timezone.utc).strftime("%Y-%m")
     try:
         raw = await _http_get(SEC_TICKERS_URL, timeout=60.0)
@@ -426,7 +299,7 @@ async def ingest_sec_public() -> dict[str, Any]:
         await _record_ingest("sec_public", batch, 0, 0, "failed", f"{type(exc).__name__}: {exc}")
         return {"ok": False, "source": "sec_public", "error": str(exc)}
     rows = []
-    for item in (data or {}).values():
+    for rank, item in enumerate((data or {}).values()):
         if not isinstance(item, dict):
             continue
         cik = str(item.get("cik_str") or "").strip()
@@ -437,6 +310,7 @@ async def ingest_sec_public() -> dict[str, Any]:
             "source": "sec_public", "source_key": cik.zfill(10), "tier": "us_public", "country": "US",
             "company_name": name,
             "metadata": {"ticker": str(item.get("ticker") or "").strip(), "cik": cik},
+            "prominence_rank": rank,
         })
     written = await upsert_companies(rows)
     await _record_ingest("sec_public", batch, len(rows), written, "ok")
@@ -1290,14 +1164,6 @@ async def drain_company_register() -> dict[str, Any]:
         return {"ok": True, "skipped": "disabled"}
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     result: dict[str, Any] = {"ok": True}
-    # The club's own curated list first: it is small, it is the highest-intent
-    # pool, and re-reading it keeps the register in step with sheet edits.
-    # Unlike the bulk sources this is a local file of a few hundred rows, so
-    # it runs inline and the pass continues - returning here would mean a
-    # scheduler tick never reached the sources that actually need one.
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if not await _already_ingested("club_sheet", today):
-        result["club_targets"] = await ingest_club_targets()
     if not await _already_ingested("sec_public", month):
         result["sec_public"] = await ingest_sec_public()
         return result
@@ -1384,7 +1250,16 @@ async def search_register(
                          WHERE p.register_id = r.id AND p.person_level = 'working') AS working_count
                 FROM company_register r {clause}
                 ORDER BY COALESCE(last_event_at, '') DESC, COALESCE(last_event_amount, 0) DESC,
-                         officer_count DESC, company_name
+                         officer_count DESC,
+                         -- A listed company has no filing date or dollar amount to
+                         -- rank by - nothing above this line ever distinguishes it
+                         -- from any other listed company. Without this, Meta sorted
+                         -- no differently from a micro-cap nobody has heard of:
+                         -- alphabetically, wherever that fell among 200k+ rows with
+                         -- real recent activity. This is SEC's own market-cap order,
+                         -- so the companies a member actually wants surface first.
+                         CASE WHEN prominence_rank IS NOT NULL THEN prominence_rank ELSE 999999999 END ASC,
+                         company_name
                 LIMIT ? OFFSET ?""",
             (*args, limit, max(0, int(offset))),
         )).fetchall()
