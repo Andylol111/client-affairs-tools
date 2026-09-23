@@ -184,7 +184,10 @@ test('a company with nobody on file is searched from its lane, and the people it
   await expect(neon.getByText('not added: already worked by Alice')).toBeVisible();
   await expect(neon.getByRole('button', { name: 'Add Dorothy Vaughan' })).toHaveCount(0);
 
-  // The CEO is still one click away, never added for the member.
+  // The CEO is folded away - a large company's search no longer opens on its
+  // chief officers - and still one click from a deliberate add.
+  await expect(neon.getByRole('button', { name: 'Add Grace Murray' })).toHaveCount(0);
+  await neon.getByRole('button', { name: 'Show 1 more: very senior, or the name is unclear' }).click();
   await expect(neon.getByRole('button', { name: 'Add Grace Murray' })).toBeVisible();
 
 });

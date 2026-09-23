@@ -36,7 +36,7 @@ function shortDate(value?: string | null): string {
 }
 
 export default function RecipientPicker({
-  mode, companies, people, selected, onSelectedChange, found, runs, onFind, onAddFound, busy,
+  mode, companies, people, selected, onSelectedChange, found, runs, onFind, onFindEverywhere, onAddFound, busy,
 }: {
   mode: PickerMode;
   companies: ChosenCompany[];
@@ -47,6 +47,8 @@ export default function RecipientPicker({
   found: Record<string, FoundPerson[]>;
   runs: Record<string, CompanyRun>;
   onFind: (company: ChosenCompany) => void;
+  /** Search the same company again with no country limit. */
+  onFindEverywhere?: (company: ChosenCompany) => void;
   onAddFound: (companyKey: string, ids: number[] | 'all') => Promise<void>;
   busy: boolean;
 }) {
@@ -54,6 +56,7 @@ export default function RecipientPicker({
   const [level, setLevel] = useState<'all' | Level>('all');
   const [hideWritten, setHideWritten] = useState(true);
   const [adding, setAdding] = useState<Record<string, true>>({});
+  const [showHeld, setShowHeld] = useState<Record<string, boolean>>({});
   // Folded companies, by key. A fold hides the rows only - the header keeps
   // the count, the tick-all box and the search, so nothing is decided blind.
   const [folded, setFolded] = useState<Record<string, true>>({});
@@ -227,7 +230,16 @@ export default function RecipientPicker({
         const allOn = writable.length > 0 && writable.every((p) => chosen.has(p.id));
         const run = runs[key];
         const searching = run && (run.state === 'searching' || run.state === 'queued');
-        const addable = group.found.filter((p) => !p.skippedReason);
+        // The people worth writing to first; the very senior and rows whose
+        // name is page text fold behind one link. A search at a large company
+        // otherwise opens on its CEO, CFO and COO.
+        const asContact = (p: FoundPerson) => ({
+          name: [p.first_name, p.last_name].filter(Boolean).join(' '), title: p.title,
+        } as Contact);
+        const held = group.found.filter((p) => isTooSenior(asContact(p)) || !looksLikePerson(asContact(p)));
+        const likely = group.found.filter((p) => !held.includes(p));
+        const shownFound = showHeld[key] ? group.found : likely;
+        const addable = likely.filter((p) => !p.skippedReason);
         const isFolded = Boolean(folded[key]);
         const bodyId = `group-${key.replace(/[^a-z0-9]+/gi, '-')}`;
         return (
@@ -292,6 +304,15 @@ export default function RecipientPicker({
               <div className="border-t border-pale-sky px-3 py-2" role="status">
                 <p className={`text-xs ${run.state === 'failed' ? 'text-amber-900' : 'text-slate-600'}`}>
                   {run.message}
+                  {/* A search that skipped people for being elsewhere offers
+                      them back in one click, rather than hiding a choice. */}
+                  {selectable && onFindEverywhere && run.state === 'done' && /skipped/i.test(run.message || '')
+                    && company.targetCountry !== '*' && (
+                    <button type="button" onClick={() => onFindEverywhere(company)}
+                            className="ml-2 underline text-deep-navy">
+                      Search all countries
+                    </button>
+                  )}
                   {run.state === 'failed' && group.found.length ? ' · what it found so far is below' : ''}
                 </p>
                 {searching && (
@@ -368,9 +389,8 @@ export default function RecipientPicker({
                 })}
               </ul>
 
-              {/* Found, not on file. Adding is the act that makes someone a
-                  possible recipient, so it is a button per person and one for
-                  the lot, never a side effect of the search finishing. */}
+              {/* Found, not on file: what an earlier visit's search found, and
+                  anyone a search left for a deliberate add. */}
               {group.found.length > 0 && (
                 <div className="border-t border-pale-sky" data-testid="found-rows">
                   <div className="flex items-center justify-between gap-2 bg-amber-50/60 px-3 py-1.5 text-xs text-amber-900">
@@ -387,7 +407,7 @@ export default function RecipientPicker({
                     )}
                   </div>
                   <ul className="divide-y divide-pale-sky">
-                    {group.found.map((person) => {
+                    {shownFound.map((person) => {
                       const name = [person.first_name, person.last_name].filter(Boolean).join(' ') || person.email;
                       return (
                         <li key={person.id} className="flex items-start gap-3 px-3 py-2 text-sm" data-found={person.id}>
@@ -417,6 +437,17 @@ export default function RecipientPicker({
                       );
                     })}
                   </ul>
+                  {held.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowHeld((prev) => ({ ...prev, [key]: !prev[key] }))}
+                      className="w-full border-t border-pale-sky px-3 py-2 text-left text-xs text-slate-600 underline"
+                    >
+                      {showHeld[key]
+                        ? 'Hide the very senior and unclear names'
+                        : `Show ${held.length} more: very senior, or the name is unclear`}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

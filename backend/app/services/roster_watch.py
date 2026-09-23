@@ -20,7 +20,7 @@ import httpx
 
 from app.database import get_db
 from app.services.company_email_cache import build_email_for_person_sync, company_brand_words
-from app.services.contact_scraper import normalize_domain, person_name_key
+from app.services.contact_scraper import names_entity_or_place, normalize_domain, person_name_key
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +371,11 @@ async def load_tickers_or_reason() -> tuple[dict[str, Any], str | None]:
         return await load_tickers(), None
     except Exception as exc:
         configured = bool((os.getenv("SEC_USER_AGENT") or "").strip())
-        reason = f"SEC company list unavailable: {str(exc)[:200]}"
+        # httpx appends a "For more information check: <mdn url>" line that
+        # members then saw in the search's status; keep the first line only.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        detail = f"HTTP {status}" if status else str(exc).splitlines()[0][:160]
+        reason = f"SEC company list unavailable ({detail})"
         if not configured:
             reason += " (SEC_USER_AGENT is not set; SEC wants 'Name contact@example.org')"
         logger.warning("roster: %s", reason)
@@ -385,15 +389,15 @@ def _archive_url(cik: str, accession: str, document: str) -> str:
 
 
 def _xml_candidates(primary: str) -> list[str]:
+    """The filing's raw XML. primaryDocument names it (under an xsl folder
+    for the rendered copy; the raw file sits at the root under the same
+    name). "ownership.xml" used to be tried first, and each wrong guess was a
+    404 that took SEC 7-10s: ~25s of a 36s cold Barclays roster. The generic
+    names are only guesses for a filing whose primary document is not XML."""
     name = (primary or "").split("/")[-1]
-    out: list[str] = []
-    for item in ("ownership.xml", name, "primary_doc.xml"):
-        base = item.split("/")[-1]
-        if base.lower().endswith(".xml") and base not in out:
-            out.append(base)
-    if "ownership.xml" not in out:
-        out.insert(0, "ownership.xml")
-    return out
+    if name.lower().endswith(".xml"):
+        return [name]
+    return ["ownership.xml", "primary_doc.xml"]
 
 
 async def fetch_form4_people(cik: str, *, max_filings: int = 18) -> list[dict[str, Any]]:
@@ -559,7 +563,13 @@ async def _upsert_people(
 ) -> dict[str, int]:
     now = iso()
     threshold = left_after_misses()
-    incoming = [p for p in people if p.get("normalized_name")]
+    # Every roster source lands here (SEC, Companies House, the web, and what
+    # Find people saved), so this is where a company or a place posing as a
+    # person is kept out: "Plc Barclays" from a Form 4 owned by Barclays PLC,
+    # "West London" from a broker listing. Once stored, every later search
+    # read them back as people.
+    incoming = [p for p in people
+                if p.get("normalized_name") and not names_entity_or_place(p.get("full_name") or "")]
     seen = {p["normalized_name"] for p in incoming}
     db = await get_db()
     try:

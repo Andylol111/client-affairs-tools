@@ -13,9 +13,16 @@ The domain is the part that must never be a guess. A wrong domain looks like
 a company with no findable people and sends mail to strangers, so it comes
 back null unless a stored record or discover_company_domain (name match plus
 MX) vouches for it.
+
+Each answer also carries the company as an entity (company_entity): HQ
+country, the mail domain its staff use, and the offshoots that are not it.
+A known entity's mail domain is THE domain, and its subsidiaries and
+regional variants come back as alternatives, so a member who means the
+Barclays Global Service Centre picks it instead of getting it by accident.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import time
@@ -43,6 +50,12 @@ _HOSTNAME_RE = re.compile(r"^(?=.{4,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?
 _LINKEDIN_TITLE_SUFFIX = re.compile(r"\s*[|\-–]\s*linkedin\s*$", re.I)
 _LINKEDIN_TAB_SUFFIX = re.compile(r"\s*:\s*(overview|about|jobs|people|posts|life|employees|insights)\b.*$", re.I)
 _MAX_ALTERNATIVES = 4
+# Offshoots and regional variants of a known entity, listed ahead of the
+# name-alike alternatives and counted separately.
+_MAX_ENTITY_ALTERNATIVES = 4
+# Bumped when the response shape changes, so no cached answer from before
+# the entity fields is served.
+_CACHE_VERSION = "v2:"
 
 
 def _clean(text: str | None) -> str:
@@ -55,14 +68,14 @@ def _cache_get(key: str) -> dict[str, Any] | None:
         _cache.pop(key, None)
         return None
     # A copy, so a caller mutating the response cannot edit the cache.
-    return {**hit[1], "alternatives": [dict(a) for a in hit[1]["alternatives"]]}
+    return copy.deepcopy(hit[1])
 
 
 def _cache_put(key: str, value: dict[str, Any]) -> None:
     if len(_cache) >= _CACHE_MAX:
         # Oldest entry out; dicts keep insertion order.
         _cache.pop(next(iter(_cache)))
-    _cache[key] = (time.monotonic(), {**value, "alternatives": [dict(a) for a in value["alternatives"]]})
+    _cache[key] = (time.monotonic(), copy.deepcopy(value))
 
 
 def _slug_display_name(slug: str) -> str | None:
@@ -228,6 +241,44 @@ async def _register_candidates(name: str) -> tuple[dict[str, Any] | None, list[d
     return best, [i for i in items if i is not best]
 
 
+def _entity_alternatives(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """The entity's offshoots in other countries, each an entity of its own,
+    then the parent itself per region when it mails from regional domains."""
+    from app.services.company_entity import subsidiary_profile
+
+    out: list[dict[str, Any]] = []
+    for item in profile.get("exclude") or []:
+        sub = subsidiary_profile(profile, item)
+        out.append({"name": item["name"], "domain": sub["mail_domain"], "country": item.get("country"),
+                    "kind": item.get("kind"), "entity": sub})
+    for alt in profile.get("alt_mail_domains") or []:
+        if not alt.get("country"):
+            continue  # another spelling of the same mailbox, not a region
+        region = {**copy.deepcopy(profile), "mail_domain": alt["domain"], "mail_domain_evidence": 0,
+                  "target_country": alt["country"], "alt_mail_domains": []}
+        out.append({"name": f"{profile['display_name']} ({alt['country']})", "domain": alt["domain"],
+                    "country": alt["country"], "kind": "region", "entity": region})
+    return out[:_MAX_ENTITY_ALTERNATIVES]
+
+
+def _with_entity(result: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    """Adds country and entity, keeps "domain" equal to the entity's mail
+    domain, and puts the entity's offshoots first among the alternatives."""
+    if result.get("domain") and not profile.get("mail_domain"):
+        # A stored or verified domain the entity lookup could not choose on
+        # its own is still the one this answer uses; the two never disagree.
+        profile["mail_domain"] = result["domain"]
+    if profile.get("mail_domain"):
+        result.update(domain=profile["mail_domain"], domain_verified=True)
+    entity_alts = _entity_alternatives(profile)
+    seen = {company_key(a["name"]) for a in entity_alts} | {company_key(result["name"])}
+    rest = [a for a in result.get("alternatives") or [] if company_key(a["name"]) not in seen]
+    result["alternatives"] = entity_alts + rest
+    result["country"] = profile.get("hq_country")
+    result["entity"] = profile
+    return result
+
+
 async def resolve_company(q: str, *, user_id: int | None) -> dict[str, Any]:
     text = _clean(q)[:500]
     if not text:
@@ -240,7 +291,7 @@ async def resolve_company(q: str, *, user_id: int | None) -> dict[str, Any]:
                 422, "That LinkedIn link is not a company page. Paste a linkedin.com/company/... link or type the company name.",
             )
         kind = "showcase" if re.search(r"linkedin\.com/showcase/", text, re.I) else "company"
-        cache_key = f"li:{kind}:{slug.lower()}"
+        cache_key = f"{_CACHE_VERSION}li:{kind}:{slug.lower()}"
         cached = _cache_get(cache_key)
         if cached:
             return cached
@@ -258,17 +309,25 @@ async def resolve_company(q: str, *, user_id: int | None) -> dict[str, Any]:
             "source": "linkedin", "alternatives": [],
         }
         if search_unavailable:
-            # Quota hit or search down: the name is all this press can give.
-            # Not cached, so the next press after the quota resets tries again.
-            return result
+            # Quota hit or search down: the name is all this press can give,
+            # plus what the reviewed table knows for free. Not cached, so the
+            # next press after the quota resets tries again.
+            from app.services.company_entity import profile_without_network
+
+            result.update(country=None, entity=None)
+            return _with_entity(result, profile_without_network(name))
+        from app.services.company_entity import resolve_entity
+
+        profile = await resolve_entity(name, user_id=user_id)
         club, _ = await _club_companies(name)
         stored = club["domain"] if club else None
-        domain = stored or await _verified_domain(name)
+        domain = profile.get("mail_domain") or stored or await _verified_domain(name)
         result.update(domain=domain, domain_verified=bool(domain))
+        result = _with_entity(result, profile)
         _cache_put(cache_key, result)
         return result
 
-    cache_key = f"n:{text.lower()}"
+    cache_key = f"{_CACHE_VERSION}n:{text.lower()}"
     cached = _cache_get(cache_key)
     if cached:
         return cached
@@ -280,14 +339,32 @@ async def resolve_company(q: str, *, user_id: int | None) -> dict[str, Any]:
         chosen, source = register_best, "register"
     else:
         chosen, source = {"name": text, "domain": None}, "typed"
+    from app.services.company_entity import override_profile, resolve_entity
+
+    # What was typed decides the entity when the reviewed table knows it:
+    # "Barclays Global Service Centre" is that centre, even though the
+    # register's best match for the words is Barclays itself, and "HBO" is
+    # HBO, not its parent. Otherwise the chosen record's name is looked up.
+    reviewed = override_profile(text)
+    profile = await resolve_entity(text if reviewed else chosen["name"], user_id=user_id)
+    if reviewed:
+        if company_key(chosen["name"]) != company_key(profile["display_name"]):
+            chosen_as_alt = [chosen] if source != "typed" else []
+        else:
+            chosen_as_alt = []
+        chosen = {"name": profile["display_name"], "domain": profile.get("mail_domain")}
+    else:
+        chosen_as_alt = []
     # A stored domain (club contacts, register row) is a record the club
     # already acts on; otherwise only a verified resolution is returned.
-    domain = chosen.get("domain") or await _verified_domain(chosen["name"])
-    pools = [club_near, ([register_best] if register_best and source != "register" else []), register_rest]
+    domain = profile.get("mail_domain") or chosen.get("domain") or await _verified_domain(chosen["name"])
+    pools = [chosen_as_alt, club_near, ([register_best] if register_best and source != "register" else []),
+             register_rest]
     result = {
         "name": chosen["name"], "domain": domain, "domain_verified": bool(domain),
         "linkedin_url": None, "source": source,
         "alternatives": _alternatives(chosen["name"], *pools),
     }
+    result = _with_entity(result, profile)
     _cache_put(cache_key, result)
     return result

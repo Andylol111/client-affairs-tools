@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from app.database import get_db
+from app.services import llm
 from app.services.batch_agents import run_batch_agents
 from app.services.contact_scraper import is_heuristic_junk_contact
 
@@ -145,7 +146,9 @@ async def run_ai_review_agents(
     ranked = await run_batch_agents(
         to_review,
         batch_size=AI_REVIEW_BATCH,
-        agents=AI_REVIEW_WORKERS,
+        # More reviewers than model slots only queue behind each other: six
+        # workers on two slots had 48 of 58 calls refused in one Barclays run.
+        agents=min(AI_REVIEW_WORKERS, llm.INFERENCE_SLOTS),
         worker=lambda batch: _review_batch(batch, company_name),
         merge=_merge_review_maps,
         on_progress=on_progress,

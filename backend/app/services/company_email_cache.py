@@ -455,17 +455,28 @@ async def resolve_company_domain(text: str, *, member_supplied: bool = True) -> 
     # "Metadata Systems" rows, so a short name could come back with another
     # company's domain. The LIKE below only narrows the rows to read.
     want = company_key(raw)
+    # "barclays.%" matches barclays.com, barclays.co.uk and barclays.bank.in
+    # alike, and the one with the most verified samples used to win, so a run
+    # at the Indian service centre made barclays.bank.in the answer for
+    # "Barclays". A lookup by the parent's name only takes a generic domain
+    # or one coded for its HQ country, never an excluded offshoot's.
+    from app.services.company_entity import parent_domain_rank
+
     db = await get_db()
     try:
         cur = await db.execute(
             """SELECT company_domain FROM company_email_patterns
                WHERE LOWER(company_name) = ? OR LOWER(company_domain) LIKE ?
-               ORDER BY verified_samples DESC LIMIT 1""",
+               ORDER BY verified_samples DESC LIMIT 25""",
             (name, f"{name}.%"),
         )
-        row = await cur.fetchone()
-        if row and row["company_domain"]:
-            return str(row["company_domain"])
+        ranked = []
+        for order, row in enumerate(await cur.fetchall()):
+            rank = parent_domain_rank(raw, str(row["company_domain"] or ""))
+            if row["company_domain"] and rank is not None:
+                ranked.append((rank, order, str(row["company_domain"])))
+        if ranked:
+            return min(ranked)[2]
         first_word = (re.findall(r"[a-z0-9]+", name) or [name])[0]
         cur = await db.execute(
             """SELECT company, company_domain, COUNT(*) AS n FROM contacts
@@ -478,8 +489,10 @@ async def resolve_company_domain(text: str, *, member_supplied: bool = True) -> 
         for r in await cur.fetchall():
             if company_key(r["company"]) == want:
                 counts[str(r["company_domain"])] = counts.get(str(r["company_domain"]), 0) + int(r["n"])
-        if counts:
-            return max(counts, key=counts.get)
+        ranks = {d: parent_domain_rank(raw, d) for d in counts}
+        usable = [d for d in counts if ranks[d] is not None]
+        if usable:
+            return min(usable, key=lambda d: (ranks[d], -counts[d]))
     finally:
         await db.close()
     return ""
@@ -500,8 +513,15 @@ async def discover_company_domain(name: str) -> str:
     company = (name or "").strip()
     if not company:
         return ""
+    from app.services.company_entity import choose_mail_domain, override_profile, registrable_domain
     from app.services.roster_watch import _domain_matches_company, _registrable_domain
 
+    # A reviewed entity answers first: Barclays' domains share one mail
+    # tenant, so no search hit plus MX can tell barclays.com from
+    # barclays.bank.in; the override table records which one the staff use.
+    reviewed = override_profile(company)
+    if reviewed and reviewed.get("mail_domain"):
+        return reviewed["mail_domain"]
     known = await resolve_company_domain(company, member_supplied=False)
     # What the club has on record came from earlier runs, and an earlier run
     # with an unchecked guess could have stored a data vendor's host (Meta's
@@ -522,17 +542,24 @@ async def discover_company_domain(name: str) -> str:
         results = await _tavily_search(f"{company} official website", max_results=5)
     except Exception:
         return ""
+    # Every hit that is the company's and accepts mail is a candidate, and
+    # choose_mail_domain ranks them: the first hit used to win, so a regional
+    # site ranked first by the search engine (barclays.co.uk, a .bank.in)
+    # became the mail domain for the whole group.
+    candidates: list[str] = []
     for item in results or []:
-        candidate = _registrable_domain(str((item or {}).get("url") or ""))
-        if not candidate or not _domain_matches_company(company, candidate):
+        host = _registrable_domain(str((item or {}).get("url") or ""))
+        candidate = registrable_domain(host) if host else ""
+        if not candidate or candidate in candidates or not _domain_matches_company(company, candidate):
             continue
         try:
             mx_ok, _ = await get_mx_cached(candidate, None)
         except Exception:
             mx_ok = False
         if mx_ok:
-            return candidate
-    return ""
+            candidates.append(candidate)
+    chosen, _ = choose_mail_domain(candidates, company, None)
+    return chosen or ""
 
 
 MEMBER_ASSERTED_CONFIDENCE = 0.80

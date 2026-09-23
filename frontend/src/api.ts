@@ -294,13 +294,39 @@ export type Campaign = {
   updated_at?: string;
 };
 
+/** Which company a search means: the legal entity, its home country, the
+ *  domain its staff use, and the other group entities to leave out. */
+export type EntityProfile = {
+  legal_name: string;
+  display_name: string;
+  brand_words: string[];
+  hq_country: string | null;
+  hq_city: string | null;
+  mail_domain: string | null;
+  mail_domain_evidence: number;
+  alt_mail_domains: { domain: string; country: string | null }[];
+  exclude: { name: string; country: string | null; domains: string[]; kind: 'subsidiary' | 'captive' | 'region' }[];
+  target_country: string | null;
+  source: string;
+};
+
+export type ResolvedAlternative = {
+  name: string;
+  domain: string | null;
+  country?: string | null;
+  kind?: 'subsidiary' | 'captive' | 'region';
+  entity?: EntityProfile;
+};
+
 export type ResolvedCompany = {
   name: string;
   domain: string | null;
   domain_verified: boolean;
   linkedin_url: string | null;
   source: 'linkedin' | 'register' | 'club' | 'typed';
-  alternatives: { name: string; domain: string | null }[];
+  alternatives: ResolvedAlternative[];
+  country?: string | null;
+  entity?: EntityProfile;
 };
 
 export type GeneratedEmail = {
@@ -1238,6 +1264,7 @@ export const api = {
       title_hints?: string;
       max_prospects?: number;
       worker_concurrency?: number;
+      entity?: EntityProfile;
     }) =>
       fetchApi<{ id: number; status: string }>('/api/yucgoutreach/runs', {
         method: 'POST',

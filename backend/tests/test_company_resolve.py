@@ -4,6 +4,8 @@ restricted to linkedin.com, else the slug); a numeric slug cannot name a
 company; a name prefers the club's own records, then the register (brand
 aliases included), then the text as typed; a domain is null unless verified;
 a quota hit still returns the name; repeats are served from the cache.
+The response is a superset of that contract: "country" and "entity" (the
+company_entity profile), and a known entity's offshoots as alternatives.
 All network is mocked.
 """
 import asyncio
@@ -17,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault('JWT_SECRET', 'company-resolve-secret-xxxxxxxxxxxxxxxx')
 
 CONTRACT_KEYS = {'name', 'domain', 'domain_verified', 'linkedin_url', 'source', 'alternatives'}
+ENTITY_KEYS = {'country', 'entity'}
 
 
 def slug_names() -> None:
@@ -40,6 +43,7 @@ def tests() -> None:
         from app.database import get_db, init_db
         from app.jwt_utils import create_token
         from app.services import company_email_cache as cec
+        from app.services import company_entity as ce
         from app.services import company_register as cr
         from app.services import company_resolve as res
         from app.services import email_verifier as ev
@@ -103,13 +107,18 @@ def tests() -> None:
         async def fake_mx(domain, cache=None):
             return (domain == 'mail-ok.org', [])
 
+        async def no_entity_network(url, params, timeout):
+            # Wikidata knows none of these test companies; GLEIF has no record.
+            return {'search': []} if 'wikidata.org/w/api.php' in url else None
+
         def run(q):
             return asyncio.run(res.resolve_company(q, user_id=1))
 
         with patch.object(wf, 'web_search', fake_search), \
                 patch.object(wf, 'fetch_page', never_fetch), \
                 patch.object(cec, 'discover_company_domain', fake_discover), \
-                patch.object(ev, 'get_mx_cached', fake_mx):
+                patch.object(ev, 'get_mx_cached', fake_mx), \
+                patch.object(ce, '_http_get_json', no_entity_network):
 
             # --- LinkedIn URL: the indexed title names the company --------
             search_results['linkedin.com/company/hbo'] = [
@@ -119,10 +128,13 @@ def tests() -> None:
             ]
             domain_answers['HBO'] = 'hbo.com'
             out = run('https://www.linkedin.com/company/hbo/')
-            assert set(out) == CONTRACT_KEYS, out
-            assert out == {'name': 'HBO', 'domain': 'hbo.com', 'domain_verified': True,
-                           'linkedin_url': 'https://www.linkedin.com/company/hbo',
-                           'source': 'linkedin', 'alternatives': []}, out
+            assert set(out) == CONTRACT_KEYS | ENTITY_KEYS, out
+            assert {k: out[k] for k in CONTRACT_KEYS} == {
+                'name': 'HBO', 'domain': 'hbo.com', 'domain_verified': True,
+                'linkedin_url': 'https://www.linkedin.com/company/hbo',
+                'source': 'linkedin', 'alternatives': []}, out
+            # HBO is a reviewed entity of its own: the domain is its mail domain.
+            assert out['country'] == 'US' and out['entity']['mail_domain'] == 'hbo.com', out
             # One search, restricted to linkedin.com, on this member's quota.
             assert len(searches) == 1 and searches[0] == ('site:linkedin.com linkedin.com/company/hbo', 1), searches
             # The same page pasted again (any spelling of it) is served from
@@ -134,8 +146,12 @@ def tests() -> None:
             out = run('linkedin.com/company/warner-bros-discovery?trk=x')
             assert out['name'] == 'Warner Bros Discovery' and out['source'] == 'linkedin', out
             assert out['linkedin_url'] == 'https://www.linkedin.com/company/warner-bros-discovery', out
+            # A reviewed entity: its mail domain, and the domain equals it.
+            assert out['domain'] == 'wbd.com' == out['entity']['mail_domain'], out
+            out = run('linkedin.com/company/initech-labs')
             # The resolver found nothing it could verify: null, never a guess.
             assert out['domain'] is None and out['domain_verified'] is False, out
+            assert out['entity']['source'] == 'heuristic' and out['country'] is None, out
 
             # Showcase pages keep their own path.
             out = run('www.linkedin.com/showcase/hbo-max/about/')
@@ -181,20 +197,25 @@ def tests() -> None:
             assert {'name': 'Acme Widgets Europe', 'domain': None} in out['alternatives'], out
             assert out['linkedin_url'] is None
 
-            # A brand alias lands on the registered company.
+            # A reviewed brand is its own entity; the register's owner of the
+            # brand alias stays one click away as an alternative.
             out = run('HBO')
-            assert out['source'] == 'register' and out['name'] == 'Warner Bros. Discovery, Inc.', out
-            assert out['domain'] is None and out['domain_verified'] is False, out
+            assert out['source'] == 'register' and out['name'] == 'HBO', out
+            assert out['domain'] == 'hbo.com' and out['domain_verified'] is True, out
+            assert {'name': 'Warner Bros. Discovery, Inc.', 'domain': None} in out['alternatives'], out
             assert {'name': 'Hbo Film & Television Development Limited', 'domain': None} in out['alternatives'], out
-            # The dotted name went to the resolver without its dots, or the
-            # resolver would have echoed "warner bros. discovery" back as a domain.
+            # The dotted name goes to the resolver without its dots, or the
+            # resolver would echo "warner bros. discovery" back as a domain.
+            assert asyncio.run(res._verified_domain('Warner Bros. Discovery, Inc.')) is None
             assert discovered[-1] == 'Warner Bros Discovery, Inc', discovered
 
             # Nothing matches: kept as typed; a non-hostname answer is refused.
             domain_answers['Zyxw Labs'] = 'zyxw labs'
             out = run('Zyxw   Labs')
-            assert out == {'name': 'Zyxw Labs', 'domain': None, 'domain_verified': False,
-                           'linkedin_url': None, 'source': 'typed', 'alternatives': []}, out
+            assert {k: out[k] for k in CONTRACT_KEYS} == {
+                'name': 'Zyxw Labs', 'domain': None, 'domain_verified': False,
+                'linkedin_url': None, 'source': 'typed', 'alternatives': []}, out
+            assert out['country'] is None and out['entity']['display_name'] == 'Zyxw Labs', out
             # A dotted single word comes back from the resolver unchecked, so
             # it must accept mail before it counts.
             domain_answers['bad-mail.org'] = 'bad-mail.org'
@@ -209,7 +230,7 @@ def tests() -> None:
             resp = client.get('/api/yucgoutreach/resolve-company', params={'q': 'globex'})
             assert resp.status_code == 200, resp.text[:300]
             body = resp.json()
-            assert set(body) == CONTRACT_KEYS and body['source'] == 'club' and body['name'] == 'Globex', body
+            assert set(body) >= CONTRACT_KEYS | ENTITY_KEYS and body['source'] == 'club' and body['name'] == 'Globex', body
             resp = client.get('/api/yucgoutreach/resolve-company',
                               params={'q': 'https://www.linkedin.com/company/99999'})
             assert resp.status_code == 422 and 'company name' in resp.json()['detail'], resp.text
