@@ -1130,7 +1130,7 @@ async def _fetch_crawl_pages(
         return resp if resp.status_code == 200 else None
 
     def fingerprint(resp: httpx.Response) -> tuple[str, str]:
-        return str(resp.url).rstrip("/"), hashlib.sha1(resp.content).hexdigest()
+        return str(resp.url).rstrip("/"), hashlib.sha256(resp.content).hexdigest()
 
     first, rest = urls[:CRAWL_FETCH_WORKERS], urls[CRAWL_FETCH_WORKERS:]
     home, *wave = await asyncio.gather(get(base_url.rstrip("/") + "/"), *(get(u) for u in first))
