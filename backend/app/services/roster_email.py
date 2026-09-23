@@ -16,6 +16,7 @@ from app.database import get_db
 from app.services.company_email_cache import build_email_for_person
 from app.services.contact_scraper import (
     is_employee_outreach_email,
+    names_entity_or_place,
     normalize_domain,
     sanitize_email,
     strict_email_name_alignment,
@@ -110,6 +111,10 @@ async def cached_roster_contacts(
                 full = (person.get("full_name") or "").strip()
                 norm = (person.get("normalized_name") or "").strip() or norm_key(full)
                 if not full or not norm:
+                    continue
+                # Rows stored before ingestion checked names ("Plc Barclays",
+                # "West London") stay in the table; they are not read as people.
+                if names_entity_or_place(full):
                     continue
                 derived = _row_email(full, roster_dom, person.get("inferred_email"))
                 if not derived and roster_dom and person.get("email_status") not in {"collision", "invalid_domain"}:

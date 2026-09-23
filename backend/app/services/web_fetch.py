@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextvars import ContextVar
 import re
 import time
 from dataclasses import dataclass
@@ -348,10 +349,12 @@ async def _firecrawl_web_search(query: str, max_results: int, *, user_id: int | 
         except httpx.HTTPStatusError as exc:
             logger.warning("firecrawl web_search HTTP %s for %r in %.2fs: %s",
                             exc.response.status_code, query, time.monotonic() - started, exc.response.text[:300])
+            _last_search_failure.set(f"Firecrawl HTTP {exc.response.status_code}")
             return []
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning("firecrawl web_search failed for %r in %.2fs: %s: %s",
                             query, time.monotonic() - started, type(exc).__name__, exc)
+            _last_search_failure.set(f"Firecrawl {type(exc).__name__}")
             return []
 
     results = data.get("data") if isinstance(data, dict) else None
@@ -398,14 +401,35 @@ async def fetch_page(url: str, *, user_id: int | None = None) -> FetchedPage | N
     return None
 
 
+#: Why the last web_search in this task came back empty through failure
+#: rather than finding nothing. Both providers swallow their errors and return
+#: nothing, so a search run could not tell "no people here" from "search is
+#: down" and told members large companies rarely publish emails. Per task, so
+#: parallel searches never read each other's outcome.
+_last_search_failure: ContextVar[str | None] = ContextVar("web_search_failure", default=None)
+
+
+def last_search_failure() -> str | None:
+    """The reason the most recent web_search in this task failed, or None."""
+    return _last_search_failure.get()
+
+
 async def web_search(query: str, max_results: int = 8, *, user_id: int | None = None) -> list[dict[str, Any]]:
     """Web search. Tries TinyFish first, then Firecrawl. Returns [] when
     neither is configured. A genuine empty result from TinyFish is trusted
     and returned as-is, not treated as a reason to fall back to Firecrawl."""
+    _last_search_failure.set(None)
+    reason = None
     if tinyfish_configured():
         results = await _tinyfish_web_search(query, max_results, user_id=user_id)
         if results is not None:
             return results
+        reason = "TinyFish gave no answer"
     if firecrawl_configured():
-        return await _firecrawl_web_search(query, max_results, user_id=user_id)
+        results = await _firecrawl_web_search(query, max_results, user_id=user_id)
+        if results or _last_search_failure.get() is None:
+            return results
+        reason = _last_search_failure.get()
+    if reason:
+        _last_search_failure.set(reason)
     return []

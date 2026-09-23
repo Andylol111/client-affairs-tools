@@ -21,7 +21,14 @@ BEDROCK_ANTHROPIC: list[dict[str, str]] = [
 
 _HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 _ALLOWED = {m["id"] for m in BEDROCK_ANTHROPIC}
-_inference_slots = threading.BoundedSemaphore(2)
+INFERENCE_SLOTS = 2
+_inference_slots = threading.BoundedSemaphore(INFERENCE_SLOTS)
+#: How long a call waits for a free slot before answering 429. Failing at
+#: once turned a discovery run's AI review into 58 calls of which 48 were
+#: refused (6 review workers, 2 slots), and a draft that met a busy slot got a
+#: 429 it could have waited out. Past the wait the 429 still comes, and the
+#: draft page still retries on it.
+SLOT_WAIT_SEC = float(os.getenv("LLM_SLOT_WAIT_SEC", "20") or 20)
 _UNAVAILABLE = "The language model is unavailable right now."
 
 
@@ -172,7 +179,7 @@ def _bedrock_text(
     }
     if system:
         kwargs["system"] = [{"text": system}]
-    if not _inference_slots.acquire(blocking=False):
+    if not _inference_slots.acquire(timeout=SLOT_WAIT_SEC):
         raise HTTPException(429, 'Draft generation is busy; please retry shortly')
     try:
         from app.services.generation_policy import reserve_bedrock_invocation, complete_bedrock_invocation

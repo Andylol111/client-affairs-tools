@@ -30,7 +30,10 @@ PEOPLE = [
     {"full_name": "Salles Pedro Moreira", "normalized_name": "salles pedro moreira", "title": "", "role_type": "officer", "source": "sec_form4"},
     {"full_name": "Setubal Roberto Egydio", "normalized_name": "setubal roberto egydio", "title": "", "role_type": "officer", "source": "sec_form4"},
     {"full_name": "De Moraes Pedro Luiz Bodin", "normalized_name": "de moraes pedro luiz bodin", "title": "", "role_type": "officer", "source": "sec_form4"},
+    # An entity whose name gives it away never reaches the roster (ingestion
+    # refuses legal-form words); one that does not is left to the model.
     {"full_name": "Matrix Holdings LLC", "normalized_name": "matrix holdings llc", "title": "", "role_type": "officer", "source": "sec_form4"},
+    {"full_name": "Aurora Ventures", "normalized_name": "aurora ventures", "title": "", "role_type": "officer", "source": "sec_form4"},
 ]
 
 MODEL_VERDICTS = {
@@ -38,7 +41,7 @@ MODEL_VERDICTS = {
         {"name": "Salles Pedro Moreira", "status": "real", "corrected_name": "Pedro Moreira Salles", "title": "Chief Executive Officer", "reason": "20-F item 6A lists him as CEO"},
         {"name": "Setubal Roberto Egydio", "status": "real", "corrected_name": "", "title": "Chairman", "reason": "20-F chairman"},
         {"name": "De Moraes Pedro Luiz Bodin", "status": "real", "corrected_name": "Pedro Luiz Bodin de Moraes", "title": "", "reason": "IR bio"},
-        {"name": "Matrix Holdings LLC", "status": "ghost", "corrected_name": "", "title": "", "reason": "entity, not a person"},
+        {"name": "Aurora Ventures", "status": "ghost", "corrected_name": "", "title": "", "reason": "entity, not a person"},
         {"name": "Nobody Invento", "status": "real", "corrected_name": "", "title": "", "reason": "must be ignored: not among candidates"},
     ]
 }
@@ -66,14 +69,15 @@ async def _run() -> None:
     assert by_name["Pedro Moreira Salles"]["verdict"] == "real"
     assert by_name["Setubal Roberto Egydio"]["title"] == "Chairman"
     assert by_name["Pedro Luiz Bodin de Moraes"]["verdict"] == "real"
-    ghost = next(p for p in detail["people"] if p["full_name"] == "Matrix Holdings LLC")
+    assert "Matrix Holdings LLC" not in by_name, sorted(by_name)
+    ghost = next(p for p in detail["people"] if p["full_name"] == "Aurora Ventures")
     assert ghost["employment"] == "ghost" and ghost["verdict"] == "ghost"
     assert detail["current_count"] == 3 and detail["people_count"] == 4
 
     # Ghosts never surface in cache reads.
     warm = await RE.cached_roster_contacts("Banco Exemplo", "bancoexemplo.com.br")
     names = {row["name"] for row in warm}
-    assert "Matrix Holdings LLC" not in names and "Pedro Moreira Salles" in names
+    assert "Aurora Ventures" not in names and "Pedro Moreira Salles" in names
 
     # LLM down: zero verdicts, no crash, no ghosting.
     def boom(*args, **kwargs):
@@ -89,7 +93,7 @@ async def _run() -> None:
         second = await A.adjudicate_roster(roster)
     assert second["verdicts"] == 0, second
     detail = await R.roster_detail(int(roster["id"]))
-    assert all(p["employment"] != "ghost" or p["full_name"] == "Matrix Holdings LLC" for p in detail["people"])
+    assert all(p["employment"] != "ghost" or p["full_name"] == "Aurora Ventures" for p in detail["people"])
 
     # Drain claims due rosters, then rests for 45 days.
     with patch("app.services.llm.complete_json", return_value=MODEL_VERDICTS):
