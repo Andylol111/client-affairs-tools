@@ -119,19 +119,22 @@ async def domain_resolver() -> None:
     async def mx_ok(domain, cache=None):
         return (True, ["mx"])
 
+    # Meta is in company_entity's reviewed table, which answers before any
+    # search; the search path is pinned on a company the table does not know.
     search = AsyncMock(return_value=[
-        {"url": "https://www.globaldata.com/company-profile/meta-platforms-inc/"},
-        {"url": "https://www.linkedin.com/company/meta"},
-        {"url": "https://www.meta.com/"},
+        {"url": "https://www.globaldata.com/company-profile/globex-platforms-inc/"},
+        {"url": "https://www.linkedin.com/company/globex"},
+        {"url": "https://www.globex.com/"},
     ])
     with patch.object(CEC, "resolve_company_domain", AsyncMock(return_value="globaldata.com")), \
          patch("app.services.web_fetch.web_search_configured", lambda: True), \
          patch("app.services.web_contact_discovery._tavily_search", search), \
          patch("app.services.email_verifier.get_mx_cached", mx_ok):
         # A vendor host on record is not "known", and a vendor hit is skipped.
+        assert await CEC.discover_company_domain("Globex Platforms, Inc.") == "globex.com"
+        search.return_value = [{"url": "https://www.globaldata.com/company-profile/globex/"}]
+        assert await CEC.discover_company_domain("Globex Platforms, Inc.") == ""
         assert await CEC.discover_company_domain(META) == "meta.com"
-        search.return_value = [{"url": "https://www.globaldata.com/company-profile/meta/"}]
-        assert await CEC.discover_company_domain(META) == ""
 
 
 async def discovery_run_without_domain() -> None:

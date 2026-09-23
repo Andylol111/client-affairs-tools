@@ -28,6 +28,10 @@ class YucgOutreachRunCreate(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=500)
     company_domain: str | None = Field(None, max_length=255)
     title_hints: str | None = Field(None, max_length=500)
+    # The EntityProfile resolve-company returned (company_entity). Member
+    # input: enqueue_discovery_run cuts it to the contract and sizes, and the
+    # run only uses it to narrow who it keeps and which domain it tries.
+    entity: dict[str, Any] | None = None
     max_prospects: int = Field(250, ge=1, le=800)
     worker_concurrency: int = Field(4, ge=1, le=16)
 
@@ -77,6 +81,7 @@ async def create_run(body: YucgOutreachRunCreate, user: dict = Depends(get_curre
             company_name=body.company_name,
             company_domain=body.company_domain,
             title_hints=body.title_hints,
+            entity=body.entity,
             max_prospects=body.max_prospects,
             worker_concurrency=body.worker_concurrency,
         )
@@ -148,8 +153,11 @@ async def domain_guess(company: str, user: dict = Depends(get_current_user)):
 async def resolve_company_endpoint(q: str, user: dict = Depends(get_current_user)):
     """One company from what a member typed or pasted (a name, or a
     LinkedIn company page URL): display name, a domain only when verified,
-    and up to four alternatives. LinkedIn is never fetched; at most one web
-    search runs, on this member's web quota."""
+    its HQ country and entity profile, and alternatives (the entity's
+    offshoots and regions first, then up to four name-alikes). LinkedIn is
+    never fetched; at most two web searches run (the LinkedIn title, and
+    "@domain" citations when the entity's domain is not already settled),
+    both on this member's web quota."""
     from app.services.company_resolve import resolve_company
 
     return await resolve_company(q, user_id=user["id"])

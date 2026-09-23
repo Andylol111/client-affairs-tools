@@ -14,8 +14,6 @@ from contextvars import ContextVar
 from typing import Any
 import logging
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 from app.database import get_db, row_to_dict
@@ -51,36 +49,11 @@ async def _llm_json(prompt: str) -> dict[str, Any]:
 
 
 async def _tavily_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:
-    from app.services.web_fetch import web_search_configured, web_search
+    # One search helper for the whole run, so a query the web stage already
+    # asked is shared rather than sent again, and a failed one is counted.
+    from app.services.web_contact_discovery import _tavily_search as search
 
-    if web_search_configured():
-        return await web_search(query, max_results=max_results)
-    key = (os.getenv("TAVILY_API_KEY") or "").strip()
-    if not key:
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=28.0) as client:
-            r = await client.post(
-                "https://api.tavily.com/search",
-                json={
-                    "api_key": key,
-                    "query": query,
-                    "search_depth": "basic",
-                    "max_results": max_results,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-    except Exception:
-        return []
-    return [
-        {
-            "title": x.get("title") or "",
-            "url": x.get("url") or "",
-            "content": (x.get("content") or "")[:1200],
-        }
-        for x in data.get("results") or []
-    ]
+    return await search(query, max_results=max_results)
 
 
 _NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v", "phd", "md", "mba", "cpa", "cfa", "esq"})
@@ -187,6 +160,53 @@ def _title_hints_from_spec(spec: dict[str, Any]) -> str:
     return ""
 
 
+def _entity_from_spec(spec: dict[str, Any], company: str | None = None) -> dict[str, Any]:
+    """The run's entity profile from research_json["entity"].
+
+    Runs made before the profile existed carry none. They get one built from
+    the company name alone - its brand words, no exclusions, no target
+    country - under which entity_gate keeps everyone, as before."""
+    raw = spec.get("research_json") or ""
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        data = {}
+    entity = data.get("entity") if isinstance(data, dict) else None
+    if isinstance(entity, dict) and (entity.get("legal_name") or entity.get("display_name")):
+        return entity
+    from app.services.company_email_cache import company_brand_words
+
+    name = (company if company is not None else spec.get("company_name") or "").strip()
+    return {
+        "legal_name": name, "display_name": name, "brand_words": company_brand_words(name),
+        "hq_country": None, "hq_city": None, "mail_domain": None, "mail_domain_evidence": 0,
+        "alt_mail_domains": [], "exclude": [], "target_country": None, "source": "fallback",
+    }
+
+
+def _gate_rows(rows: list[dict], entity: dict[str, Any], skips: dict, company: str) -> list[dict]:
+    """People from a source, less the ones that are not a person or not the
+    target entity. Every source passes through here before the merge, and the
+    save loop runs it once more on what is about to be stored."""
+    from app.services.web_contact_discovery import entity_gate, note_skip
+
+    kept: list[dict] = []
+    for c in rows:
+        name = (c.get("name") or "").strip()
+        if not looks_like_person_name(name, company):
+            note_skip(skips, "not_a_person", name)
+            continue
+        keep, reason = entity_gate(
+            c.get("title") or "", c.get("discovery_context") or "",
+            c.get("source_url") or c.get("linkedin_url") or "", c.get("email") or "", entity,
+        )
+        if not keep:
+            note_skip(skips, reason, name)
+            continue
+        kept.append(c)
+    return kept
+
+
 def _grounded_at_company(
     name: str, title: str, results: list[dict[str, Any]], company_name: str, domain: str,
 ) -> str:
@@ -223,16 +243,21 @@ def _grounded_at_company(
     return ""
 
 
-async def _tavily_name_seeds(company_name: str, domain: str, max_n: int, custom_patterns: list[str], title_hints: str = "") -> list[dict]:
+async def _tavily_name_seeds(
+    company_name: str, domain: str, max_n: int, custom_patterns: list[str], title_hints: str = "",
+    *, entity: dict[str, Any] | None = None, skips: dict | None = None,
+) -> list[dict]:
     """Supplement merged list with Tavily+LLM name extraction when Apify/web yield few rows."""
+    from app.services.web_contact_discovery import SEARCH_PAGE_RESULTS, entity_gate, note_skip
     from app.services.web_fetch import web_search_configured
     if max_n <= 0 or not (web_search_configured() or (os.getenv("TAVILY_API_KEY") or "").strip()):
         return []
-    role = (title_hints or "employees OR leadership").strip()
-    results = await _tavily_search(
-        f'{company_name} {role} site:linkedin.com/in',
-        max_results=25,
-    )
+    # The web stage's first query, word for word: the run asks it once and
+    # both stages read the answer (a second copy used to go out in parallel).
+    hints = (title_hints or "").strip()
+    query = (f'{company_name} {hints} site:linkedin.com/in' if hints
+             else f'{company_name} leadership OR executives site:linkedin.com/in')
+    results = await _tavily_search(query, max_results=SEARCH_PAGE_RESULTS)
     if not results:
         return []
     snippet = "\n".join(
@@ -269,6 +294,16 @@ Results:
         # chewy.com contact. The page has to tie this person to this company.
         evidence = _grounded_at_company(name, title, results, company_name, dom)
         if not evidence:
+            continue
+        # The page that names them decides the entity and the country, as it
+        # does for the web stage.
+        needle = re.sub(r"\s+", " ", name).strip().lower()
+        page = next((r for r in results
+                     if needle in f"{r.get('title') or ''}\n{r.get('content') or ''}".lower()), {})
+        keep, reason = entity_gate(str(page.get("title") or ""), str(page.get("content") or ""),
+                                   str(page.get("url") or p.get("linkedin_url") or ""), "", entity)
+        if not keep:
+            note_skip(skips, reason, name)
             continue
         email = ""
         if dom:
@@ -341,11 +376,75 @@ def _is_verified(contact: dict) -> int:
     ai = contact.get("ai_verdict") or ""
     if ai == "junk" or ev == "invalid":
         return 0
-    if ev in ("valid", "likely_valid") and ai in ("real", "suspicious", ""):
-        return 1
-    if ev in ("valid", "likely_valid") and ai == "real":
+    # "suspicious" is the reviewer declining to vouch for the person. It used
+    # to count as verified, which is how "West London" became a strong
+    # prospect. Such a row is still saved, as unverified, rather than dropped:
+    # the smaller change, and the member can still see and judge it.
+    if ev in ("valid", "likely_valid") and ai in ("real", ""):
         return 1
     return 0
+
+
+#: How long a cold roster refresh may hold up a search (see _roster).
+ROSTER_STAGE_TIMEOUT_SEC = float(os.getenv("ROSTER_STAGE_TIMEOUT_SEC", "12") or 12)
+#: Roster refreshes that outlived their search. Held so the event loop does
+#: not drop them half way; each removes itself when done.
+_BACKGROUND: set[asyncio.Future] = set()
+
+
+def _background_done(task: asyncio.Future) -> None:
+    _BACKGROUND.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("background roster refresh failed: %s", task.exception())
+
+
+_SKIP_LABELS = {
+    "other_entity": "other {brand} entities",
+    "other_country": "outside the chosen country",
+    "other_domain": "at other mail domains",
+    "not_a_person": "not people",
+}
+
+
+def _skipped_clause(skipped: dict[str, dict[str, Any]], entity: dict[str, Any]) -> str:
+    """" · 30 skipped (26 other Barclays entities, 4 outside UK)", or "" when
+    nothing was skipped."""
+    from app.services.web_contact_discovery import _LEGAL_TAIL
+
+    total = sum(int(v.get("count") or 0) for v in skipped.values())
+    if not total:
+        return ""
+    words = (entity.get("display_name") or entity.get("legal_name") or "").split()
+    while words and words[-1].lower().strip(".,") in _LEGAL_TAIL:
+        words.pop()
+    def _say(code: str) -> str:
+        return "UK" if code == "GB" else code
+
+    # With a country chosen, "outside UK" is what was enforced. Without one,
+    # only the excluded entities' countries were skipped, so name those
+    # ("in IN") - "outside UK" would claim a limit the search did not apply.
+    target = str(entity.get("target_country") or "").upper()
+    if target and target != "*":
+        where = f"outside {_say(target)}"
+    else:
+        hq = str(entity.get("hq_country") or "").upper()
+        places = sorted({str(x.get("country") or "").upper() for x in entity.get("exclude") or []
+                         if isinstance(x, dict) and x.get("country")} - {hq, ""})
+        where = f"in {', '.join(_say(c) for c in places)}" if places else "elsewhere"
+    labels = dict(_SKIP_LABELS, other_country=where)
+    parts = [
+        f"{skipped[r]['count']} " + labels[r].format(brand=" ".join(words) or "company")
+        for r in _SKIP_LABELS if r in skipped
+    ]
+    return f" · {total} skipped ({', '.join(parts)})"
+
+
+def _search_unavailable(errors: dict[str, Any] | None) -> str:
+    """The line a run shows when no web search answered at all."""
+    if not errors or not errors.get("all_failed"):
+        return ""
+    return "web search unavailable (limit reached)" if errors.get("limit_reached") \
+        else "web search unavailable (provider error)"
 
 
 async def _run_update(
@@ -450,8 +549,15 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
     company = (spec.get("company_name") or "").strip()
     domain_in = (spec.get("company_domain") or "").strip()
     title_hints = _title_hints_from_spec(spec)
+    entity = _entity_from_spec(spec, company)
+    profiled = entity.get("source") != "fallback"
     max_prospects = max(1, min(int(spec.get("max_prospects") or 100), YUCG_MAX_PROSPECTS))
-    domain = normalize_domain(domain_in) if domain_in else ""
+    # The entity's mail domain is the only host an address may be built on.
+    # The run used to build them on whatever domain it had, which for Barclays
+    # included barclays.bank.in, the Indian bank's.
+    mail_domain = normalize_domain(entity.get("mail_domain") or "")
+    domain = mail_domain or (normalize_domain(domain_in) if domain_in else "")
+    skips: dict[str, dict[str, str]] = {}
 
     await _run_update(
         run_id,
@@ -460,7 +566,10 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         progress_message="Website, web search, and club roster first; then inbox checks…",
     )
 
-    if not domain:
+    # A run with an entity profile was resolved before it was queued, and the
+    # resolver already asked discover_company_domain; asking again cost a
+    # second full lookup whenever it had found nothing (HSBC, Wells Fargo).
+    if not domain and not profiled:
         # This used to take the host of the first search hit, unchecked, so
         # "Meta Platforms, Inc." became globaldata.com (a data vendor's profile
         # page) and the run saved jeff.kim@globaldata.com as a Meta prospect.
@@ -499,7 +608,9 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         cn = company or (domain.split(".")[0].title() if domain else "")
         if not cn or not (web_search_configured() or (os.getenv("TAVILY_API_KEY") or "").strip()):
             return []
-        return await discover_contacts_from_web(cn, domain or None, max_people=web_max, title_hints=title_hints)
+        return await discover_contacts_from_web(
+            cn, domain or None, max_people=web_max, title_hints=title_hints, entity=entity, skips=skips,
+        )
 
     async def _roster() -> tuple[list[dict], str]:
         """The club's memory of this company: SEC and Companies House officers.
@@ -511,12 +622,23 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
                 cached_roster_contacts, refresh_roster_on_demand, roster_refresh_note,
             )
 
-            # Only a domain the member typed may replace the one the roster
-            # already holds; a looked-up domain just fills a gap.
-            pin = bool(domain_in)
+            # Only a domain the member typed, or the entity's mail domain, may
+            # replace the one the roster already holds; a looked-up domain
+            # just fills a gap.
+            pin = bool(domain_in) or bool(mail_domain)
             rows = await cached_roster_contacts(company, domain, pin_domain=pin)
             if not rows:
-                rows = await refresh_roster_on_demand(company, domain, pin_domain=pin)
+                # A cold SEC refresh took 36s for Barclays, longer than every
+                # other source. It gets ROSTER_STAGE_TIMEOUT_SEC; past that it
+                # finishes in the background and the next search reads it
+                # from the cache, and this run goes on without it.
+                refresh = asyncio.ensure_future(refresh_roster_on_demand(company, domain, pin_domain=pin))
+                try:
+                    rows = await asyncio.wait_for(asyncio.shield(refresh), ROSTER_STAGE_TIMEOUT_SEC)
+                except asyncio.TimeoutError:
+                    _BACKGROUND.add(refresh)
+                    refresh.add_done_callback(_background_done)
+                    rows = []
             return rows, await roster_refresh_note(company, domain)
         except Exception:
             logger.exception("roster cache-first lookup failed")
@@ -527,15 +649,30 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         after the merge decided the other sources had come back thin. The point
         of the step is more people, so it runs with the rest and what it finds
         is used if it is new."""
-        return await _tavily_name_seeds(company, domain, max_prospects, custom_patterns, title_hints)
+        return await _tavily_name_seeds(
+            company, domain, max_prospects, custom_patterns, title_hints, entity=entity, skips=skips,
+        )
 
-    domain_contacts, web_contacts, meta, (roster_contacts, roster_note), seeded = await asyncio.gather(
-        _domain(),
-        _web(),
-        _company_meta(company, domain),
-        _roster(),
-        _seeds(),
+    from app.services.web_contact_discovery import (
+        begin_search_run, end_search_run, person_name_key, search_errors_summary, skipped_summary,
     )
+
+    search_run, search_token = begin_search_run()
+    try:
+        domain_contacts, web_contacts, meta, (roster_contacts, roster_note), seeded = await asyncio.gather(
+            _domain(),
+            _web(),
+            _company_meta(company, domain),
+            _roster(),
+            _seeds(),
+        )
+    finally:
+        end_search_run(search_token)
+    search_errors = search_errors_summary(search_run)
+    # The crawl and the roster are read through the same gate the web stage
+    # applies to each search result, before anything is merged.
+    domain_contacts = _gate_rows(domain_contacts, entity, skips, company)
+    roster_contacts = _gate_rows(roster_contacts, entity, skips, company)
     kw1 = meta.get("keywords") or ""
     kw2 = meta.get("keywords_2") or ""
     if roster_contacts:
@@ -556,6 +693,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
                 "roster_contacts": len(roster_contacts),
                 "web_contacts": n_web,
                 "roster_note": roster_note or None,
+                "search_errors": search_errors,
             }
         ),
     )
@@ -591,6 +729,7 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             to_verify.append(c)
 
     if not to_verify and not junk_log:
+        skipped = skipped_summary(skips)
         await _run_update(
             run_id,
             status="completed",
@@ -598,9 +737,12 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             progress_message=(
                 f"No contacts saved. Website {n_site} · roster {len(roster_contacts)} · web {n_web}"
                 + (f" ({roster_note})" if roster_note else "")
-                + ". Large-company sites rarely publish person emails; officers appear when the SEC fetch succeeds."
+                + _skipped_clause(skipped, entity)
+                + (f". {_search_unavailable(search_errors)}." if _search_unavailable(search_errors)
+                   else ". Large-company sites rarely publish person emails; officers appear when the SEC fetch succeeds.")
             ),
             prospects_count=0,
+            research_json=json.dumps({"skipped": skipped, "search_errors": search_errors}),
             completed=True,
         )
         return
@@ -638,7 +780,12 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
             _log_row(c, verdict="junk", reason=c.get("ai_reason") or "", model=None, source_note="heuristic")
         )
 
-    candidates = [c for c in verified if c.get("ai_verdict") != "junk"]
+    # The last gate before storage: whatever a source let through, the row
+    # about to be saved is a person at the target entity, in the target
+    # country, with an address on its mail domain.
+    candidates = _gate_rows(
+        [c for c in verified if c.get("ai_verdict") != "junk"], entity, skips, company,
+    )
     candidates.sort(key=lambda row: _quality_score(row, title_hints), reverse=True)
     candidates = candidates[:max_prospects]
 
@@ -738,13 +885,17 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
         await db.close()
 
     junk_total = len(junk_log) + sum(1 for c in verified if c.get("ai_verdict") == "junk")
+    skipped = skipped_summary(skips, {person_name_key(c.get("name") or "") for c in candidates})
+    unavailable = _search_unavailable(search_errors)
     await _run_update(
         run_id,
         status="completed",
         progress_pct=100.0,
         progress_message=(
-            f"Done — {inserted} verified prospects saved"
+            f"Done — {inserted} saved"
             + (f" ({junk_total} junk filtered)" if junk_total else "")
+            + _skipped_clause(skipped, entity)
+            + (f" · {unavailable}" if unavailable else "")
         ),
         prospects_count=inserted,
         research_json=json.dumps(
@@ -754,6 +905,8 @@ async def execute_yucgoutreach_run(run_id: int) -> None:
                 "saved": inserted,
                 "junk_filtered": junk_total,
                 "discovery_log_count": len(discovery_log),
+                "skipped": skipped,
+                "search_errors": search_errors,
             }
         ),
         completed=True,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ApiError, api, type Contact, type ImportOutcome, type ResolvedCompany } from '../../api';
+import { ApiError, api, type Contact, type ImportOutcome, type ResolvedAlternative, type ResolvedCompany } from '../../api';
 import CompanyAutocomplete from '../CompanyAutocomplete';
 import RecipientPicker, { type PickerMode } from './RecipientPicker';
 import CompanyLanes, { type Lane } from './CompanyLanes';
@@ -70,8 +70,32 @@ function fromResolved(r: ResolvedCompany): ChosenCompany {
     linkedinUrl: r.linkedin_url || undefined,
     source: r.source,
     alternatives: Array.isArray(r.alternatives) ? r.alternatives : [],
+    country: r.country || r.entity?.hq_country || undefined,
+    entity: r.entity,
   };
 }
+
+/** Another group entity or country picked from "Not this?": it already
+ *  carries its own profile, so it needs no second lookup. */
+function fromAlternative(alt: ResolvedAlternative): ChosenCompany {
+  return {
+    name: alt.name,
+    domain: alt.domain || alt.entity?.mail_domain || undefined,
+    verified: Boolean(alt.domain || alt.entity?.mail_domain),
+    source: 'register',
+    country: alt.country || alt.entity?.hq_country || undefined,
+    entity: alt.entity,
+    targetCountry: alt.entity?.target_country || alt.country || undefined,
+  };
+}
+
+/** A country code as people say it: GB is "UK". */
+function countryLabel(code?: string | null): string {
+  if (!code) return '';
+  if (code === '*') return 'any country';
+  return code.toUpperCase() === 'GB' ? 'UK' : code.toUpperCase();
+}
+const KIND_LABEL: Record<string, string> = { captive: 'service centre', subsidiary: 'subsidiary', region: 'region' };
 
 /** Sure enough to search on its own: the member pasted its LinkedIn page,
  *  the club already works it, or its website was checked. */
@@ -82,19 +106,46 @@ function isSure(company: ChosenCompany): boolean {
 /** One chosen company: its name and website, a way to correct it, and a way
  *  to drop it. Clicking the name no longer removes it - that was a toggle
  *  that lost companies to stray clicks. */
-function CompanyChip({ company, onRemove, onReplace }: {
+function CompanyChip({ company, onRemove, onReplace, onPick, onWhere }: {
   company: ChosenCompany;
   onRemove: () => void;
   onReplace: (q: string) => void;
+  /** Another group entity or country, already resolved. */
+  onPick: (alt: ResolvedAlternative) => void;
+  /** Look only in the home country, or anywhere. */
+  onWhere: (target: string | undefined) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [link, setLink] = useState('');
   const sure = isSure(company);
+  // The panel closes like any popover - Escape, or a click anywhere else -
+  // or it sits over the step's own button with no way out but a choice.
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
   return (
-    <span className="relative inline-flex max-w-full" data-company-chip={company.name}>
+    <span ref={wrapRef} className="relative inline-flex max-w-full" data-company-chip={company.name}>
       <span className={`inline-flex h-10 max-w-full items-center gap-2 rounded-full border pl-4 pr-1 text-sm ${
         sure ? 'border-deep-navy bg-deep-navy text-white' : 'border-amber-300 bg-amber-50 text-amber-950'}`}>
         <span className="truncate font-medium" title={company.name}>{company.name}</span>
+        {(company.targetCountry || company.country) && (
+          <span className="shrink-0 text-xs opacity-80" data-testid="chip-country">
+            · {company.targetCountry && company.targetCountry !== '*'
+              ? `${countryLabel(company.targetCountry)} only`
+              : countryLabel(company.targetCountry || company.country)}
+          </span>
+        )}
         {company.domain && (
           <span className="shrink-0 text-xs opacity-80">· {company.domain}{company.verified ? ' ✓' : ''}</span>
         )}
@@ -109,11 +160,40 @@ function CompanyChip({ company, onRemove, onReplace }: {
       </span>
       {open && (
         <div className="absolute left-0 top-full z-30 mt-1 w-80 max-w-[90vw] space-y-1 rounded-xl border border-pale-sky bg-white p-2 text-sm text-deep-navy shadow-lg">
+          {company.country && (
+            <div className="flex flex-wrap gap-1 px-2 pb-1">
+              <span className="text-xs text-slate-500">Where:</span>
+              <button type="button" onClick={() => { setOpen(false); onWhere(undefined); }}
+                      aria-pressed={!company.targetCountry}
+                      title={(company.entity?.exclude || []).length
+                        ? `Everywhere except ${(company.entity?.exclude || []).map((x) => x.name).join(', ')}`
+                        : 'Everywhere this company works'}
+                      className="rounded-full border border-pale-sky px-2 text-xs aria-pressed:bg-deep-navy aria-pressed:text-white">
+                Default
+              </button>
+              <button type="button" onClick={() => { setOpen(false); onWhere(company.country); }}
+                      aria-pressed={Boolean(company.targetCountry) && company.targetCountry === company.country}
+                      className="rounded-full border border-pale-sky px-2 text-xs aria-pressed:bg-deep-navy aria-pressed:text-white">
+                {countryLabel(company.country)} only
+              </button>
+              <button type="button" onClick={() => { setOpen(false); onWhere('*'); }}
+                      aria-pressed={company.targetCountry === '*'}
+                      className="rounded-full border border-pale-sky px-2 text-xs aria-pressed:bg-deep-navy aria-pressed:text-white">
+                Any country
+              </button>
+            </div>
+          )}
           {(company.alternatives || []).length > 0 && <p className="px-2 text-xs text-slate-500">Did you mean</p>}
           {(company.alternatives || []).map((alt) => (
-            <button key={alt.name} type="button" onClick={() => { setOpen(false); onReplace(alt.name); }}
+            <button key={`${alt.name}-${alt.country || ''}`} type="button"
+                    onClick={() => { setOpen(false); if (alt.entity) onPick(alt); else onReplace(alt.name); }}
                     className="block w-full truncate rounded-lg px-2 py-1.5 text-left hover:bg-pale-sky/40">
-              {alt.name}{alt.domain ? <span className="text-xs text-slate-500"> · {alt.domain}</span> : null}
+              {alt.name}
+              <span className="text-xs text-slate-500">
+                {alt.country ? ` · ${countryLabel(alt.country)}` : ''}
+                {alt.kind ? ` · ${KIND_LABEL[alt.kind] || alt.kind}` : ''}
+                {alt.domain ? ` · ${alt.domain}` : ''}
+              </span>
             </button>
           ))}
           <form className="flex gap-1 px-1 pt-1" onSubmit={(e) => {
@@ -299,6 +379,21 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
       setResolving((n) => n - 1);
     }
   };
+  // Put a different, already-resolved company in this chip's place.
+  const swapCompany = (oldName: string, company: ChosenCompany) => {
+    autoTried.current.delete(companyKey(company.name));
+    setChosen((current) => {
+      const at = current.findIndex((c) => companyKey(c.name) === companyKey(oldName));
+      const rest = current.filter((c) => companyKey(c.name) !== companyKey(oldName)
+        && companyKey(c.name) !== companyKey(company.name));
+      rest.splice(at < 0 ? rest.length : at, 0, company);
+      return rest;
+    });
+  };
+  // Where a company's search looks. Changing it lets the next search of that
+  // company run again: the lane's Find people, or "Search all countries".
+  const setWhere = (name: string, target: string | undefined) =>
+    setChosen((current) => current.map((c) => (companyKey(c.name) === companyKey(name) ? { ...c, targetCountry: target } : c)));
   const autoTried = useRef<Set<string>>(new Set());
   const autoStarted = useRef(0);
 
@@ -530,6 +625,8 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
                 company={company}
                 onRemove={() => setChosen((current) => current.filter((c) => companyKey(c.name) !== companyKey(company.name)))}
                 onReplace={(q) => { void replaceCompany(company.name, q); }}
+                onPick={(alt) => swapCompany(company.name, fromAlternative(alt))}
+                onWhere={(target) => setWhere(company.name, target)}
               />
             ))}
             {hiddenChips > 0 && (
@@ -731,6 +828,10 @@ export default function CampaignPipeline({ onStage }: { onStage?: (state: StageS
               found={found}
               runs={runs}
               onFind={findPeople}
+              onFindEverywhere={(company) => {
+                setWhere(company.name, '*');
+                findPeople({ ...company, targetCountry: '*' });
+              }}
               onAddFound={addFound}
               busy={busy}
             />

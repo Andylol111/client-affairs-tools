@@ -4,6 +4,8 @@ Domain crawling, email inference, validation
 """
 import re
 import asyncio
+import hashlib
+import os
 import httpx
 import dns.resolver
 from bs4 import BeautifulSoup
@@ -586,6 +588,29 @@ def _looks_like_ui_label(name: str) -> bool:
     return False
 
 
+#: A company, not a person: SEC Form 4 lists reporting owners that are
+#: entities, and "Barclays Plc" became the person "Plc Barclays".
+LEGAL_ENTITY_NAME_TOKENS = frozenset({
+    "plc", "llc", "ltd", "inc", "corp", "capital", "strategies", "holdings",
+    "partners", "fund", "trust", "bank", "branch", "llp", "gmbh",
+})
+#: "West London | Christian Rudbeck" read as the person "West London": a
+#: compass word with a place word is a region.
+_COMPASS_WORDS = frozenset({"north", "south", "east", "west", "central"})
+_PLACE_WORDS = frozenset({"london", "city", "region", "county", "england", "midlands", "america", "europe", "asia"})
+
+
+def names_entity_or_place(name: str) -> bool:
+    """True for a company ("Plc Barclays", "Matrix Holdings LLC") or a region
+    ("West London") in a name field. The part of looks_like_person_name that
+    roster ingestion uses: the rest of it rejects five-word names such as
+    "De Moraes Pedro Luiz Bodin", which registers list correctly."""
+    lowered = [p.lower() for p in re.findall(r"[A-Za-z]+", name or "")]
+    if any(p in LEGAL_ENTITY_NAME_TOKENS for p in lowered):
+        return True
+    return any(p in _COMPASS_WORDS for p in lowered) and any(p in _PLACE_WORDS for p in lowered)
+
+
 def looks_like_person_name(name: str, company_name: str | None = None) -> bool:
     """Reject nav/footer labels masquerading as people (About Apple, Gift Cards, …)."""
     if not name or len(name.strip()) < 3:
@@ -606,6 +631,8 @@ def looks_like_person_name(name: str, company_name: str | None = None) -> bool:
     if any(p in ROLE_EMAIL_PREFIXES for p in lowered):
         return False
     if any(p in BARE_TITLE_WORDS for p in lowered):
+        return False
+    if names_entity_or_place(n):
         return False
     for p in parts:
         if len(p) == 1:
@@ -1073,6 +1100,58 @@ async def scrape_contacts_from_domain(
         )
 
 
+CRAWL_FETCH_WORKERS = max(1, int(os.getenv("CRAWL_FETCH_WORKERS", "5") or 5))
+CRAWL_PAGE_TIMEOUT_SEC = float(os.getenv("CRAWL_PAGE_TIMEOUT_SEC", "5") or 5)
+
+
+async def _fetch_crawl_pages(
+    client: httpx.AsyncClient,
+    base_url: str,
+    urls: list[str],
+    cancel_event: Optional[asyncio.Event] = None,
+) -> list[tuple[str, Optional[httpx.Response]]]:
+    """Each candidate page with its 200 response, or None.
+
+    The pages used to be fetched one after another: 6s for Barclays, whose
+    site answers every path with its homepage, for no contacts at all. Now they
+    go in waves of CRAWL_FETCH_WORKERS alongside the homepage itself, and a
+    page that is the homepage again (same final URL, or same bytes) is not a
+    team page. When the whole first wave is the homepage, the site is a
+    catch-all and the rest are not asked."""
+    fetch_timeout = httpx.Timeout(CRAWL_PAGE_TIMEOUT_SEC)
+
+    async def get(url: str) -> Optional[httpx.Response]:
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        try:
+            resp = await client.get(url, timeout=fetch_timeout)
+        except Exception:
+            return None
+        return resp if resp.status_code == 200 else None
+
+    def fingerprint(resp: httpx.Response) -> tuple[str, str]:
+        return str(resp.url).rstrip("/"), hashlib.sha256(resp.content).hexdigest()
+
+    first, rest = urls[:CRAWL_FETCH_WORKERS], urls[CRAWL_FETCH_WORKERS:]
+    home, *wave = await asyncio.gather(get(base_url.rstrip("/") + "/"), *(get(u) for u in first))
+    home_print = fingerprint(home) if home is not None else None
+
+    def team_page(resp: Optional[httpx.Response]) -> Optional[httpx.Response]:
+        if resp is None or home_print is None:
+            return resp
+        final, digest = fingerprint(resp)
+        return None if final == home_print[0] or digest == home_print[1] else resp
+
+    answered = [r for r in wave if r is not None]
+    pages = [team_page(r) for r in wave]
+    catch_all = bool(answered) and all(p is None for p in pages) and home_print is not None
+    for i in range(0, len(rest) if not catch_all else 0, CRAWL_FETCH_WORKERS):
+        chunk = rest[i:i + CRAWL_FETCH_WORKERS]
+        pages += [team_page(r) for r in await asyncio.gather(*(get(u) for u in chunk))]
+    pages += [None] * (len(urls) - len(pages))
+    return list(zip(urls, pages))
+
+
 async def _scrape_contacts_from_domain_html(
     domain: str,
     company_name: Optional[str] = None,
@@ -1118,15 +1197,15 @@ async def _scrape_contacts_from_domain_html(
             ]
 
             total_pages = min(len(urls_to_check), max_pages)
-            for page_idx, url in enumerate(urls_to_check[:max_pages]):
+            fetched = await _fetch_crawl_pages(client, base_url, urls_to_check[:max_pages], cancel_event)
+            for page_idx, (url, resp) in enumerate(fetched):
                 if cancel_event is not None and cancel_event.is_set():
                     break
                 if on_page:
                     await on_page(page_idx + 1, total_pages, url)
+                if resp is None:
+                    continue
                 try:
-                    resp = await client.get(url)
-                    if resp.status_code != 200:
-                        continue
                     soup = BeautifulSoup(resp.text, "html.parser")
                     if not _url_allows_email_harvest(url):
                         if _url_allows_name_extraction(url):

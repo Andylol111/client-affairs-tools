@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError, api,
-  type Contact, type DiscoveryProspect, type DiscoveryRun, type ImportOutcome,
+  type Contact, type DiscoveryProspect, type DiscoveryRun, type EntityProfile, type ImportOutcome,
+  type ResolvedAlternative,
 } from '../api';
 import { companyKey, isTooSenior, looksLikePerson } from './recipients';
 
@@ -33,8 +34,15 @@ export type ChosenCompany = {
   /** How the name was found: a pasted LinkedIn page, the club's own list,
    *  the public register, or the text exactly as typed. */
   source?: 'linkedin' | 'register' | 'club' | 'typed';
-  /** Other companies the same words could have meant, for "Not this?". */
-  alternatives?: { name: string; domain: string | null }[];
+  /** Other companies the same words could have meant, for "Not this?":
+   *  other group entities and countries carry their own profile. */
+  alternatives?: ResolvedAlternative[];
+  /** Home country of the entity, ISO code ("GB"). */
+  country?: string;
+  /** The entity the search is about, so it can skip other group entities. */
+  entity?: EntityProfile;
+  /** Where to look: the home country by default, "*" for anywhere. */
+  targetCountry?: string;
 };
 
 export type LaneState = 'idle' | 'queued' | 'searching' | 'done' | 'failed';
@@ -199,6 +207,12 @@ export function useDiscoveryRuns({ chosen, linkedRunId, onImported }: {
         company_domain: options.domain || item.company.domain || undefined,
         title_hints: options.titleHints.trim() || undefined,
         max_prospects: options.maxProspects,
+        // A country only when the member chose one: by default the search
+        // skips the excluded entities and their countries, not everyone
+        // outside the home country (Barclays' New York staff are Barclays).
+        entity: item.company.entity
+          ? { ...item.company.entity, target_country: item.company.targetCountry ?? null }
+          : undefined,
       });
       loadedProspects.current.delete(res.id);
       startedHere.current.add(res.id);
