@@ -8,12 +8,12 @@
     "diff": "cdk diff"
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.220.0",
+    "aws-cdk-lib": "^2.271.0",
     "constructs": "^10.4.2"
   },
   "devDependencies": {
-    "@types/node": "^22.15.0",
-    "aws-cdk": "^2.1100.0",
+    "@types/node": "^22.20.4",
+    "aws-cdk": "^2.1143.0",
     "typescript": "~5.9.3"
   }
 }
