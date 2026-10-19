@@ -27,10 +27,6 @@ anyio==4.15.1 \
     #   httpx
     #   starlette
     #   watchfiles
-apify-client==3.2.0 \
-    --hash=sha256:af770f26f26bb3d438f3974206c4242c7bb1274a264fae32027e1d1aea2d59ce \
-    --hash=sha256:f516ffa55eff3e32d78af266b5ec31096ada04d1c1021f65c8d22c5359851079
-    # via -r backend/requirements.txt
 apscheduler==3.11.3 \
     --hash=sha256:bbeb2ec02d23d3c06a6c07ed7f0f3939ada6680eb121fae809a69bb42c537a30 \
     --hash=sha256:cd2fcc9330039a81a5893472ad49facf23a6d5604cbe1d918c835c6de7834d5a
@@ -220,10 +216,6 @@ click==8.5.0 \
     --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360 \
     --hash=sha256:ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34
     # via uvicorn
-colorama==0.4.6 \
-    --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
-    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
-    # via apify-client
 contourpy==1.3.3 \
     --hash=sha256:023b44101dfe49d7d53932be418477dba359649246075c996866106da069af69 \
     --hash=sha256:07ce5ed73ecdc4a03ffe3e1b3e3c1166db35ae7584be76f65dbbe28a7791b0cc \
@@ -353,13 +345,7 @@ cycler==0.12.1 \
 dnspython==2.6.1 \
     --hash=sha256:5ef3b9680161f6fa89daf8ad451b5f1a33b18ae8a1c6778cdf4b43f08c0a6e50 \
     --hash=sha256:e8f0f9c23a7b7cb99ded64e6c3a6f3e701d78f50c55e002b839dea7225cff7cc
-    # via
-    #   -r backend/requirements.txt
-    #   email-validator
-email-validator==2.3.0 \
-    --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
-    --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
-    # via pydantic
+    # via -r backend/requirements.txt
 et-xmlfile==2.0.0 \
     --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa \
     --hash=sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54
@@ -582,60 +568,13 @@ httptools==0.8.0 \
 httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
-    # via
-    #   -r backend/requirements.txt
-    #   ollama
+    # via -r backend/requirements.txt
 idna==3.19 \
     --hash=sha256:5e0811a4383b21dc5838069f801c4fb62113b7447663d2530d2bd6e77b49bf15 \
     --hash=sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4
     # via
     #   anyio
-    #   email-validator
     #   httpx
-impit==0.14.1 \
-    --hash=sha256:062d2d70fc48f6c9d43d9504c90886d770f5aa9e550584a05a016011e5c69dae \
-    --hash=sha256:1357d488deee7d97a170bab1c662174d58eb659b634fd29fdc34deb9556b4aa4 \
-    --hash=sha256:15b4f9dec8fb4ea320a2e05c1c8f4bac0df9934d56822f6e7e4eca0d299578ff \
-    --hash=sha256:1617d3d32e820e043359deb82533db231243e609d878f55777a0521321d60e1b \
-    --hash=sha256:1a9b24bb33346f411676d5ff1d94a2218a8287af14ae38109babd741b3373c46 \
-    --hash=sha256:1abb1a148dd310129d07d815e51790152a7d03d4a429b217d4265d8b76d16dbb \
-    --hash=sha256:1d8f712a41435f4df081cd497f139f533b946d5e682f478bff20783263c47cf1 \
-    --hash=sha256:1e58673ae310f2e66e5103e5fe0de560a162c03056f547d11e06e83767e8530c \
-    --hash=sha256:231264bb4efe2ef602c5c29c2157645e39ed8296228d5b738e7f35899e4069a0 \
-    --hash=sha256:271d98cf74b37b8e02bd671ad94f8c35e69d41516889bb9c31dbffedaf60ad5d \
-    --hash=sha256:2910cf6eecf24e12c12737a8f0eaa2bcc140ffc50debbee5c61354ea67ea639c \
-    --hash=sha256:2d1c662c5fd1b08886fddd9319049832597ec9242ba76db535b0e5e66625b744 \
-    --hash=sha256:2f9d0d5295e4affb5806c2b5b57fee073b3fc6a7013b760d4dcf468d62a10d9a \
-    --hash=sha256:30c478aa25f1c42bdda9d1c5ab194d02cf1fbdc676a67eee047792c80eb5c143 \
-    --hash=sha256:35176b654271179afd0089b9cafdcffde5ca43d629214ec0c874f81a2e9cdf8b \
-    --hash=sha256:3aaa459f2fa251b9de011206e14765f61e7ee6748182e70e2d7c9aa014debd98 \
-    --hash=sha256:3b23857b56ce267ce279e8e7c43e7731ec229d7d43fa35099bcfa1856042c621 \
-    --hash=sha256:465a12029040094f0184d1ad1a86da3c9236bed65b469a260da474da859b5097 \
-    --hash=sha256:47573e2d682d2118aefe5977578eb295f37c835be2f928be428a3fe2a8dad2b5 \
-    --hash=sha256:4abac19602613e12b61632b0b001c5aedc54ff25e33437db6873b5ab8faceecb \
-    --hash=sha256:5259544c8250c9d434e52dd912c409cfbf99c31b9e13e090ce53bc0d8c928062 \
-    --hash=sha256:5c92ec727fad00ea1f60ed76451156f95ee2cf9b24988f3e6228c8c5f08aa284 \
-    --hash=sha256:6ebe3815a31187e611626efff4e9f83fa8e006a9587bd547c7e6097605524332 \
-    --hash=sha256:7291acb17f0c76b7435bff152b6121351684f3c6c00a99522ac1c1a5133c4e29 \
-    --hash=sha256:85e771493ba9ce2131dcaf3b0ec7da6da8bd8aa5f6de1d71d400c93ba17a640b \
-    --hash=sha256:a6e577fbc99386611dc7bb7a8f33d741d142fc2932a09302e764ca537fb45b4f \
-    --hash=sha256:abfa8781ba6157cfb1370ca6f46001edc3ec9c724a83938612ec47cb5b6ef5b1 \
-    --hash=sha256:ad300e9c8006702f6db762d91a767c51fc8ca93e1e4a825ae96f1b14aec13ca1 \
-    --hash=sha256:b39cbd25a078fcadebd0dce91663053834a8cb087b58ef3e2839bc018a67c4eb \
-    --hash=sha256:ba26021fdbf956f9d95c934659079f9ea30468e03dd9cc7bc901402d8e8a9604 \
-    --hash=sha256:bf34084b89e1cdbeec97f1aa2c0d516e8005e1cc4d9385f3ebbd9e0003eb2286 \
-    --hash=sha256:c3c8215eaaa44322e2d16e177b165692dd512189d15d177cf5c13b31993bba4c \
-    --hash=sha256:d201299e0efd3f06db650ebb708437bc169080b19f8616e411f1b32e3fb5e6f6 \
-    --hash=sha256:d69e2df785a22b6104f1ed180dc08ec170f80b297d3bcc9d08bf535469d293b9 \
-    --hash=sha256:d906e88f828689cb62cfd23c149415aa4c10a810b08b03188dd5e3ff7b34620b \
-    --hash=sha256:d9afb9b03a0eafafc4402a4d0c4c433243cef97bfd0b829c8a32250e452869f8 \
-    --hash=sha256:dcced6e67f14a7bf5e5ce541613d709cebd42ea2bd751c5c5e1be353e8b8cc97 \
-    --hash=sha256:e00d3e7d864833aa0e08be3b5f2e24c1e17cf9a33d1d759750dc73d00c8d043e \
-    --hash=sha256:e06aa60f2ef033ba578c4d7deafb63eea05348c54b174db1a6a239bcad4980ff \
-    --hash=sha256:e0e80d40a4312de4ea2810c98fc5f269fc194dc507aa69a1f221888ccef53ab0 \
-    --hash=sha256:e71f8087a5a3db2c1343f492a3fc807bcdb268212e57be5c84ab76e2058aca94 \
-    --hash=sha256:fc81c0955483aed93de5271af6221ab4a7422cf6846126b009acbf5c77719759
-    # via apify-client
 jmespath==1.1.0 \
     --hash=sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d \
     --hash=sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64
@@ -928,10 +867,6 @@ matplotlib==3.11.1 \
     --hash=sha256:e4b9ac2f1f607ecda2af90a5232beee2af7582fce1cc30c4b6a1b012dc21ee99 \
     --hash=sha256:f2912f647f3fbe1ccf085f91e213936f9101bead81a5e670565b1f1b3712f4fb
     # via -r backend/requirements.txt
-more-itertools==11.1.0 \
-    --hash=sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d \
-    --hash=sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192
-    # via apify-client
 numpy==2.5.3 \
     --hash=sha256:012e66aca395d795496446e52aeeb5866312a5d4d3f27da270e5a0b43f70dc5c \
     --hash=sha256:09d5a423c71ad5feb5625844ad58050e35df43871004b52ac9c0ad44a56775be \
@@ -1003,10 +938,6 @@ numpy==2.5.3 \
     #   contourpy
     #   matplotlib
     #   pandas
-ollama==0.6.2 \
-    --hash=sha256:3ad7daab28e5a973445c36a73882a3ef698c2ebb00e21e308652741577509f7d \
-    --hash=sha256:936d55daa684f474364c098611c933626f8d6c7d67065c5b7ae0c477b508b07f
-    # via -r backend/requirements.txt
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2 \
     --hash=sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050
@@ -1157,9 +1088,7 @@ pydantic==2.13.5 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via
     #   -r backend/requirements.txt
-    #   apify-client
     #   fastapi
-    #   ollama
     #   pydantic-settings
 pydantic-core==2.46.5 \
     --hash=sha256:013d6f3483d81e02e7c328831808f336c8596ee33b4bd4026b9ffb1e960b8942 \
@@ -1287,9 +1216,9 @@ pydantic-settings==2.15.0 \
     --hash=sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
     # via -r backend/requirements.txt
-pyjwt==2.13.0 \
-    --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
-    --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
+pyjwt==2.15.1 \
+    --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193 \
+    --hash=sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8
     # via -r backend/requirements.txt
 pyotp==2.10.0 \
     --hash=sha256:1df2f6a1bcc3bb0716172a5215ddc2f8c7c7fd26a13df9927d52e1746934836c \
@@ -1299,9 +1228,9 @@ pyparsing==3.3.2 \
     --hash=sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d \
     --hash=sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc
     # via matplotlib
-pypdf==6.18.1 \
-    --hash=sha256:2441fc839053745638d9b9ddb38ed66beed8d611f47a3036c9838fc4e3074dea \
-    --hash=sha256:ee93a2665670ecf57ee81d197a4ca548f3dc15f9cefc56e59b8140866aaa3de5
+pypdf==6.21.1 \
+    --hash=sha256:2d62c383acd6e0dff0a96322ba8b1135229343b084d73c6f6cfd947fd291afcb \
+    --hash=sha256:553e2d42f5bb3bb2a785a7d3de8ef90bb7df74b5413eff5a7b4388007ea9254b
     # via -r backend/requirements.txt
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
@@ -1474,7 +1403,6 @@ typing-extensions==4.16.0 \
     # via
     #   alembic
     #   anyio
-    #   apify-client
     #   beautifulsoup4
     #   fastapi
     #   pydantic
@@ -1493,9 +1421,9 @@ tzlocal==5.4.4 \
     --hash=sha256:8dbb8660838688a7b6ba4fed31d18dedf842afb4d47ca050d6d891c2c15f3be4 \
     --hash=sha256:aae09f0126a8a86fa736be266eb4a471380d26a0de3bc14844e7821fee3e2a15
     # via apscheduler
-urllib3==2.7.0 \
-    --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
-    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
+    --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
     # via botocore
 uvicorn==0.52.4 \
     --hash=sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86 \
